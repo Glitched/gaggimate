@@ -9,7 +9,13 @@ import { faArrowUp } from '@fortawesome/free-solid-svg-icons/faArrowUp';
 import { faArrowDown } from '@fortawesome/free-solid-svg-icons/faArrowDown';
 import { Tooltip } from '../../components/Tooltip.jsx';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
-import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
+import {
+  getProfilePhases,
+  movePhase,
+  removePhaseAt,
+  toFiniteNumber,
+  updatePhaseAt,
+} from './profilePhases.js';
 
 export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
@@ -72,7 +78,9 @@ export function StandardProfileForm(props) {
           data={data}
           onChangeLabel={e => onFieldChange('label', e.target.value)}
           onChangeDescription={e => onFieldChange('description', e.target.value)}
-          onChangeTemperature={e => onFieldChange('temperature', e.target.value)}
+          onChangeTemperature={e =>
+            onFieldChange('temperature', toFiniteNumber(e.target.value, 0, { min: 0 }))
+          }
           onChangeUtility={e => onFieldChange('utility', !!e.target.checked)}
         />
 
@@ -266,7 +274,9 @@ function Phase({
                 type='number'
                 min='1'
                 value={phase.duration}
-                onChange={e => onFieldChange('duration', e.target.value)}
+                onChange={e =>
+                  onFieldChange('duration', toFiniteNumber(e.target.value, 0, { min: 0 }))
+                }
                 aria-label='Duration in seconds'
               />
               <span aria-label='seconds'>s</span>
@@ -398,7 +408,9 @@ function Phase({
                 min={0}
                 max={100}
                 value={pumpPower}
-                onChange={e => onFieldChange('pump', parseFloat(e.target.value))}
+                onChange={e =>
+                  onFieldChange('pump', toFiniteNumber(e.target.value, 0, { min: 0, max: 100 }))
+                }
                 aria-label='Pump power as percentage'
               />
               <span aria-label='percent'>%</span>
@@ -422,7 +434,10 @@ function Phase({
                   step='0.01'
                   value={pressure}
                   onChange={e =>
-                    onFieldChange('pump', { ...phase.pump, pressure: parseFloat(e.target.value) })
+                    onFieldChange('pump', {
+                      ...phase.pump,
+                      pressure: toFiniteNumber(e.target.value, 0, { min: 0 }),
+                    })
                   }
                   aria-label='Pressure in bar'
                   min='0'
@@ -444,7 +459,10 @@ function Phase({
                   step='0.01'
                   value={flow}
                   onChange={e =>
-                    onFieldChange('pump', { ...phase.pump, flow: parseFloat(e.target.value) })
+                    onFieldChange('pump', {
+                      ...phase.pump,
+                      flow: toFiniteNumber(e.target.value, 0, { min: 0 }),
+                    })
                   }
                   aria-label='Flow rate in grams per second'
                   min='0'

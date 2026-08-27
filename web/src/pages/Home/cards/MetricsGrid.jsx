@@ -8,13 +8,16 @@ import {
   metricsLastRowFillSignal,
   METRICS_LAST_ROW_FILLS,
 } from '../../../utils/dashboardManager.js';
+import { usePressRepeat } from '../../../hooks/usePressRepeat.js';
 
-function AdjBtn({ icon, onClick, visible, disabled }) {
+function AdjBtn({ icon, onClick, visible, disabled, ariaLabel }) {
+  const press = usePressRepeat(onClick);
   if (!visible) return <span className='h-6 w-6 shrink-0' />;
   return (
     <button
-      onClick={onClick}
+      {...press}
       disabled={disabled}
+      aria-label={ariaLabel}
       className='btn btn-ghost btn-xs flex h-6 w-6 items-center justify-center rounded-full p-0'
     >
       <FontAwesomeIcon icon={icon} className='h-2.5 w-2.5' />
@@ -44,7 +47,13 @@ function MetricCell({
       </div>
       <div className='flex w-full items-center justify-between'>
         {!compact && (
-          <AdjBtn icon={faMinus} onClick={onDecrease} visible={showAdj} disabled={disabled} />
+          <AdjBtn
+            icon={faMinus}
+            onClick={onDecrease}
+            visible={showAdj}
+            disabled={disabled}
+            ariaLabel={`Decrease ${label}`}
+          />
         )}
         <div className='flex-1 text-center tabular-nums'>
           <span className='text-base-content text-sm font-bold'>{current}</span>
@@ -59,7 +68,13 @@ function MetricCell({
           )}
         </div>
         {!compact && (
-          <AdjBtn icon={faPlus} onClick={onIncrease} visible={showAdj} disabled={disabled} />
+          <AdjBtn
+            icon={faPlus}
+            onClick={onIncrease}
+            visible={showAdj}
+            disabled={disabled}
+            ariaLabel={`Increase ${label}`}
+          />
         )}
       </div>
     </div>

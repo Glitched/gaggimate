@@ -1,5 +1,5 @@
 import { useLocation, useRoute } from 'preact-iso';
-import { useCallback, useEffect, useState, useContext } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState, useContext } from 'preact/hooks';
 import {
   CategoryScale,
   Chart,
@@ -17,9 +17,8 @@ import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
 import { showToast } from '../../services/toast.js';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
 
 Chart.register(
   LineController,
@@ -42,10 +41,16 @@ export function ProfileEdit() {
   const [saving, setSaving] = useState(false);
   const { params } = useRoute();
   const [data, setData] = useState(null);
+  // Snapshot of the loaded (or last saved) profile for unsaved-changes checks.
+  const baselineRef = useRef(null);
+  const setInitialData = useCallback(profile => {
+    baselineRef.current = JSON.stringify(profile);
+    setData(profile);
+  }, []);
   useEffect(() => {
     async function fetchData() {
       if (params.id === 'new') {
-        setData({
+        setInitialData({
           label: 'New Profile',
           description: '',
           temperature: 93,
@@ -100,7 +105,7 @@ export function ProfileEdit() {
       } else if (connected.value) {
         try {
           const response = await apiService.request({ tp: 'req:profiles:load', id: params.id });
-          setData({
+          setInitialData({
             ...response.profile,
             phases: Array.isArray(response.profile?.phases) ? response.profile.phases : [],
           });
@@ -112,13 +117,13 @@ export function ProfileEdit() {
       }
     }
     fetchData();
-  }, [params.id, setData, connected.value, apiService]);
+  }, [params.id, setInitialData, connected.value, apiService]);
   const onSave = useCallback(
     async data => {
       setSaving(true);
       try {
         const response = await apiService.request({ tp: 'req:profiles:save', profile: data });
-        setData(response.profile);
+        setInitialData(response.profile);
         location.route('/profiles');
       } catch (error) {
         // Leave the form intact so the user's edits survive a failed save.
@@ -138,6 +143,9 @@ export function ProfileEdit() {
       type: 'pro',
     });
   }, [data, setData]);
+
+  const isDirty = !!data && JSON.stringify(data) !== baselineRef.current;
+  useUnsavedChangesGuard(isDirty);
 
   if (loading) {
     return (

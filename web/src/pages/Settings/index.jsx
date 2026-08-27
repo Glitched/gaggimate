@@ -20,6 +20,7 @@ import {
 import { downloadJson } from '../../utils/download.js';
 import { getStoredTheme, handleThemeChange } from '../../utils/themeManager.js';
 import { showToast } from '../../services/toast.js';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
 
 import PageLayout from '../../components/PageLayout.jsx';
 import PageHeader from '../../components/PageHeader.jsx';
@@ -223,6 +224,7 @@ export function Settings() {
       }
     };
     loadProfiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connected.value is a signal read; the render-time read subscribes this component
   }, [connected.value, apiService]);
 
   const formRef = useRef();
@@ -242,6 +244,9 @@ export function Settings() {
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [dropdownOpen]);
 
+  // Snapshot of the last loaded/saved state, for unsaved-changes detection.
+  const baselineRef = useRef({ form: '{}', schedules: '' });
+
   useEffect(() => {
     if (fetchedSettings) {
       const settingsWithToggle = transformFetchedSettings(fetchedSettings);
@@ -249,11 +254,24 @@ export function Settings() {
       setAutoWakeupSchedules(parsedSchedules);
       setClock24h(!!fetchedSettings.clock24hFormat);
       setFormData(settingsWithToggle);
+      baselineRef.current = {
+        form: JSON.stringify(settingsWithToggle),
+        schedules: JSON.stringify(parsedSchedules),
+      };
     } else {
       setFormData({});
       setAutoWakeupSchedules([{ time: '07:00', days: [true, true, true, true, true, true, true] }]);
     }
   }, [fetchedSettings]);
+
+  const isDirty =
+    !isLoading &&
+    !!fetchedSettings &&
+    (JSON.stringify(formData) !== baselineRef.current.form ||
+      JSON.stringify(autowakeupSchedules) !== baselineRef.current.schedules);
+
+  // Tab switches within /settings keep this form mounted, so let them through.
+  useUnsavedChangesGuard(isDirty, { ignorePrefix: '/settings' });
 
   useEffect(() => {
     setCurrentTheme(getStoredTheme());
@@ -365,6 +383,10 @@ export function Settings() {
 
         updateSettingsCache(data);
         setFormData(updatedData);
+        baselineRef.current = {
+          form: JSON.stringify(updatedData),
+          schedules: JSON.stringify(autowakeupSchedules),
+        };
         showToast(restart ? 'Settings saved — restarting machine' : 'Settings saved', {
           type: 'success',
         });
