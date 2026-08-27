@@ -44,6 +44,14 @@ export function ShotHistory() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const loadHistoryAbortRef = useRef(null);
+
+  // One controller for all per-shot .slog fetches: navigating away must not
+  // leave requests queued on the ESP32's tiny HTTP server.
+  const shotLoadAbortRef = useRef(null);
+  useEffect(() => {
+    shotLoadAbortRef.current = new AbortController();
+    return () => shotLoadAbortRef.current?.abort();
+  }, []);
   const loadHistory = async () => {
     // Abort any in-flight fetch to prevent request pileup on the ESP32.
     loadHistoryAbortRef.current?.abort();
@@ -306,7 +314,9 @@ export function ShotHistory() {
               try {
                 // Pad ID to 6 digits with zeros to match backend filename format
                 const paddedId = id.padStart(6, '0');
-                const resp = await fetch(`/api/history/${paddedId}.slog`);
+                const resp = await fetch(`/api/history/${paddedId}.slog`, {
+                  signal: shotLoadAbortRef.current?.signal,
+                });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const buf = await resp.arrayBuffer();
                 const parsed = parseBinaryShot(buf, id);
@@ -328,7 +338,7 @@ export function ShotHistory() {
                   ),
                 );
               } catch (e) {
-                console.error('Failed loading shot', e);
+                if (e.name !== 'AbortError') console.error('Failed loading shot', e);
               }
             }}
           />

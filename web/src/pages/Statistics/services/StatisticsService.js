@@ -335,7 +335,9 @@ function aggregatePhaseMetrics({ statsArray, metricKeys, allStatsArrays }) {
   for (const key of metricKeys) {
     metrics[key] = aggregateMetricStats(statsArray, key);
     if (!allStatsArrays[key]) allStatsArrays[key] = [];
-    allStatsArrays[key].push(...statsArray);
+    // Loop instead of push(...spread): a large shot selection would overflow
+    // the argument limit.
+    for (const stats of statsArray) allStatsArrays[key].push(stats);
   }
   return metrics;
 }

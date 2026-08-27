@@ -197,6 +197,7 @@ export function Settings() {
 
   const [fetchedSettings, setFetchedSettings] = useState(() => getCachedSettings());
   const [isLoading, setIsLoading] = useState(!fetchedSettings);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     if (!fetchedSettings) {
@@ -207,10 +208,30 @@ export function Settings() {
         })
         .catch(err => {
           console.error('Failed to prefetch settings:', err);
+          // Show an explicit error instead of an editable empty form — saving
+          // a form bound to {} would post blank values to the machine.
+          setLoadError(true);
           setIsLoading(false);
         });
     }
   }, [fetchedSettings]);
+
+  const retryLoad = useCallback(() => {
+    // prefetchSettings clears its cache on rejection, so calling it again
+    // issues a fresh request.
+    setLoadError(false);
+    setIsLoading(true);
+    prefetchSettings()
+      .then(data => {
+        setFetchedSettings(data);
+        setIsLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to prefetch settings:', err);
+        setLoadError(true);
+        setIsLoading(false);
+      });
+  }, []);
 
   useEffect(() => {
     const loadProfiles = async () => {
@@ -279,44 +300,41 @@ export function Settings() {
 
   const onChange = key => {
     return e => {
-      let value = e.currentTarget.value;
-      if (
-        [
-          'homekit',
-          'boilerFillActive',
-          'smartGrindActive',
-          'smartGrindToggle',
-          'homeAssistant',
-          'momentaryButtons',
-          'delayAdjust',
-          'clock24hFormat',
-          'autowakeupEnabled',
-        ].includes(key)
-      ) {
-        value = !formData[key];
-      }
-      if (key === 'clock24hFormat') {
-        setClock24h(value);
-      }
+      const inputValue = e.currentTarget.value;
+      const toggleKeys = [
+        'homekit',
+        'boilerFillActive',
+        'smartGrindActive',
+        'smartGrindToggle',
+        'homeAssistant',
+        'momentaryButtons',
+        'delayAdjust',
+        'clock24hFormat',
+        'autowakeupEnabled',
+      ];
       if (key === 'standbyDisplayEnabled') {
-        value = !formData.standbyDisplayEnabled;
-        const newFormData = {
-          ...formData,
-          [key]: value,
-        };
-        if (!value) {
-          newFormData.standbyBrightness = 0;
-        }
-        setFormData(newFormData);
+        setFormData(prev => {
+          const value = !prev.standbyDisplayEnabled;
+          const next = { ...prev, [key]: value };
+          if (!value) {
+            next.standbyBrightness = 0;
+          }
+          return next;
+        });
         return;
       }
-      if (key === 'dashboardLayout') {
-        setDashboardLayout(value);
+      if (key === 'clock24hFormat') {
+        setClock24h(!formData[key]);
       }
-      setFormData({
-        ...formData,
-        [key]: value,
-      });
+      if (key === 'dashboardLayout') {
+        setDashboardLayout(inputValue);
+      }
+      // Functional update: two changes dispatched in the same tick (e.g. a
+      // toggle plus a dependent field) must not clobber each other.
+      setFormData(prev => ({
+        ...prev,
+        [key]: toggleKeys.includes(key) ? !prev[key] : inputValue,
+      }));
     };
   };
 
@@ -325,8 +343,8 @@ export function Settings() {
   }, []);
 
   const addAutoWakeupSchedule = () => {
-    setAutoWakeupSchedules([
-      ...autowakeupSchedules,
+    setAutoWakeupSchedules(prev => [
+      ...prev,
       {
         time: '07:00',
         days: [true, true, true, true, true, true, true],
@@ -335,22 +353,25 @@ export function Settings() {
   };
 
   const removeAutoWakeupSchedule = index => {
-    if (autowakeupSchedules.length > 1) {
-      const newSchedules = autowakeupSchedules.filter((_, i) => i !== index);
-      setAutoWakeupSchedules(newSchedules);
-    }
+    setAutoWakeupSchedules(prev => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
   };
 
+  // Replace the schedule objects instead of mutating them in place — the old
+  // entries are shared with previous state snapshots.
   const updateAutoWakeupTime = (index, value) => {
-    const newSchedules = [...autowakeupSchedules];
-    newSchedules[index].time = value;
-    setAutoWakeupSchedules(newSchedules);
+    setAutoWakeupSchedules(prev =>
+      prev.map((schedule, i) => (i === index ? { ...schedule, time: value } : schedule)),
+    );
   };
 
   const updateAutoWakeupDay = (scheduleIndex, dayIndex, enabled) => {
-    const newSchedules = [...autowakeupSchedules];
-    newSchedules[scheduleIndex].days[dayIndex] = enabled;
-    setAutoWakeupSchedules(newSchedules);
+    setAutoWakeupSchedules(prev =>
+      prev.map((schedule, i) =>
+        i === scheduleIndex
+          ? { ...schedule, days: schedule.days.map((d, j) => (j === dayIndex ? enabled : d)) }
+          : schedule,
+      ),
+    );
   };
 
   const onSubmit = useCallback(
@@ -510,6 +531,18 @@ export function Settings() {
         }
       />
 
+      {loadError && !fetchedSettings && (
+        <div className='alert alert-error my-4'>
+          <span>
+            Could not load settings from the machine. Check that it is powered on and reachable,
+            then try again.
+          </span>
+          <button type='button' className='btn btn-sm' onClick={retryLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+
       <form
         id='settings-page-form'
         key='settings'
@@ -517,7 +550,7 @@ export function Settings() {
         method='post'
         action='/api/settings'
         onSubmit={onSubmit}
-        className={isFormTab ? '' : 'hidden'}
+        className={isFormTab && !(loadError && !fetchedSettings) ? '' : 'hidden'}
       >
         {tab === 'general' &&
           (isLoading ? (

@@ -44,7 +44,11 @@ import { faTemperatureFull } from '@fortawesome/free-solid-svg-icons/faTemperatu
 import { faClock } from '@fortawesome/free-solid-svg-icons/faClock';
 import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanced';
 import { faSearch } from '@fortawesome/free-solid-svg-icons/faSearch';
-import { faAnglesDown, faAnglesUp, faGripVertical } from '@fortawesome/free-solid-svg-icons';
+// Deep imports keep the ~2000-icon pack index out of the bundle (matches every
+// other icon import in the codebase).
+import { faAnglesDown } from '@fortawesome/free-solid-svg-icons/faAnglesDown';
+import { faAnglesUp } from '@fortawesome/free-solid-svg-icons/faAnglesUp';
+import { faGripVertical } from '@fortawesome/free-solid-svg-icons/faGripVertical';
 import { buildStatisticsProfileHref } from '../Statistics/utils/statisticsRoute.js';
 
 Chart.register(
@@ -126,6 +130,11 @@ function ProfileCard({
   const detailsSectionId = `profile-${data.id}-summary`;
 
   const phases = Array.isArray(data?.phases) ? data.phases : [];
+
+  // Stable identity for the chart prop: a fresh `{...data, phases}` literal on
+  // every render would defeat ExtendedProfileChart's useMemo and re-synthesize
+  // the 0.1s-resolution dataset for every Pro card on every list re-render.
+  const chartData = useMemo(() => ({ ...data, phases }), [data, phases]);
 
   // Sum total duration from phases (in seconds)
   const totalDurationSeconds = phases.reduce(
@@ -521,7 +530,7 @@ function ProfileCard({
               </div>
               <div className='flex-grow overflow-x-auto'>
                 {data.type === 'pro' ? (
-                  <ExtendedProfileChart data={{ ...data, phases }} className='max-h-36' />
+                  <ExtendedProfileChart data={chartData} className='max-h-36' />
                 ) : (
                   <SimpleContent phases={phases} />
                 )}

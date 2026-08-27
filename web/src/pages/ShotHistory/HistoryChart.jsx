@@ -58,13 +58,25 @@ function getChartData(shot) {
       phaseName: t.phaseName,
     }));
   }
-  // No phase tracking for versions before v5
-  const tempValues = ct.map(i => i.y).concat(tt.map(i => i.y));
-  const timeValues = ct.map(i => i.x);
-  const minTemp = Math.floor(Math.min(...tempValues));
-  const maxTemp = Math.ceil(Math.max(...tempValues));
-  const minX = Math.min(...timeValues);
-  const maxX = Math.max(...timeValues);
+  // No phase tracking for versions before v5.
+  // Loop instead of Math.min(...arr): spreading tens of thousands of samples
+  // as arguments can overflow the call stack on long shots.
+  let rawMinTemp = Infinity;
+  let rawMaxTemp = -Infinity;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const point of ct) {
+    if (point.y < rawMinTemp) rawMinTemp = point.y;
+    if (point.y > rawMaxTemp) rawMaxTemp = point.y;
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+  }
+  for (const point of tt) {
+    if (point.y < rawMinTemp) rawMinTemp = point.y;
+    if (point.y > rawMaxTemp) rawMaxTemp = point.y;
+  }
+  const minTemp = Math.floor(rawMinTemp);
+  const maxTemp = Math.ceil(rawMaxTemp);
   const padding = maxTemp - minTemp > 10 ? 2 : 5;
 
   // Check if weight data has any non-zero values
