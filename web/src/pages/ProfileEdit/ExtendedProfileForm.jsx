@@ -11,13 +11,7 @@ import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
 import { faArrowLeft } from '@fortawesome/free-solid-svg-icons/faArrowLeft';
 import { faArrowRight } from '@fortawesome/free-solid-svg-icons/faArrowRight';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
-import {
-  getProfilePhases,
-  movePhase,
-  removePhaseAt,
-  toFiniteNumber,
-  updatePhaseAt,
-} from './profilePhases.js';
+import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 
 export function ExtendedProfileForm(props) {
@@ -103,9 +97,7 @@ export function ExtendedProfileForm(props) {
           data={data}
           onChangeLabel={e => onFieldChange('label', e.target.value)}
           onChangeDescription={e => onFieldChange('description', e.target.value)}
-          onChangeTemperature={e =>
-            onFieldChange('temperature', toFiniteNumber(e.target.value, 0, { min: 0 }))
-          }
+          onCommitTemperature={value => onFieldChange('temperature', value)}
           onChangeUtility={e => onFieldChange('utility', !!e.target.checked)}
         />
         <Card sm={10}>
