@@ -71,9 +71,13 @@ class AsyncWebServer;
 class AsyncWebServerRequest {
   public:
     AsyncWebServerRequest(int fd, AsyncWebServer *server) : _fd(fd), _server(server) {}
+    // Mirrors the real library: _tempObject is caller-allocated scratch that
+    // the request frees when it goes away.
+    ~AsyncWebServerRequest() { free(_tempObject); }
 
     const String &url() const { return _url; }
     int method() const { return _method; }
+    String contentType() const { return _contentType; }
     bool hasArg(const char *name) const { return _args.count(name) > 0; }
     bool hasArg(const String &name) const { return hasArg(name.c_str()); }
     String arg(const char *name) const {
@@ -94,13 +98,18 @@ class AsyncWebServerRequest {
     // Populated by the server before dispatch.
     String _url;
     int _method = HTTP_GET;
+    String _contentType;
     std::map<std::string, std::string> _args;
     std::string _body;
     int _fd;
     AsyncWebServer *_server;
+    void *_tempObject = nullptr;
 };
 
 using ArRequestHandlerFunction = std::function<void(AsyncWebServerRequest *)>;
+using ArUploadHandlerFunction =
+    std::function<void(AsyncWebServerRequest *, const String &, size_t, uint8_t *, size_t, bool)>;
+using ArBodyHandlerFunction = std::function<void(AsyncWebServerRequest *, uint8_t *, size_t, size_t, size_t)>;
 
 // Matches the real library's queued-message payload type.
 using AsyncWebSocketSharedBuffer = std::shared_ptr<std::vector<uint8_t>>;
@@ -151,9 +160,16 @@ class AsyncWebServer {
     explicit AsyncWebServer(uint16_t port) : _port(port) {}
     ~AsyncWebServer();
 
-    void on(const char *uri, ArRequestHandlerFunction handler) { _routes.push_back({HTTP_ANY, uri, std::move(handler)}); }
+    void on(const char *uri, ArRequestHandlerFunction handler) { _routes.push_back({HTTP_ANY, uri, std::move(handler), nullptr}); }
     void on(const char *uri, WebRequestMethod method, ArRequestHandlerFunction handler) {
-        _routes.push_back({(int)method, uri, std::move(handler)});
+        _routes.push_back({(int)method, uri, std::move(handler), nullptr});
+    }
+    // Real-library overload with upload/body callbacks. The sim buffers the
+    // whole body before dispatch, so onBody is invoked once with the complete
+    // payload; onUpload (multipart file uploads) is unused here.
+    void on(const char *uri, WebRequestMethod method, ArRequestHandlerFunction handler, ArUploadHandlerFunction /*onUpload*/,
+            ArBodyHandlerFunction onBody) {
+        _routes.push_back({(int)method, uri, std::move(handler), std::move(onBody)});
     }
     void onNotFound(ArRequestHandlerFunction handler) { _notFound = std::move(handler); }
     void addHandler(AsyncWebSocket *ws) { _ws = ws; }
@@ -169,6 +185,7 @@ class AsyncWebServer {
         int method;
         std::string uri;
         ArRequestHandlerFunction handler;
+        ArBodyHandlerFunction onBody;
     };
     struct StaticRoute {
         std::string uri;

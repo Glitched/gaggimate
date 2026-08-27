@@ -520,6 +520,7 @@ bool AsyncWebServer::handleHttp(Conn &c) {
     };
     parseArgs(query);
     const std::string ctype = headers.count("content-type") ? headers["content-type"] : "";
+    req._contentType = String(ctype.c_str());
     if (ctype.find("x-www-form-urlencoded") != std::string::npos) {
         parseArgs(body);
     } else if (ctype.find("multipart/form-data") != std::string::npos) {
@@ -536,6 +537,11 @@ void AsyncWebServer::dispatch(Conn &c, AsyncWebServerRequest &req) {
     std::string path(req._url.c_str());
     for (auto &r : _routes) {
         if ((r.method == HTTP_ANY || (r.method & req._method)) && r.uri == path) {
+            // The sim has the full body up front; deliver it as one chunk the
+            // way the real library streams it, then run the request handler.
+            if (r.onBody && !req._body.empty()) {
+                r.onBody(&req, (uint8_t *)req._body.data(), req._body.size(), 0, req._body.size());
+            }
             r.handler(&req);
             return;
         }
