@@ -83,7 +83,10 @@ export const getMetricOrder = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_METRICS_KEY);
-    return stored ? JSON.parse(stored) : [...defaultOrder];
+    // Guard the shape: a corrupted stored value would otherwise crash every
+    // consumer that maps/filters the result.
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : [...defaultOrder];
   } catch {
     return [...defaultOrder];
   }
@@ -114,7 +117,8 @@ export const getPanelOrder = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_PANELS_KEY);
-    return stored ? JSON.parse(stored) : [...DEFAULT_PANEL_ORDER];
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : [...DEFAULT_PANEL_ORDER];
   } catch {
     return [...DEFAULT_PANEL_ORDER];
   }
@@ -248,7 +252,8 @@ export const getCompactPanels = () => {
   if (!globalThis.window?.localStorage) return defaultPanels;
   try {
     const stored = localStorage.getItem(DASHBOARD_COMPACT_PANELS_KEY);
-    return stored ? JSON.parse(stored) : defaultPanels;
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : defaultPanels;
   } catch {
     return defaultPanels;
   }
@@ -382,7 +387,8 @@ export const getShotMetricSlots = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_SHOT_METRIC_SLOTS_KEY);
-    return stored ? JSON.parse(stored) : [...DEFAULT_SHOT_METRIC_SLOTS];
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) && parsed.length === 3 ? parsed : [...DEFAULT_SHOT_METRIC_SLOTS];
   } catch {
     return [...DEFAULT_SHOT_METRIC_SLOTS];
   }

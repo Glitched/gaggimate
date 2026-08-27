@@ -26,16 +26,17 @@ export default function VisualizerUploadModal({
     try {
       await onUpload(username.trim(), password, rememberCredentials);
 
-      // Save credentials to localStorage if requested
+      // Remember the username only — never persist the password: localStorage
+      // is plaintext and shared with anything on this origin.
       if (rememberCredentials) {
         localStorage.setItem('visualizer_username', username.trim());
-        localStorage.setItem('visualizer_password', password);
         localStorage.setItem('visualizer_remember', 'true');
       } else {
         localStorage.removeItem('visualizer_username');
-        localStorage.removeItem('visualizer_password');
         localStorage.removeItem('visualizer_remember');
       }
+      // Clean up passwords persisted by older versions.
+      localStorage.removeItem('visualizer_password');
 
       // Clear form and close modal on success
       setUsername('');
@@ -55,19 +56,15 @@ export default function VisualizerUploadModal({
     }
   };
 
-  // Load saved credentials when modal opens
+  // Load the saved username when the modal opens (passwords are never stored).
   useEffect(() => {
     if (isOpen) {
       const savedUsername = localStorage.getItem('visualizer_username');
-      const savedPassword = localStorage.getItem('visualizer_password');
       const savedRemember = localStorage.getItem('visualizer_remember') === 'true';
 
       if (savedRemember && savedUsername) {
         setUsername(savedUsername);
         setRememberCredentials(true);
-        if (savedPassword) {
-          setPassword(savedPassword);
-        }
       }
     }
   }, [isOpen]);
@@ -166,7 +163,7 @@ export default function VisualizerUploadModal({
                 className='h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50'
               />
               <label htmlFor='remember' className='ml-2 text-sm text-gray-600 dark:text-gray-300'>
-                Remember credentials
+                Remember username
               </label>
             </div>
 
@@ -192,8 +189,8 @@ export default function VisualizerUploadModal({
 
           <div className='mt-4 text-xs text-gray-500 dark:text-gray-400'>
             <p>
-              Your credentials are only used for this upload and will be stored locally only if you
-              choose to remember your username.
+              Your credentials are only used for this upload. Only your username is stored locally
+              if you choose to remember it — your password is never saved.
             </p>
           </div>
         </div>

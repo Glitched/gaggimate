@@ -1,7 +1,6 @@
 import Card from '../../components/Card.jsx';
 
 export function ProfileMainInformation(props) {
-  console.log(props.data);
   return (
     <Card sm={10} title='Profile Information'>
       <div className='form-control'>
