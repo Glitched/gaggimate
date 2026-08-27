@@ -60,6 +60,25 @@ class WebUIPlugin : public Plugin {
     // Core dump download
     void handleCoreDumpDownload(AsyncWebServerRequest *request);
 
+    // Direct firmware upload (POST /api/ota/upload). Writes the streamed image
+    // into the inactive OTA slot; the running app is never touched, so an
+    // aborted upload simply leaves the device on its current firmware.
+    // Requires a non-empty otaUploadToken setting -- fails closed when unset.
+#ifndef GAGGIMATE_SIM
+    bool isUploadAuthorized(AsyncWebServerRequest *request) const;
+    void handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len, bool final);
+    void handleFirmwareUploadResult(AsyncWebServerRequest *request);
+#endif
+
+    // Guards against a second upload racing the first, and lets the completion
+    // handler tell "we wrote an image" apart from "the body never arrived".
+    // Reboot is deferred to loop() so the HTTP response leaves the socket
+    // before the device resets. 0 = no reboot scheduled.
+    unsigned long restartPending = 0;
+    bool uploadInProgress = false;
+    size_t uploadTotal = 0;
+    int uploadLastPct = -1;
+
     GitHubOTA *ota = nullptr;
     AsyncWebServer server;
     AsyncWebSocket ws;

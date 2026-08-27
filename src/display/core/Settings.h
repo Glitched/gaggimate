@@ -89,6 +89,9 @@ class Settings {
     String getWifiPassword() const { return wifiPassword.get(); }
     String getWifiApPassword() const { return wifiApPassword.get(); }
     String getMdnsName() const { return mdnsName.get(); }
+    // Shared secret required by POST /api/ota/upload. Empty (the default)
+    // disables firmware upload entirely -- the endpoint fails closed.
+    String getOtaUploadToken() const { return otaUploadToken.get(); }
     bool isHomekit() const { return homekit.get(); }
     bool isVolumetricTarget() const { return volumetricTarget.get(); }
     String getOTAChannel() const { return otaChannel.get(); }
@@ -176,6 +179,7 @@ class Settings {
     void setWifiPassword(const String &wifiPassword);
     void setWifiApPassword(const String &wifiApPassword);
     void setMdnsName(const String &mdnsName);
+    void setOtaUploadToken(const String &otaUploadToken);
     void setHomekit(bool homekit);
     void setVolumetricTarget(bool volumetric_target);
     void setOTAChannel(const String &otaChannel);
@@ -258,6 +262,7 @@ class Settings {
     Property<String> wifiSsid{registry, "ws", ""};
     Property<String> wifiPassword{registry, "wp", ""};
     Property<String> wifiApPassword{registry, "wap", ""}; // empty until generated on first start
+    Property<String> otaUploadToken{registry, "out", ""}; // empty = firmware upload disabled
     Property<String> mdnsName{registry, "mn", DEFAULT_MDNS_NAME};
     Property<String> savedScale{registry, "ssc", ""};
     Property<bool> homekit{registry, "hk", false};

@@ -395,6 +395,22 @@ export function GeneralTab({
               onChange={onChange('mdnsName')}
             />
           </SettingsFormField>
+          <SettingsFormField label='Firmware Upload Token' htmlFor='otaUploadToken' noMargin>
+            <input
+              id='otaUploadToken'
+              name='otaUploadToken'
+              type='password'
+              autoComplete='new-password'
+              className='input input-bordered w-full'
+              placeholder='Leave empty to disable firmware upload'
+              value={formData.otaUploadToken ?? ''}
+              onChange={onChange('otaUploadToken')}
+            />
+            <p className='text-base-content/60 mt-1 text-xs'>
+              Required by System &rarr; Upload Firmware. While empty, firmware upload is refused.
+              Anyone who knows this token and can reach the machine can replace its firmware.
+            </p>
+          </SettingsFormField>
           <SettingsFormField label='Time Zone' htmlFor='timezone' noMargin>
             <select
               id='timezone'

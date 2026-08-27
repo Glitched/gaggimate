@@ -1,6 +1,7 @@
 // Global Arduino/ESP singletons + host timing implementation.
 #include "Arduino.h"
 #include "ESPmDNS.h"
+#include "Update.h"
 #include "WiFi.h"
 
 #include <chrono>
@@ -21,6 +22,7 @@ struct RngSeeder {
 HardwareSerial Serial;
 EspClass ESP;
 MDNSResponder MDNS;
+UpdateClassSim Update;
 WiFiClass WiFi;
 
 static std::chrono::steady_clock::time_point g_start = std::chrono::steady_clock::now();

@@ -127,6 +127,8 @@ void Settings::setWifiApPassword(const String &wifiApPassword) { this->wifiApPas
 
 void Settings::setMdnsName(const String &mdnsName) { this->mdnsName.set(mdnsName); }
 
+void Settings::setOtaUploadToken(const String &otaUploadToken) { this->otaUploadToken.set(otaUploadToken); }
+
 void Settings::setHomekit(const bool homekit) { this->homekit.set(homekit); }
 
 void Settings::setVolumetricTarget(bool volumetric_target) { volumetricTarget.set(volumetric_target); }

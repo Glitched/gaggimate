@@ -126,6 +126,117 @@ function StorageAndMemorySection({ formData }) {
   );
 }
 
+// Direct firmware upload. The device writes the image into its inactive OTA
+// slot, so an interrupted upload leaves it running the current firmware; it
+// only switches banks once the whole image has been received and verified.
+// Requires an upload token to be set in Settings -> General (the endpoint
+// rejects everything when no token is configured).
+function FirmwareUploadSection({ uploadEnabled }) {
+  const [file, setFile] = useState(null);
+  const [token, setToken] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  const upload = useCallback(() => {
+    if (!file || !token) return;
+    setError('');
+    setDone(false);
+    setProgress(0);
+    // XHR rather than fetch: it is the only way to get upload progress events.
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/ota/upload');
+    xhr.setRequestHeader('X-OTA-Token', token);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        setProgress(100);
+        setDone(true);
+      } else {
+        setProgress(null);
+        let msg = `Upload failed (HTTP ${xhr.status})`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body.error) msg = body.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setError(xhr.status === 401 ? 'Rejected: wrong or missing upload token.' : msg);
+      }
+    };
+    xhr.onerror = () => {
+      setProgress(null);
+      setError('Connection lost during upload.');
+    };
+    const body = new FormData();
+    body.append('firmware', file);
+    xhr.send(body);
+  }, [file, token]);
+
+  return (
+    <Section title='Upload Firmware' className='h-full'>
+      {!uploadEnabled && (
+        <div className='alert alert-warning mb-4 text-sm'>
+          Firmware upload is disabled. Set an upload token in Settings &rarr; General to enable it.
+        </div>
+      )}
+      <div className='flex flex-col gap-3'>
+        <input
+          type='file'
+          accept='.bin'
+          className='file-input file-input-bordered w-full'
+          disabled={!uploadEnabled || progress !== null}
+          onChange={e => {
+            setFile(e.target.files?.[0] ?? null);
+            setError('');
+            setDone(false);
+          }}
+        />
+        <input
+          type='password'
+          className='input input-bordered w-full'
+          placeholder='Upload token'
+          autoComplete='off'
+          disabled={!uploadEnabled || progress !== null}
+          value={token}
+          onInput={e => setToken(e.target.value)}
+        />
+        <button
+          type='button'
+          className='btn btn-warning btn-sm self-start'
+          disabled={!uploadEnabled || !file || !token || progress !== null}
+          onClick={upload}
+        >
+          {progress !== null && !done ? 'Uploading…' : 'Upload & Restart'}
+        </button>
+
+        {progress !== null && (
+          <div className='bg-base-300 h-2 w-full overflow-hidden rounded-full'>
+            <div
+              className='bg-warning h-2 rounded-full transition-all'
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
+        {done && (
+          <div className='alert alert-success text-sm'>
+            <FontAwesomeIcon icon={faCheck} />
+            Firmware accepted. The machine is restarting — reload this page in a few seconds.
+          </div>
+        )}
+        {error && <div className='alert alert-error text-sm'>{error}</div>}
+        <p className='text-base-content/60 text-xs'>
+          Upload <code>firmware.bin</code> only. The image is written to the spare partition and
+          verified before the machine switches to it; a failed upload changes nothing. Profiles and
+          shot history are untouched.
+        </p>
+      </div>
+    </Section>
+  );
+}
+
 function MaintenanceSection({
   downloadSupportData,
   onHistoryRebuild,
@@ -410,6 +521,8 @@ export function SystemTab() {
         rebuilt={rebuilt}
         rebuildProgress={rebuildProgress}
       />
+
+      <FirmwareUploadSection uploadEnabled={formData.otaUploadEnabled === true} />
     </div>
   );
 }

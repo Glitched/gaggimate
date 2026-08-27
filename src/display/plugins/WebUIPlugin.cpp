@@ -1,5 +1,6 @@
 #include "WebUIPlugin.h"
 #include <DNSServer.h>
+#include <Update.h>
 #include <LittleFS.h>
 #include <SD_MMC.h>
 #include <algorithm>
@@ -129,6 +130,11 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
 }
 
 void WebUIPlugin::loop() {
+    if (restartPending != 0 && millis() >= restartPending) {
+        ESP_LOGI("WebUIPlugin", "Rebooting after firmware upload");
+        delay(50);
+        ESP.restart();
+    }
     if (updating) {
         // Pass which component is being flashed: a controller update streams the
         // firmware over BLE (wants a low-latency link), a display update is over
@@ -390,6 +396,15 @@ void WebUIPlugin::setupServer() {
         request->send(response);
     });
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+#ifndef GAGGIMATE_SIM
+    // Direct firmware upload. The body handler streams straight into the
+    // inactive OTA partition; the request handler runs once the body is done.
+    server.on(
+        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); },
+        [this](AsyncWebServerRequest *request, const String &, size_t index, uint8_t *data, size_t len, bool final) {
+            handleFirmwareUpload(request, index, data, len, final);
+        });
+#endif
     // The web UI is embedded in firmware flash and served from the memory-mapped blob (see serveWebAsset). It is no
     // longer in LittleFS, so OTA never touches the partition holding profiles/shots. The catch-all onNotFound handles
     // every path not claimed by an explicit server.on()/api route above. [GM-106]
@@ -685,6 +700,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setWifiSsid(request->arg("wifiSsid"));
             if (request->hasArg("mdnsName"))
                 settings->setMdnsName(request->arg("mdnsName"));
+            if (request->hasArg("otaUploadToken"))
+                settings->setOtaUploadToken(request->arg("otaUploadToken"));
             if (request->hasArg("wifiPassword") && request->arg("wifiPassword") != "---unchanged---")
                 settings->setWifiPassword(request->arg("wifiPassword"));
             if (request->hasArg("apPassword") && request->arg("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
@@ -833,6 +850,8 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["wifiPassword"] = apMode ? "---unchanged---" : settings.getWifiPassword();
     doc["apPassword"] = settings.getWifiApPassword();
     doc["mdnsName"] = settings.getMdnsName();
+    // Report only whether upload is armed; never echo the secret back.
+    doc["otaUploadEnabled"] = settings.getOtaUploadToken().length() > 0;
     doc["temperatureOffset"] = String(settings.getTemperatureOffset());
     doc["pressureScaling"] = String(settings.getPressureScaling());
     doc["boilerFillActive"] = settings.isBoilerFillActive();
@@ -1009,6 +1028,116 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
     }
     broadcastJson(doc);
 }
+
+// Firmware upload is device-only: the simulator's ESPAsyncWebServer shim has no
+// multipart upload support, so these are compiled out there rather than faked.
+#ifndef GAGGIMATE_SIM
+bool WebUIPlugin::isUploadAuthorized(AsyncWebServerRequest *request) const {
+    const String expected = controller->getSettings().getOtaUploadToken();
+    if (expected.isEmpty()) {
+        return false; // fail closed: upload stays disabled until a token is set
+    }
+    String provided;
+    if (request->hasHeader("X-OTA-Token")) {
+        provided = request->getHeader("X-OTA-Token")->value();
+    } else if (request->hasArg("token")) {
+        provided = request->arg("token");
+    }
+    if (provided.length() != expected.length()) {
+        return false;
+    }
+    // Constant-time compare so a wrong token cannot be recovered byte by byte.
+    uint8_t diff = 0;
+    for (size_t i = 0; i < expected.length(); i++) {
+        diff |= static_cast<uint8_t>(provided[i]) ^ static_cast<uint8_t>(expected[i]);
+    }
+    return diff == 0;
+}
+
+void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len,
+                                       bool final) {
+    if (index == 0) {
+        if (!isUploadAuthorized(request)) {
+            ESP_LOGW("WebUIPlugin", "Rejected firmware upload: bad or missing token");
+            return; // result handler turns this into a 401
+        }
+        if (uploadInProgress || Update.isRunning()) {
+            ESP_LOGW("WebUIPlugin", "Rejected firmware upload: another update is already running");
+            return;
+        }
+        // U_FLASH targets the inactive OTA slot. UPDATE_SIZE_UNKNOWN lets the
+        // Updater size it from the image header; it aborts on the first chunk
+        // if the ESP image magic byte is wrong, so a stray file cannot be
+        // half-written.
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+            ESP_LOGE("WebUIPlugin", "Update.begin failed: %s", Update.errorString());
+            return;
+        }
+        uploadInProgress = true;
+        uploadTotal = 0;
+        uploadLastPct = -1;
+        pluginManager->trigger("ota:upload:start");
+        ESP_LOGI("WebUIPlugin", "Firmware upload started");
+    }
+    if (!uploadInProgress) {
+        return;
+    }
+    if (len && Update.write(data, len) != len) {
+        ESP_LOGE("WebUIPlugin", "Update.write failed: %s", Update.errorString());
+        Update.abort();
+        uploadInProgress = false;
+        return;
+    }
+    uploadTotal += len;
+    // Progress is reported against the partition size, which is the only bound
+    // available while streaming; it is a lower bound on the real percentage.
+    const size_t capacity = Update.size();
+    if (capacity > 0) {
+        const int pct = static_cast<int>((uploadTotal * 100) / capacity);
+        if (pct != uploadLastPct) {
+            uploadLastPct = pct;
+            updateOTAProgress(PHASE_DISPLAY_FW, pct);
+        }
+    }
+    if (final) {
+        if (!Update.end(true)) {
+            ESP_LOGE("WebUIPlugin", "Update.end failed: %s", Update.errorString());
+            uploadInProgress = false;
+            return;
+        }
+        ESP_LOGI("WebUIPlugin", "Firmware upload complete: %u bytes", static_cast<unsigned>(uploadTotal));
+    }
+}
+
+void WebUIPlugin::handleFirmwareUploadResult(AsyncWebServerRequest *request) {
+    if (!isUploadAuthorized(request)) {
+        request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+        return;
+    }
+    const bool ok = uploadInProgress && !Update.hasError() && Update.isFinished();
+    uploadInProgress = false;
+    if (!ok) {
+        const char *reason = Update.errorString();
+        ESP_LOGE("WebUIPlugin", "Firmware upload failed: %s", reason);
+        Update.abort();
+        JsonDocument doc(&psramAllocator);
+        doc["error"] = reason;
+        String body;
+        serializeJson(doc, body);
+        request->send(400, "application/json", body);
+        pluginManager->trigger("ota:upload:failed");
+        return;
+    }
+    AsyncWebServerResponse *response =
+        request->beginResponse(200, "application/json", "{\"status\":\"ok\",\"restarting\":true}");
+    response->addHeader("Connection", "close");
+    request->send(response);
+    updateOTAProgress(PHASE_FINISHED, 100);
+    pluginManager->trigger("ota:upload:finished");
+    ESP_LOGI("WebUIPlugin", "Restarting into newly uploaded firmware");
+    restartPending = millis() + 1000; // let the response flush before rebooting
+}
+#endif
 
 void WebUIPlugin::updateOTAProgress(uint8_t phase, int progress) {
     if (ws.getClients().empty()) {
