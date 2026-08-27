@@ -14,6 +14,8 @@ import lazy from 'preact-iso/lazy';
 import ApiService, { ApiServiceContext } from './services/ApiService.js';
 import { Navigation } from './components/Navigation.jsx';
 import { Spinner } from './components/Spinner.jsx';
+import { ToastHost } from './components/ToastHost.jsx';
+import { ConnectionBanner } from './components/ConnectionBanner.jsx';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBars } from '@fortawesome/free-solid-svg-icons/faBars';
 
@@ -94,6 +96,7 @@ export function App() {
             onToggleCollapsed={() => setNavCollapsed(collapsed => !collapsed)}
           />
           <div className='flex flex-1 flex-col overflow-x-hidden overflow-y-auto'>
+            <ConnectionBanner />
             <div className='flex min-h-0 w-full flex-1 flex-col p-4'>
               <div className='grid min-h-0 flex-1 grid-cols-1'>
                 <div className='min-h-0'>
@@ -124,6 +127,7 @@ export function App() {
               </div>
             </div>
           </div>
+          <ToastHost />
           {navCollapsed && (
             <div className='fab end-auto left-4 md:hidden landscape:hidden'>
               <button

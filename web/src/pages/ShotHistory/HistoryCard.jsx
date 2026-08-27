@@ -2,6 +2,7 @@ import Card from '../../components/Card.jsx';
 import { useCallback, useState, useContext } from 'preact/hooks';
 import { HistoryChart } from './HistoryChart.jsx';
 import { downloadJson, downloadText } from '../../utils/download.js';
+import { showToast } from '../../services/toast.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
@@ -148,10 +149,10 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
         await visualizerService.uploadShot(shotWithNotes, username, password, profileData);
 
         // Show success message
-        alert('Shot uploaded successfully to visualizer.coffee!');
+        showToast('Shot uploaded to visualizer.coffee', { type: 'success' });
       } catch (error) {
         console.error('Upload failed:', error);
-        alert(`Upload failed: ${error.message}`);
+        showToast(`Upload failed: ${error.message}`, { type: 'error' });
         throw error; // Re-throw to prevent modal from closing
       } finally {
         setIsUploading(false);

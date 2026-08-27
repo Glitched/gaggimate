@@ -8,13 +8,17 @@ import { faChevronLeft } from '@fortawesome/free-solid-svg-icons/faChevronLeft';
 import { faChevronRight } from '@fortawesome/free-solid-svg-icons/faChevronRight';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
+import { faArrowLeft } from '@fortawesome/free-solid-svg-icons/faArrowLeft';
+import { faArrowRight } from '@fortawesome/free-solid-svg-icons/faArrowRight';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
-import { getProfilePhases, removePhaseAt, updatePhaseAt } from './profilePhases.js';
+import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
+import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 
 export function ExtendedProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
   const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
+  const { armed: removeArmed, armOrRun: confirmOrRemove } = useConfirmAction(4000);
 
   const onFieldChange = (field, value) => {
     onChange({
@@ -61,6 +65,17 @@ export function ExtendedProfileForm(props) {
     });
     // Stay near the removed phase instead of jumping back to the first one.
     setCurrentPhaseIndex(Math.max(0, Math.min(index, phases.length - 2)));
+  };
+
+  const onPhaseMove = direction => {
+    const target = currentPhaseIndex + direction;
+    if (target < 0 || target >= phases.length) return;
+    onChange({
+      ...data,
+      phases: movePhase(phases, currentPhaseIndex, target),
+    });
+    // Follow the phase to its new position.
+    setCurrentPhaseIndex(target);
   };
 
   const currentPhase = phases[currentPhaseIndex];
@@ -121,6 +136,28 @@ export function ExtendedProfileForm(props) {
                 </button>
               </div>
             </div>
+            <div className='join' role='group' aria-label='Reorder phase'>
+              <button
+                type='button'
+                className={`join-item btn btn-outline max-sm:btn-sm`}
+                aria-label='Move phase earlier'
+                title='Move phase earlier'
+                disabled={phases.length === 0 || currentPhaseIndex === 0}
+                onClick={() => onPhaseMove(-1)}
+              >
+                <FontAwesomeIcon icon={faArrowLeft} />
+              </button>
+              <button
+                type='button'
+                className={`join-item btn btn-outline max-sm:btn-sm`}
+                aria-label='Move phase later'
+                title='Move phase later'
+                disabled={phases.length === 0 || currentPhaseIndex === phases.length - 1}
+                onClick={() => onPhaseMove(1)}
+              >
+                <FontAwesomeIcon icon={faArrowRight} />
+              </button>
+            </div>
             <button
               type='button'
               className={`join-item btn btn-outline max-sm:btn-sm`}
@@ -131,10 +168,11 @@ export function ExtendedProfileForm(props) {
             </button>
             <button
               type='button'
-              className={`join-item btn btn-outline text-error max-sm:btn-sm`}
-              aria-label='Remove phase'
+              className={`join-item btn max-sm:btn-sm ${removeArmed ? 'btn-error' : 'btn-outline text-error'}`}
+              aria-label={removeArmed ? 'Click again to remove phase' : 'Remove phase'}
+              title={removeArmed ? 'Click again to confirm' : 'Remove phase'}
               disabled={phases.length === 0}
-              onClick={() => onPhaseRemove(currentPhaseIndex)}
+              onClick={() => confirmOrRemove(() => onPhaseRemove(currentPhaseIndex))}
             >
               <FontAwesomeIcon icon={faTrashCan} />
             </button>

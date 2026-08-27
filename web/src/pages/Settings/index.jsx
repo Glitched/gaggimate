@@ -19,6 +19,7 @@ import {
 } from '../../utils/dashboardManager.js';
 import { downloadJson } from '../../utils/download.js';
 import { getStoredTheme, handleThemeChange } from '../../utils/themeManager.js';
+import { showToast } from '../../services/toast.js';
 
 import PageLayout from '../../components/PageLayout.jsx';
 import PageHeader from '../../components/PageHeader.jsx';
@@ -346,6 +347,9 @@ export function Settings() {
           method: 'post',
           body: formDataToSubmit,
         });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
 
         const splitPid = data.pid ? splitPidString(data.pid) : null;
@@ -361,8 +365,14 @@ export function Settings() {
 
         updateSettingsCache(data);
         setFormData(updatedData);
+        showToast(restart ? 'Settings saved — restarting machine' : 'Settings saved', {
+          type: 'success',
+        });
       } catch (error) {
         console.error('Failed to save settings:', error);
+        showToast('Saving settings failed — check the machine connection and try again.', {
+          type: 'error',
+        });
       } finally {
         setSubmitting(false);
       }
@@ -389,16 +399,19 @@ export function Settings() {
         try {
           data = JSON.parse(e.target.result);
         } catch {
-          alert('Import failed: the selected file is not valid JSON.');
+          showToast('Import failed: the selected file is not valid JSON.', { type: 'error' });
           return;
         }
         if (!data || typeof data !== 'object' || Array.isArray(data)) {
-          alert('Import failed: the selected file is not a settings export.');
+          showToast('Import failed: the selected file is not a settings export.', {
+            type: 'error',
+          });
           return;
         }
         // Merge over current values so exports without credentials don't blank
         // out the passwords already loaded in the form.
         setFormData(prev => ({ ...prev, ...data }));
+        showToast('Settings imported — review and press Save to apply.', { type: 'info' });
       };
       reader.readAsText(file);
       // Allow re-selecting the same file to trigger another change event.

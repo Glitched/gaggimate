@@ -2,7 +2,7 @@
 
 /* global globalThis */
 
-import { calculateShotMetrics, detectAutoDelay } from '../services/AnalyzerService';
+import { calculateShotMetrics } from '../services/AnalyzerService';
 import { libraryService } from '../services/LibraryService';
 import { cleanName, getProfileDisplayLabel, getShotStorageKey } from '../utils/analyzerUtils';
 
@@ -155,19 +155,15 @@ export async function loadPreferredAutoMatchedProfile(shotWithMetadata, allProfi
 }
 
 export function analyzeShot(shotData, profileData) {
-  let usedSensorDelay = DEFAULT_ANALYSIS_DELAY_MS;
-  let isAutoAdjusted = false;
-
-  if (profileData) {
-    const detection = detectAutoDelay(shotData, profileData, DEFAULT_ANALYSIS_DELAY_MS);
-    usedSensorDelay = detection.delay;
-    isAutoAdjusted = detection.auto;
-  }
-
+  // Single auto-adjusted pass. Delay "detection" used to run one full
+  // calculateShotMetrics pass just to read back its averaged delays and feed
+  // them into a second full pass — but on the auto-adjusted path the passed
+  // delays only act as fallbacks when no per-phase target match exists, and
+  // in exactly those cases the detected values equal the defaults anyway.
   return calculateShotMetrics(shotData, profileData, {
     scaleDelayMs: DEFAULT_ANALYSIS_DELAY_MS,
-    sensorDelayMs: usedSensorDelay,
-    isAutoAdjusted,
+    sensorDelayMs: DEFAULT_ANALYSIS_DELAY_MS,
+    isAutoAdjusted: !!profileData,
   });
 }
 

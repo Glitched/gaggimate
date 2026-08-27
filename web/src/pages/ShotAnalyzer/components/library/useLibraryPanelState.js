@@ -258,7 +258,12 @@ export function useLibraryRefresh({
   shotsSourceFilter,
 }) {
   const refreshIdRef = useRef(0);
+  const [rawLibraryData, setRawLibraryData] = useState(null);
 
+  // Fetching hits the device (index.bin over HTTP plus the profile list over
+  // the WebSocket), so it runs only when the source filter changes or a
+  // caller explicitly asks for a refresh (import, delete, panel open) — NOT
+  // on every search keystroke, sort change, or pin toggle.
   const refreshLibraries = useCallback(async () => {
     const id = ++refreshIdRef.current;
     setLoading(true);
@@ -269,35 +274,7 @@ export function useLibraryRefresh({
       ]);
 
       if (id !== refreshIdRef.current) return;
-      const { nextShots, nextProfiles } = buildPromotedLibraryItems({
-        shotsData,
-        profilesData,
-        shotSearch: debouncedShotsSearch,
-        profileSearch: debouncedProfilesSearch,
-        shotsSort,
-        profilesSort,
-        normalizedCurrentProfileName: selectionPromotionsEnabled
-          ? normalizedCurrentProfileName
-          : '',
-        normalizedCurrentShotProfileName: selectionPromotionsEnabled
-          ? normalizedCurrentShotProfileName
-          : '',
-        pinnedProfiles,
-        pinnedShotsByProfile,
-        shotsPinnedFirst,
-        profilesPinnedFirst,
-        selectionPromotionsEnabled,
-      });
-      const nextNavigationShots = buildShotNavigationItems({
-        shotsData,
-        shotsSort,
-        shotsPinnedFirst,
-        pinnedShotsByProfile,
-      });
-
-      setShots(nextShots);
-      setProfiles(nextProfiles);
-      setNavigationShots(nextNavigationShots);
+      setRawLibraryData({ shotsData, profilesData });
     } catch (error) {
       if (id !== refreshIdRef.current) return;
       console.error('Library refresh failed:', error);
@@ -306,7 +283,47 @@ export function useLibraryRefresh({
         setLoading(false);
       }
     }
+  }, [profilesSourceFilter, setLoading, shotsSourceFilter]);
+
+  useEffect(() => {
+    refreshLibraries();
+  }, [refreshLibraries]);
+
+  // Search/sort/pin/promotion are pure client-side derivations over the
+  // cached raw lists; they re-run without touching the device.
+  useEffect(() => {
+    if (!rawLibraryData) return;
+    const { shotsData, profilesData } = rawLibraryData;
+
+    const { nextShots, nextProfiles } = buildPromotedLibraryItems({
+      shotsData,
+      profilesData,
+      shotSearch: debouncedShotsSearch,
+      profileSearch: debouncedProfilesSearch,
+      shotsSort,
+      profilesSort,
+      normalizedCurrentProfileName: selectionPromotionsEnabled ? normalizedCurrentProfileName : '',
+      normalizedCurrentShotProfileName: selectionPromotionsEnabled
+        ? normalizedCurrentShotProfileName
+        : '',
+      pinnedProfiles,
+      pinnedShotsByProfile,
+      shotsPinnedFirst,
+      profilesPinnedFirst,
+      selectionPromotionsEnabled,
+    });
+    const nextNavigationShots = buildShotNavigationItems({
+      shotsData,
+      shotsSort,
+      shotsPinnedFirst,
+      pinnedShotsByProfile,
+    });
+
+    setShots(nextShots);
+    setProfiles(nextProfiles);
+    setNavigationShots(nextNavigationShots);
   }, [
+    rawLibraryData,
     debouncedProfilesSearch,
     debouncedShotsSearch,
     normalizedCurrentProfileName,
@@ -315,20 +332,13 @@ export function useLibraryRefresh({
     pinnedShotsByProfile,
     profilesPinnedFirst,
     profilesSort,
-    profilesSourceFilter,
     selectionPromotionsEnabled,
-    setLoading,
     setNavigationShots,
     setProfiles,
     setShots,
     shotsPinnedFirst,
     shotsSort,
-    shotsSourceFilter,
   ]);
-
-  useEffect(() => {
-    refreshLibraries();
-  }, [refreshLibraries]);
 
   return refreshLibraries;
 }
