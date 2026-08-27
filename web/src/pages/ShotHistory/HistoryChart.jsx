@@ -1,6 +1,7 @@
 import { useMemo } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from '../../components/Chart.jsx';
+import { getChartAnnotationLabelColors } from '../../utils/chartTheme.js';
 
 // Helper function to get phase name from shot data (v5+) or fallback to profile/generic
 function getPhaseName(shot, phaseNumber) {
@@ -73,6 +74,7 @@ function getChartData(shot) {
   // Create phase annotations
   const phaseAnnotations = {};
   const isSmall = window.innerWidth < 640;
+  const annotationLabelColors = getChartAnnotationLabelColors();
 
   // Add shot start marker
   if (data.length > 0) {
@@ -92,8 +94,8 @@ function getChartData(shot) {
         xAdjust: -5,
         yAdjust: 0,
         padding: { x: 6, y: 0 },
-        color: 'rgb(255,255,255)',
-        backgroundColor: 'rgba(22,33,50,0.75)',
+        color: annotationLabelColors.color,
+        backgroundColor: annotationLabelColors.backgroundColor,
         textAlign: 'start',
         font: {
           size: isSmall ? 9 : 11,
@@ -124,8 +126,8 @@ function getChartData(shot) {
         xAdjust: -10,
         yAdjust: 0,
         padding: { x: 6, y: 0 },
-        color: 'rgb(255,255,255)',
-        backgroundColor: 'rgba(22,33,50,0.75)',
+        color: annotationLabelColors.color,
+        backgroundColor: annotationLabelColors.backgroundColor,
         textAlign: 'start',
         font: {
           size: isSmall ? 9 : 11,

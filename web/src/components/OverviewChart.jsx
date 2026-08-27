@@ -2,6 +2,7 @@ import { machine } from '../services/ApiService.js';
 import { effect } from '@preact/signals';
 import { Chart } from 'chart.js';
 import { ChartComponent } from './Chart.jsx';
+import { getChartAnnotationLabelColors } from '../utils/chartTheme.js';
 
 // Global state to track phase transitions during brewing
 let phaseTransitions = [];
@@ -88,6 +89,7 @@ function getChartData(data) {
 
   const currentProcess = machine.value.status.process;
   const isBrewActive = isBrewProcess(currentProcess);
+  const annotationLabelColors = getChartAnnotationLabelColors();
 
   // Determine time window based on brewing state
   let timeWindowMs;
@@ -174,8 +176,8 @@ function getChartData(data) {
           xAdjust: -10, // tweak first label inward to compensate for y-axis padding
           yAdjust: 0,
           padding: { x: 6, y: 0 },
-          color: 'rgb(255,255,255)',
-          backgroundColor: 'rgba(22,33,50,0.75)',
+          color: annotationLabelColors.color,
+          backgroundColor: annotationLabelColors.backgroundColor,
           textAlign: 'start',
           font: {
             size: isSmall ? 9 : 11,
@@ -208,8 +210,8 @@ function getChartData(data) {
           xAdjust: -10, // tweak first label inward to compensate for y-axis padding
           yAdjust: 0,
           padding: { x: 6, y: 0 },
-          color: 'rgb(255,255,255)',
-          backgroundColor: 'rgba(22,33,50,0.75)',
+          color: annotationLabelColors.color,
+          backgroundColor: annotationLabelColors.backgroundColor,
           textAlign: 'start',
           font: {
             size: isSmall ? 9 : 11,

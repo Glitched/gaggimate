@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from './Chart';
+import { isDarkAppTheme } from '../utils/chartTheme.js';
 
 const POINT_INTERVAL = 0.1; // s
 
@@ -369,8 +370,9 @@ export function ExtendedProfileChart({
   showPhaseLabels = true,
   style,
 }) {
-  const isDarkMode = () =>
-    window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  // Follow the app's selected daisyUI theme, not the OS color scheme — they
+  // can disagree (e.g. 'coffee' theme on a light OS).
+  const isDarkMode = isDarkAppTheme;
   const phases = Array.isArray(data?.phases) ? data.phases : [];
   const phaseRanges = useMemo(() => buildPhaseRanges(phases), [phases]);
   const phaseRangesRef = useRef(phaseRanges);

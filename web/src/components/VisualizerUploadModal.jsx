@@ -72,15 +72,16 @@ export default function VisualizerUploadModal({
   if (!isOpen) return null;
 
   return (
-    <div className='bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center bg-black p-4'>
-      <div className='max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white shadow-xl dark:bg-gray-800'>
+    <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4'>
+      <div className='bg-base-100 max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg shadow-xl'>
         <div className='p-6'>
           <div className='mb-4 flex items-center justify-between'>
             <h3 className='text-lg font-semibold'>Upload to Visualizer.coffee</h3>
             {!isUploading && (
               <button
                 onClick={handleClose}
-                className='text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                className='btn btn-ghost btn-sm btn-circle'
+                aria-label='Close'
               >
                 ✕
               </button>
@@ -88,18 +89,18 @@ export default function VisualizerUploadModal({
           </div>
 
           {shotInfo && (
-            <div className='mb-4 rounded-md bg-gray-100 p-3 dark:bg-gray-700'>
-              <p className='text-sm text-gray-600 dark:text-gray-300'>
+            <div className='bg-base-200 mb-4 rounded-md p-3'>
+              <p className='text-base-content/70 text-sm'>
                 <strong>Shot:</strong> {shotInfo.profile}
               </p>
-              <p className='text-sm text-gray-600 dark:text-gray-300'>
+              <p className='text-base-content/70 text-sm'>
                 <strong>Date:</strong> {new Date(shotInfo.timestamp * 1000).toLocaleString()}
               </p>
-              <p className='text-sm text-gray-600 dark:text-gray-300'>
+              <p className='text-base-content/70 text-sm'>
                 <strong>Duration:</strong> {(shotInfo.duration / 1000).toFixed(1)}s
               </p>
               {shotInfo.volume > 0 && (
-                <p className='text-sm text-gray-600 dark:text-gray-300'>
+                <p className='text-base-content/70 text-sm'>
                   <strong>Yield:</strong> {shotInfo.volume}g
                 </p>
               )}
@@ -118,7 +119,7 @@ export default function VisualizerUploadModal({
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 disabled={isUploading}
-                className='w-full rounded-md border border-gray-300 px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white'
+                className='input input-bordered w-full'
                 placeholder='Enter your username'
                 autoComplete='username'
                 required
@@ -137,7 +138,7 @@ export default function VisualizerUploadModal({
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   disabled={isUploading}
-                  className='w-full rounded-md border border-gray-300 px-3 py-2 pr-10 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white'
+                  className='input input-bordered w-full pr-10'
                   placeholder='Enter your password'
                   autoComplete='current-password'
                   required
@@ -146,7 +147,8 @@ export default function VisualizerUploadModal({
                   type='button'
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={isUploading}
-                  className='absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600 disabled:opacity-50'
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className='text-base-content/50 hover:text-base-content/80 absolute inset-y-0 right-0 z-10 flex items-center pr-3 disabled:opacity-50'
                 >
                   <FontAwesomeIcon icon={showPassword ? faEyeSlash : faEye} />
                 </button>
@@ -160,9 +162,9 @@ export default function VisualizerUploadModal({
                 checked={rememberCredentials}
                 onChange={e => setRememberCredentials(e.target.checked)}
                 disabled={isUploading}
-                className='h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50'
+                className='checkbox checkbox-sm'
               />
-              <label htmlFor='remember' className='ml-2 text-sm text-gray-600 dark:text-gray-300'>
+              <label htmlFor='remember' className='text-base-content/70 ml-2 text-sm'>
                 Remember username
               </label>
             </div>
@@ -172,14 +174,14 @@ export default function VisualizerUploadModal({
                 type='button'
                 onClick={handleClose}
                 disabled={isUploading}
-                className='rounded-md bg-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-600 dark:text-gray-200 dark:hover:bg-gray-500'
+                className='btn btn-ghost btn-sm'
               >
                 Cancel
               </button>
               <button
                 type='submit'
                 disabled={isUploading || !username.trim() || !password.trim()}
-                className='flex items-center space-x-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+                className='btn btn-primary btn-sm gap-2'
               >
                 {isUploading && <FontAwesomeIcon icon={faSpinner} spin />}
                 <span>{isUploading ? 'Uploading...' : 'Upload Shot'}</span>
@@ -187,7 +189,7 @@ export default function VisualizerUploadModal({
             </div>
           </form>
 
-          <div className='mt-4 text-xs text-gray-500 dark:text-gray-400'>
+          <div className='text-base-content/60 mt-4 text-xs'>
             <p>
               Your credentials are only used for this upload. Only your username is stored locally
               if you choose to remember it — your password is never saved.
