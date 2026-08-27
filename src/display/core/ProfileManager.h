@@ -7,6 +7,10 @@
 #include <display/core/utils.h>
 #include <display/models/profile.h>
 
+// Generated ids are short alphanumeric strings; seed profiles use names like
+// "9bar". 64 is well clear of both and bounds the filename.
+constexpr unsigned int MAX_PROFILE_ID_LENGTH = 64;
+
 class ProfileManager {
   public:
     ProfileManager(fs::FS *fs, String dir, Settings &settings, PluginManager *plugin_manager);
@@ -33,6 +37,9 @@ class ProfileManager {
     String _dir;
     bool ensureDirectory() const;
     String profilePath(const String &uuid) const;
+
+    // Rejects ids that would escape _dir when turned into a filename.
+    static bool isValidProfileId(const String &uuid);
     void migrate(const std::vector<String> &existingProfiles);
 };
 
