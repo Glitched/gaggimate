@@ -1,6 +1,7 @@
 #include "DefaultUI.h"
 
 #include <WiFi.h>
+#include <display/config.h>
 #include <display/core/Controller.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/Process.h>
@@ -424,9 +425,9 @@ void DefaultUI::setupState() {
                                       escaped += c;
                                   }
                                   if (escaped.isEmpty()) {
-                                      content = "WIFI:S:GaggiMate;;;;";
+                                      content = "WIFI:S:" WIFI_AP_SSID ";;;;";
                                   } else {
-                                      content = "WIFI:S:GaggiMate;T:WPA;P:" + escaped + ";;";
+                                      content = "WIFI:S:" WIFI_AP_SSID ";T:WPA;P:" + escaped + ";;";
                                   }
                               } else if (wifiConnected) {
                                   content = "http://" + WiFi.localIP().toString() + "/";
@@ -571,7 +572,7 @@ void DefaultUI::updateSystemStatus() {
     const String ip = apActive ? String("4.4.4.1") : WiFi.localIP().toString();
     if (stringChanged(systemStatus.ip(), ip.c_str()))
         systemStatus.ip(ip.c_str());
-    const String network = apActive ? String("GaggiMate") : systemStatus.wifi() ? settings.getWifiSsid() : String("Disconnected");
+    const String network = apActive ? String(WIFI_AP_SSID) : systemStatus.wifi() ? settings.getWifiSsid() : String("Disconnected");
     if (stringChanged(systemStatus.network(), network.c_str()))
         systemStatus.network(network.c_str());
     systemStatus.ap_active(apActive);

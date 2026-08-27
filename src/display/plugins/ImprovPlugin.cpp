@@ -1,6 +1,7 @@
 #include "ImprovPlugin.h"
 
 #include <ImprovWiFiLibrary.h>
+#include <display/config.h>
 #include <display/core/Controller.h>
 #include <version.h>
 
@@ -18,7 +19,7 @@ void ImprovPlugin::setup(Controller *_controller, PluginManager *pluginManager) 
     deviceUrl = "http://" + settings.getMdnsName() + ".local/";
 
     improv = new ImprovWiFi(&Serial);
-    improv->setDeviceInfo(currentChipFamily(), "GaggiMate", firmwareVersion.c_str(), deviceName.c_str(), deviceUrl.c_str());
+    improv->setDeviceInfo(currentChipFamily(), WIFI_AP_SSID, firmwareVersion.c_str(), deviceName.c_str(), deviceUrl.c_str());
     improv->setCustomConnectWiFi(onConnectWifi);
     improv->onImprovConnected(onConnected);
 }

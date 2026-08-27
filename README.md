@@ -1,13 +1,15 @@
+<h1 align="center">Exhalation</h1>
+
 <p align="center">
-<img src="docs/assets/logo.png" alt="Logo" width="250px" />
-<br />
+<em>Espresso machine control firmware — pressure, flow and temperature profiling.</em>
+<br /><br />
 
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
 </p>
 
 > [!NOTE]
-> **This is an unofficial fork** of [GaggiMate](https://github.com/jniebuhr/gaggimate) by
+> **Exhalation is an unofficial fork** of [GaggiMate](https://github.com/jniebuhr/gaggimate) by
 > [@jniebuhr](https://github.com/jniebuhr), modified and maintained independently. It is not
 > affiliated with or endorsed by the upstream project, and upstream cannot support it.
 >
