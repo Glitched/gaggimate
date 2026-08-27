@@ -5,9 +5,11 @@ import { faChevronDown } from '@fortawesome/free-solid-svg-icons/faChevronDown';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
+import { faArrowUp } from '@fortawesome/free-solid-svg-icons/faArrowUp';
+import { faArrowDown } from '@fortawesome/free-solid-svg-icons/faArrowDown';
 import { Tooltip } from '../../components/Tooltip.jsx';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
-import { getProfilePhases, removePhaseAt, updatePhaseAt } from './profilePhases.js';
+import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
 
 export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
@@ -51,6 +53,13 @@ export function StandardProfileForm(props) {
     });
   };
 
+  const onPhaseMove = (index, direction) => {
+    onChange({
+      ...data,
+      phases: movePhase(phases, index, index + direction),
+    });
+  };
+
   return (
     <form
       onSubmit={e => {
@@ -84,6 +93,10 @@ export function StandardProfileForm(props) {
                   index={index}
                   onChange={phase => onPhaseChange(index, phase)}
                   onRemove={() => onPhaseRemove(index)}
+                  onMoveUp={() => onPhaseMove(index, -1)}
+                  onMoveDown={() => onPhaseMove(index, 1)}
+                  isFirst={index === 0}
+                  isLast={index === phases.length - 1}
                   pressureAvailable={pressureAvailable}
                 />
               </div>
@@ -123,7 +136,17 @@ export function StandardProfileForm(props) {
   );
 }
 
-function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
+function Phase({
+  phase,
+  index,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
+  pressureAvailable,
+}) {
   const onFieldChange = (field, value) => {
     onChange({
       ...phase,
@@ -194,6 +217,28 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
               onChange={e => onFieldChange('name', e.target.value)}
               aria-label='Enter a name for this phase'
             />
+            <Tooltip content='Move phase earlier'>
+              <button
+                type='button'
+                onClick={onMoveUp}
+                disabled={isFirst}
+                className='btn btn-sm btn-ghost'
+                aria-label={`Move phase ${index + 1} earlier`}
+              >
+                <FontAwesomeIcon icon={faArrowUp} />
+              </button>
+            </Tooltip>
+            <Tooltip content='Move phase later'>
+              <button
+                type='button'
+                onClick={onMoveDown}
+                disabled={isLast}
+                className='btn btn-sm btn-ghost'
+                aria-label={`Move phase ${index + 1} later`}
+              >
+                <FontAwesomeIcon icon={faArrowDown} />
+              </button>
+            </Tooltip>
             <Tooltip content='Delete this phase'>
               <button
                 type='button'
