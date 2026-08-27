@@ -2,6 +2,7 @@
 #define BLESCALEPLUGIN_H
 #include "../core/Plugin.h"
 #include "remote_scales.h"
+#include <memory>
 #include "remote_scales_plugin_registry.h"
 
 void on_ble_measurement(float value);
