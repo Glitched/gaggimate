@@ -27,6 +27,7 @@ import { Spinner } from '../../components/Spinner.jsx';
 import Card from '../../components/Card.jsx';
 import { parseProfile } from './utils.js';
 import { downloadJson } from '../../utils/download.js';
+import { showToast } from '../../services/toast.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faStar } from '@fortawesome/free-solid-svg-icons/faStar';
 import { faPen } from '@fortawesome/free-solid-svg-icons/faPen';
@@ -834,6 +835,7 @@ export function ProfileList() {
         await apiService.request({ tp: 'req:profiles:delete', id });
       } catch (error) {
         console.error('Failed to delete profile:', error);
+        showToast('Deleting the profile failed.', { type: 'error' });
         await loadProfiles();
       }
     },
@@ -848,6 +850,7 @@ export function ProfileList() {
         await apiService.request({ tp: 'req:profiles:select', id });
       } catch (error) {
         console.error('Failed to select profile:', error);
+        showToast('Selecting the profile failed.', { type: 'error' });
         await loadProfiles();
       }
     },
@@ -862,6 +865,7 @@ export function ProfileList() {
         await apiService.request({ tp: 'req:profiles:favorite', id });
       } catch (error) {
         console.error('Failed to favorite profile:', error);
+        showToast('Updating the favorite failed.', { type: 'error' });
         await loadProfiles();
       }
     },
@@ -876,6 +880,7 @@ export function ProfileList() {
         await apiService.request({ tp: 'req:profiles:unfavorite', id });
       } catch (error) {
         console.error('Failed to unfavorite profile:', error);
+        showToast('Updating the favorite failed.', { type: 'error' });
         await loadProfiles();
       }
     },
@@ -898,6 +903,7 @@ export function ProfileList() {
         }
       } catch (error) {
         console.error('Failed to duplicate profile:', error);
+        showToast('Duplicating the profile failed.', { type: 'error' });
       }
       await loadProfiles();
     },
@@ -932,7 +938,9 @@ export function ProfileList() {
             console.error('Failed to parse profile file:', error);
           }
           if (!parsed.length) {
-            alert('No profiles could be read from that file — is it a profile export?');
+            showToast('No profiles could be read from that file — is it a profile export?', {
+              type: 'error',
+            });
             return;
           }
           setLoading(true);
@@ -948,7 +956,9 @@ export function ProfileList() {
           }
           await loadProfiles();
           if (failed > 0) {
-            alert(`${failed} of ${parsed.length} profiles failed to import.`);
+            showToast(`${failed} of ${parsed.length} profiles failed to import.`, {
+              type: 'error',
+            });
           }
         }
       };

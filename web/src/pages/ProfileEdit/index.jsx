@@ -19,6 +19,7 @@ import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
+import { showToast } from '../../services/toast.js';
 
 Chart.register(
   LineController,
@@ -122,7 +123,9 @@ export function ProfileEdit() {
       } catch (error) {
         // Leave the form intact so the user's edits survive a failed save.
         console.error('Failed to save profile:', error);
-        alert('Saving the profile failed — check the machine connection and try again.');
+        showToast('Saving the profile failed — check the machine connection and try again.', {
+          type: 'error',
+        });
       } finally {
         setSaving(false);
       }
