@@ -401,15 +401,30 @@ export function ShotAnalyzer() {
     [cancelPrimaryProfileSearch, clearPrimarySelectionTimer, importMode, resetCompareState],
   );
 
+  const handledDeepLinkRef = useRef(null);
+
   useEffect(() => {
     const loadDeepLink = async () => {
       if (!params.source || !params.id) return;
+
+      // Handle each deep link exactly once. This effect used to depend on
+      // currentShot, so every later library selection re-ran it and re-loaded
+      // the URL's shot — reverting whatever the user had just picked.
+      const deepLinkKey = `${params.source}/${params.id}`;
+      if (handledDeepLinkRef.current === deepLinkKey) return;
+      handledDeepLinkRef.current = deepLinkKey;
 
       let serviceSource = params.source;
       if (params.source === 'internal') serviceSource = 'gaggimate';
       if (params.source === 'external') serviceSource = 'browser';
 
-      if (isAlreadyLoadedDeepLink({ currentShot, params: { id: params.id }, serviceSource }))
+      if (
+        isAlreadyLoadedDeepLink({
+          currentShot: currentShotRef.current,
+          params: { id: params.id },
+          serviceSource,
+        })
+      )
         return;
 
       try {
@@ -420,16 +435,19 @@ export function ShotAnalyzer() {
           // URL sources are aliases; normalize them before the analyzer stores the shot.
           shot.source = serviceSource;
           commitPrimaryShotLoad(shot, shot.name || params.id);
+        } else {
+          setLoading(false);
         }
       } catch (e) {
         console.error('Deep Link Load Failed:', e);
+        setLoading(false);
       }
     };
 
     if (apiService) {
       loadDeepLink();
     }
-  }, [apiService, commitPrimaryShotLoad, currentShot, params.id, params.source]);
+  }, [apiService, commitPrimaryShotLoad, params.id, params.source]);
 
   const tryLoadPrimarySelection = useCallback(
     async (requestId, selectionRequest) => {

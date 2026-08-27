@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from './Chart';
 
@@ -372,16 +372,16 @@ export function ExtendedProfileChart({
   const isDarkMode = () =>
     window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const phases = Array.isArray(data?.phases) ? data.phases : [];
-  const phaseRanges = buildPhaseRanges(phases);
+  const phaseRanges = useMemo(() => buildPhaseRanges(phases), [phases]);
   const phaseRangesRef = useRef(phaseRanges);
   phaseRangesRef.current = phaseRanges;
-  const config = makeChartData(
-    data,
-    selectedPhase,
-    phaseRanges,
-    onPhaseClick,
-    isDarkMode(),
-    showPhaseLabels,
+  // makeChartData synthesizes a point every 0.1s of profile time — memoize so
+  // parent re-renders that don't change the profile (e.g. keystrokes in the
+  // title field) don't rebuild and re-draw the whole chart.
+  const config = useMemo(
+    () =>
+      makeChartData(data, selectedPhase, phaseRanges, onPhaseClick, isDarkMode(), showPhaseLabels),
+    [data, selectedPhase, phaseRanges, onPhaseClick, showPhaseLabels],
   );
 
   return (
