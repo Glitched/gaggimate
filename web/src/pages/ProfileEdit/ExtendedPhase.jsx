@@ -4,6 +4,7 @@ import { useCallback } from 'preact/hooks';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { Tooltip } from '../../components/Tooltip.jsx';
+import { toFiniteNumber } from './profilePhases.js';
 
 export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvailable }) {
   const onFieldChange = (field, value) => {
@@ -110,7 +111,9 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                 type='number'
                 min='1'
                 value={phase.duration}
-                onChange={e => onFieldChange('duration', e.target.value)}
+                onChange={e =>
+                  onFieldChange('duration', toFiniteNumber(e.target.value, 0, { min: 0 }))
+                }
                 aria-label='Duration in seconds'
               />
               <span aria-label='seconds'>s</span>
@@ -128,7 +131,9 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                 className='grow'
                 type='number'
                 value={`${phase.temperature || 0}`}
-                onChange={e => onFieldChange('temperature', parseFloat(e.target.value))}
+                onChange={e =>
+                  onFieldChange('temperature', toFiniteNumber(e.target.value, 0, { min: 0 }))
+                }
                 aria-label='Target temperature'
                 min='0'
                 step='0.1'
@@ -278,7 +283,9 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                 min={0}
                 max={100}
                 value={pumpPower.toString()}
-                onChange={e => onFieldChange('pump', parseFloat(e.target.value))}
+                onChange={e =>
+                  onFieldChange('pump', toFiniteNumber(e.target.value, 0, { min: 0, max: 100 }))
+                }
                 aria-label='Pump power as percentage'
               />
               <span aria-label='percent'>%</span>
@@ -308,7 +315,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     min={mode === 'pressure' ? '0.1' : '0'}
                     value={pressure.toString()}
                     onChange={e =>
-                      onFieldChange('pump', { ...phase.pump, pressure: parseFloat(e.target.value) })
+                      onFieldChange('pump', {
+                        ...phase.pump,
+                        pressure: toFiniteNumber(e.target.value, 0, { min: 0 }),
+                      })
                     }
                     aria-label='Pressure in bar'
                   />
@@ -332,7 +342,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     step='0.01'
                     value={flow.toString()}
                     onChange={e =>
-                      onFieldChange('pump', { ...phase.pump, flow: parseFloat(e.target.value) })
+                      onFieldChange('pump', {
+                        ...phase.pump,
+                        flow: toFiniteNumber(e.target.value, 0, { min: 0 }),
+                      })
                     }
                     aria-label='Flow rate in grams per second'
                     min={mode === 'flow' ? '0.1' : '0'}
@@ -477,7 +490,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     onChange={e =>
                       onFieldChange('transition', {
                         ...phase.transition,
-                        duration: parseFloat(e.target.value),
+                        duration: toFiniteNumber(e.target.value, 0, { min: 0 }),
                       })
                     }
                     aria-label={`Transition duration in ${rampUnit}`}
