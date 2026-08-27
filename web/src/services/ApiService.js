@@ -278,24 +278,38 @@ export default class ApiService {
     };
     const historyEntry = { ...newStatus };
     delete historyEntry.process;
-    const newValue = {
+
+    // Single allocation per tick: drop the oldest entry once the buffer is
+    // full instead of copying the 600-entry array twice, 2×/second, forever.
+    const prevHistory = machine.value.history;
+    const history = prevHistory.slice(prevHistory.length >= 600 ? 1 : 0);
+    history.push(historyEntry);
+
+    // Capabilities almost never change — keep the object identity stable so
+    // subscribers deriving from it (computed signals, memo deps) don't see a
+    // fresh object every 500 ms.
+    const prevCapabilities = machine.value.capabilities;
+    const mergedCapabilities = {
+      ...prevCapabilities,
+      dimming: message.cd,
+      pressure: message.cp,
+      ledControl: message.led,
+      gearpumpAddon: !!message.gp,
+    };
+    const capabilitiesChanged = Object.keys(mergedCapabilities).some(
+      key => mergedCapabilities[key] !== prevCapabilities[key],
+    );
+
+    machine.value = {
       ...machine.value,
       connected: true,
       status: {
         ...machine.value.status,
         ...newStatus,
       },
-      capabilities: {
-        ...machine.value.capabilities,
-        dimming: message.cd,
-        pressure: message.cp,
-        ledControl: message.led,
-        gearpumpAddon: !!message.gp,
-      },
-      history: [...machine.value.history, historyEntry],
+      capabilities: capabilitiesChanged ? mergedCapabilities : prevCapabilities,
+      history,
     };
-    newValue.history = newValue.history.slice(-600);
-    machine.value = newValue;
   }
 }
 
