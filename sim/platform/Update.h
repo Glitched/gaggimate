@@ -26,7 +26,7 @@ class UpdateClassSim {
   public:
     bool begin(size_t size = UPDATE_SIZE_UNKNOWN, int command = U_FLASH) {
         (void)size;
-        (void)command;
+        _command = command;
         _running = true;
         _finished = false;
         _error = nullptr;
@@ -39,7 +39,9 @@ class UpdateClassSim {
         if (!_running) {
             return 0;
         }
-        if (!_sawFirstByte && len > 0) {
+        // Real Updater checks the image magic only for U_FLASH; a LittleFS
+        // image (U_SPIFFS) has no such header.
+        if (!_sawFirstByte && len > 0 && _command == U_FLASH) {
             _sawFirstByte = true;
             if (data[0] != ESP_IMAGE_HEADER_MAGIC_SIM) {
                 _error = "Wrong Magic Byte";
@@ -80,6 +82,7 @@ class UpdateClassSim {
     bool _running = false;
     bool _finished = false;
     bool _sawFirstByte = false;
+    int _command = U_FLASH;
     size_t _written = 0;
     const char *_error = nullptr;
 };

@@ -1356,11 +1356,20 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
             ESP_LOGW("WebUIPlugin", "Rejected firmware upload: another update is already running");
             return;
         }
-        // U_FLASH targets the inactive OTA slot. UPDATE_SIZE_UNKNOWN lets the
-        // Updater size it from the image header; it aborts on the first chunk
-        // if the ESP image magic byte is wrong, so a stray file cannot be
-        // half-written.
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+        // ?target=fs writes the LittleFS image instead of the app. That is how a
+        // filesystem backup is restored without a cable -- profiles and shot
+        // history live there, and there is no other write path for .slog files.
+        // Unlike the app, the filesystem partition is single-banked: a failed
+        // write leaves it corrupt and the next mount reformats it
+        // (Controller.cpp's LittleFS.begin(true)). Only ever push an image you
+        // still hold a copy of.
+        const bool toFilesystem = request->hasArg("target") && request->arg("target") == "fs";
+        uploadCommand = toFilesystem ? U_SPIFFS : U_FLASH;
+        // UPDATE_SIZE_UNKNOWN sizes to the partition. For U_FLASH the Updater
+        // also aborts on the first chunk if the ESP image magic byte is wrong,
+        // so a stray file cannot be half-written; that check does not apply to
+        // U_SPIFFS, which has no header to validate.
+        if (!Update.begin(UPDATE_SIZE_UNKNOWN, uploadCommand)) {
             ESP_LOGE("WebUIPlugin", "Update.begin failed: %s", Update.errorString());
             return;
         }
@@ -1369,7 +1378,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         uploadLastPct = -1;
         uploadLastChunk = millis();
         pluginManager->trigger("ota:upload:start");
-        ESP_LOGI("WebUIPlugin", "Firmware upload started");
+        ESP_LOGI("WebUIPlugin", "%s upload started", toFilesystem ? "Filesystem" : "Firmware");
     }
     if (!uploadInProgress) {
         return;

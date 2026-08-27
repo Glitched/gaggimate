@@ -3,6 +3,7 @@
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 
+#include <Update.h> // U_FLASH / U_SPIFFS
 #include <DNSServer.h>
 
 #include "GitHubOTA.h"
@@ -84,6 +85,7 @@ class WebUIPlugin : public Plugin {
     size_t uploadTotal = 0;
     int uploadLastPct = -1;
     unsigned long uploadLastChunk = 0;
+    int uploadCommand = U_FLASH; // U_FLASH (app) or U_SPIFFS (LittleFS image)
 
     GitHubOTA *ota = nullptr;
     AsyncWebServer server;
