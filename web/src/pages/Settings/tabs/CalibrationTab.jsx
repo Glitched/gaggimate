@@ -1,56 +1,71 @@
 import { useState, useEffect, useCallback, useContext } from 'preact/hooks';
+import { signal } from '@preact/signals';
 import { ApiServiceContext } from '../../../services/ApiService.js';
 import { OverviewChart } from '../../../components/OverviewChart.jsx';
 import { Spinner } from '../../../components/Spinner.jsx';
 import Section from '../../../components/Card.jsx';
 import PumpFlowCalibration from '../../../components/PumpFlowCalibration/index.jsx';
 import { SettingsFormField } from '../../../components/SettingsFormField.jsx';
+import { showToast } from '../../../services/toast.js';
+
+// An autotune runs on the machine for minutes while the user may browse other
+// tabs. Keep the run state and its event listeners at module level so
+// unmounting this tab doesn't drop the result event.
+const autotuneActive = signal(false);
+const autotuneResult = signal(null);
+const autotuneFailed = signal(false);
+
+let autotuneListenersRegistered = false;
+function ensureAutotuneListeners(apiService) {
+  if (autotuneListenersRegistered) return;
+  autotuneListenersRegistered = true;
+  apiService.on('evt:autotune-result', msg => {
+    autotuneActive.value = false;
+    autotuneFailed.value = false;
+    autotuneResult.value = msg.pid;
+  });
+  apiService.on('evt:autotune-failed', () => {
+    autotuneActive.value = false;
+    autotuneResult.value = null;
+    autotuneFailed.value = true;
+  });
+}
 
 export function CalibrationTab({ formData, setField }) {
   const apiService = useContext(ApiServiceContext);
 
-  // Autotune state
-  const [autotuneActive, setAutotuneActive] = useState(false);
-  const [autotuneResult, setAutotuneResult] = useState(null);
-  const [autotuneFailed, setAutotuneFailed] = useState(false);
+  // Autotune parameters (local to the form; the run state lives above).
   const [autotuneTime, setAutotuneTime] = useState(120);
   const [autotuneSamples, setAutotuneSamples] = useState(6);
   const [autotuneWattage, setAutotuneWattage] = useState(1360);
 
   const onStartAutotune = useCallback(() => {
-    apiService.send({
-      tp: 'req:autotune-start',
-      time: autotuneTime,
-      samples: autotuneSamples,
-      wattage: autotuneWattage,
-    });
-    setAutotuneFailed(false);
-    setAutotuneResult(null);
-    setAutotuneActive(true);
+    try {
+      apiService.send({
+        tp: 'req:autotune-start',
+        time: autotuneTime,
+        samples: autotuneSamples,
+        wattage: autotuneWattage,
+      });
+    } catch (error) {
+      console.error('Failed to start autotune:', error);
+      showToast('Machine not connected — could not start the autotune.', { type: 'error' });
+      return;
+    }
+    autotuneFailed.value = false;
+    autotuneResult.value = null;
+    autotuneActive.value = true;
   }, [autotuneTime, autotuneSamples, autotuneWattage, apiService]);
 
   useEffect(() => {
-    const resultListener = apiService.on('evt:autotune-result', msg => {
-      setAutotuneActive(false);
-      setAutotuneFailed(false);
-      setAutotuneResult(msg.pid);
-    });
-    const failedListener = apiService.on('evt:autotune-failed', () => {
-      setAutotuneActive(false);
-      setAutotuneResult(null);
-      setAutotuneFailed(true);
-    });
-    return () => {
-      apiService.off('evt:autotune-result', resultListener);
-      apiService.off('evt:autotune-failed', failedListener);
-    };
+    ensureAutotuneListeners(apiService);
   }, [apiService]);
 
   return (
     <div className='space-y-4 sm:space-y-6 lg:grid lg:grid-cols-2 lg:gap-4'>
       {/* PID Autotune Section */}
       <Section title='PID Autotune' className='h-full'>
-        {autotuneActive && (
+        {autotuneActive.value && (
           <div className='space-y-4'>
             <div className='w-full'>
               <OverviewChart />
@@ -71,7 +86,7 @@ export function CalibrationTab({ formData, setField }) {
           </div>
         )}
 
-        {autotuneResult && (
+        {autotuneResult.value && (
           <div className='space-y-4 text-center'>
             <div className='alert alert-success mx-auto max-w-md'>
               <div>
@@ -81,20 +96,20 @@ export function CalibrationTab({ formData, setField }) {
             </div>
             <div className='mockup-code bg-base-200 mx-auto max-w-md'>
               <pre data-prefix='$'>
-                <code>{autotuneResult}</code>
+                <code>{autotuneResult.value}</code>
               </pre>
             </div>
             <button
               type='button'
               className='btn btn-outline btn-sm mt-2'
-              onClick={() => setAutotuneResult(null)}
+              onClick={() => (autotuneResult.value = null)}
             >
               Dismiss
             </button>
           </div>
         )}
 
-        {autotuneFailed && (
+        {autotuneFailed.value && (
           <div className='space-y-4 text-center'>
             <div className='alert alert-error mx-auto max-w-md'>
               <div>
@@ -108,14 +123,14 @@ export function CalibrationTab({ formData, setField }) {
             <button
               type='button'
               className='btn btn-outline btn-sm mt-2'
-              onClick={() => setAutotuneFailed(false)}
+              onClick={() => (autotuneFailed.value = false)}
             >
               Retry
             </button>
           </div>
         )}
 
-        {!autotuneActive && !autotuneResult && !autotuneFailed && (
+        {!autotuneActive.value && !autotuneResult.value && !autotuneFailed.value && (
           <div className='space-y-4'>
             <div className='alert alert-warning'>
               <span>

@@ -1,6 +1,8 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useContext, useEffect, useState } from 'preact/hooks';
+import { computed } from '@preact/signals';
 import { ApiServiceContext, machine } from '../../../services/ApiService.js';
 import { downloadJson } from '../../../utils/download.js';
+import { showToast } from '../../../services/toast.js';
 import { SystemTabSkeleton } from '../../../components/skeletons/SettingsSkeletons.jsx';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
@@ -29,6 +31,23 @@ const getRssiStatusClass = rssi => {
   if (rssi < -80) return 'status-warning';
   return 'status-success';
 };
+
+// Module-level computed so the connection flag only re-renders subscribers
+// when the boolean flips, not on every 500ms status frame.
+const connected = computed(() => machine.value.connected);
+
+// Reads the live signal inside its own component so the 2 Hz status push only
+// re-renders this one line, not the whole System tab.
+function ControllerSignalStrength() {
+  const rssi = machine.value.status.rssi;
+  const lat = machine.value.status.lat;
+  return (
+    <span className='text-base-content flex items-center gap-2 font-semibold'>
+      {rssi}dB (Roundtrip: {lat} ms)
+      <span className={`indicator-item status ${getRssiStatusClass(rssi)}`} />
+    </span>
+  );
+}
 
 function OtaProgressView({ phase, progress }) {
   const getOtaPhaseText = p => {
@@ -200,8 +219,7 @@ export function SystemTab() {
   const [formData, setFormData] = useState({});
   const [phase, setPhase] = useState(0);
   const [progress, setProgress] = useState(0);
-  const rssi = machine.value.status.rssi;
-  const lat = machine.value.status.lat;
+  const [channel, setChannel] = useState(null);
 
   const downloadSupportData = useCallback(async () => {
     try {
@@ -221,12 +239,16 @@ export function SystemTab() {
       downloadJson(supportFile, `support-${ts}.dat`);
     } catch (e) {
       console.error('Error downloading support data:', e);
+      showToast('Downloading support data failed — check the machine connection and try again.', {
+        type: 'error',
+      });
     }
   }, [formData]);
 
   useEffect(() => {
     const listenerId = apiService.on('res:ota-settings', msg => {
       setFormData(msg);
+      setChannel(current => current ?? msg.channel);
       setIsLoading(false);
       setSubmitting(false);
     });
@@ -263,38 +285,74 @@ export function SystemTab() {
     };
   }, [apiService]);
 
+  // Request OTA settings as soon as the socket is up, and again on every
+  // reconnect while still loading — the previous fixed 500 ms timer threw when
+  // the socket wasn't open yet and left the tab wedged on the skeleton.
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      try {
-        apiService.send({ tp: 'req:ota-settings' });
-      } catch (error) {
-        // Socket not connected yet — the loading skeleton stays until the
-        // next mount; don't crash the tab.
-        console.error('Failed to request OTA settings:', error);
-        setIsLoading(false);
-      }
-    }, 500);
-    return () => clearTimeout(timeoutId);
-  }, [apiService]);
-
-  const formRef = useRef();
+    if (!connected.value || !isLoading) return;
+    try {
+      apiService.send({ tp: 'req:ota-settings' });
+    } catch (error) {
+      console.error('Failed to request OTA settings:', error);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connected.value is a signal read; the render-time read subscribes this component
+  }, [connected.value, isLoading, apiService]);
 
   const onSubmit = useCallback(
     async e => {
       e.preventDefault();
-      setSubmitting(true);
-      const form = formRef.current;
-      const data = new FormData(form);
-      apiService.send({ tp: 'req:ota-settings', update: true, channel: data.get('channel') });
+      try {
+        apiService.send({ tp: 'req:ota-settings', update: true, channel });
+        setSubmitting(true);
+      } catch (error) {
+        console.error('Failed to save update channel:', error);
+        showToast('Machine not connected — could not save the update channel.', { type: 'error' });
+      }
+    },
+    [apiService, channel],
+  );
+
+  // A dropped response must not disable the update buttons until remount.
+  useEffect(() => {
+    if (!submitting) return;
+    const timeoutId = setTimeout(() => {
+      setSubmitting(false);
+      showToast('The machine did not respond — try saving the channel again.', { type: 'error' });
+    }, 15000);
+    return () => clearTimeout(timeoutId);
+  }, [submitting]);
+
+  const onUpdate = useCallback(
+    component => {
+      try {
+        apiService.send({ tp: 'req:ota-start', cp: component });
+      } catch (error) {
+        console.error('Failed to start update:', error);
+        showToast('Machine not connected — could not start the update.', { type: 'error' });
+      }
     },
     [apiService],
   );
 
-  const onUpdate = useCallback(
+  // Firmware flashes are disruptive — require a second click to confirm.
+  const [pendingUpdate, setPendingUpdate] = useState(null);
+
+  useEffect(() => {
+    if (!pendingUpdate) return;
+    const timeoutId = setTimeout(() => setPendingUpdate(null), 5000);
+    return () => clearTimeout(timeoutId);
+  }, [pendingUpdate]);
+
+  const requestUpdate = useCallback(
     component => {
-      apiService.send({ tp: 'req:ota-start', cp: component });
+      if (pendingUpdate === component) {
+        setPendingUpdate(null);
+        onUpdate(component);
+      } else {
+        setPendingUpdate(component);
+      }
     },
-    [apiService],
+    [pendingUpdate, onUpdate],
   );
 
   const [rebuilding, setRebuilding] = useState(false);
@@ -320,19 +378,21 @@ export function SystemTab() {
     <div className='space-y-4 sm:space-y-6 lg:grid lg:grid-cols-2 lg:gap-4'>
       {/* Firmware updates channel */}
       <Section title='System Version & Updates' className='h-full'>
-        <form ref={formRef} onSubmit={onSubmit} className='space-y-4'>
+        <form onSubmit={onSubmit} className='space-y-4'>
           <div className='form-control max-w-md'>
             <label htmlFor='channel' className='mb-2 block text-sm font-medium'>
               Update Channel
             </label>
             <div className='flex w-full items-center gap-2'>
-              <select id='channel' name='channel' className='select select-bordered grow'>
-                <option value='latest' selected={formData.channel === 'latest'}>
-                  Stable
-                </option>
-                <option value='nightly' selected={formData.channel === 'nightly'}>
-                  Nightly
-                </option>
+              <select
+                id='channel'
+                name='channel'
+                className='select select-bordered grow'
+                value={channel ?? formData.channel}
+                onChange={e => setChannel(e.currentTarget.value)}
+              >
+                <option value='latest'>Stable</option>
+                <option value='nightly'>Nightly</option>
               </select>
               <button type='submit' className='btn btn-secondary' disabled={submitting}>
                 Save Channel & Refresh
@@ -351,10 +411,7 @@ export function SystemTab() {
             <span className='text-base-content/70 text-sm font-medium'>
               Controller Signal Strength
             </span>
-            <span className='text-base-content flex items-center gap-2 font-semibold'>
-              {rssi}dB (Roundtrip: {lat} ms)
-              <span className={`indicator-item status ${getRssiStatusClass(rssi)}`} />
-            </span>
+            <ControllerSignalStrength />
           </div>
 
           <div className='flex flex-col space-y-2'>
@@ -370,11 +427,11 @@ export function SystemTab() {
               )}
               <button
                 type='button'
-                className='btn btn-secondary btn-sm'
+                className={`btn btn-sm ${pendingUpdate === 'controller' ? 'btn-warning' : 'btn-secondary'}`}
                 disabled={!formData.controllerUpdateAvailable || submitting}
-                onClick={() => onUpdate('controller')}
+                onClick={() => requestUpdate('controller')}
               >
-                Update Controller
+                {pendingUpdate === 'controller' ? 'Confirm update?' : 'Update Controller'}
               </button>
             </div>
           </div>
@@ -392,11 +449,11 @@ export function SystemTab() {
               )}
               <button
                 type='button'
-                className='btn btn-secondary btn-sm'
+                className={`btn btn-sm ${pendingUpdate === 'display' ? 'btn-warning' : 'btn-secondary'}`}
                 disabled={!formData.displayUpdateAvailable || submitting}
-                onClick={() => onUpdate('display')}
+                onClick={() => requestUpdate('display')}
               >
-                Update Display
+                {pendingUpdate === 'display' ? 'Confirm update?' : 'Update Display'}
               </button>
             </div>
           </div>
