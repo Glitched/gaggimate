@@ -4,6 +4,7 @@ import { faEllipsisVertical } from '@fortawesome/free-solid-svg-icons/faEllipsis
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { useCallback, useEffect, useRef, useState, useContext } from 'preact/hooks';
 import { useRoute } from 'preact-iso';
+import { computed } from '@preact/signals';
 import {
   ApiServiceContext,
   machine,
@@ -56,6 +57,11 @@ import { faCrosshairs } from '@fortawesome/free-solid-svg-icons/faCrosshairs';
 import { faPuzzlePiece } from '@fortawesome/free-solid-svg-icons/faPuzzlePiece';
 import { faBluetoothB } from '@fortawesome/free-brands-svg-icons/faBluetoothB';
 import { faRotate } from '@fortawesome/free-solid-svg-icons/faRotate';
+
+// Module-level computed so reading connection state during render only
+// re-renders this page when the boolean flips — the machine signal itself is
+// replaced by every 500ms status frame.
+const connected = computed(() => machine.value.connected);
 
 function splitPidString(pidString) {
   if (!pidString) return { pid: pidString, kf: '0.000' };
@@ -206,13 +212,17 @@ export function Settings() {
 
   useEffect(() => {
     const loadProfiles = async () => {
-      if (machine.value.connected) {
-        const response = await apiService.request({ tp: 'req:profiles:list', minimal: true });
-        setProfiles(response.profiles);
+      if (connected.value) {
+        try {
+          const response = await apiService.request({ tp: 'req:profiles:list', minimal: true });
+          setProfiles(response.profiles);
+        } catch (error) {
+          console.error('Failed to load profiles:', error);
+        }
       }
     };
     loadProfiles();
-  }, [machine.value.connected, apiService]);
+  }, [connected.value, apiService]);
 
   const formRef = useRef();
   const dropdownRef = useRef(null);
@@ -361,18 +371,38 @@ export function Settings() {
   );
 
   const onExport = useCallback(() => {
-    downloadJson(formData, 'settings.json');
+    // Never write credentials to an export file (mirrors the support-data
+    // download, which strips them for the same reason).
+    const exportData = { ...formData };
+    delete exportData.wifiPassword;
+    delete exportData.apPassword;
+    delete exportData.haPassword;
+    downloadJson(exportData, 'settings.json');
   }, [formData]);
 
   const onUpload = function (evt) {
     if (evt.target.files.length) {
       const file = evt.target.files[0];
       const reader = new FileReader();
-      reader.onload = async e => {
-        const data = JSON.parse(e.target.result);
-        setFormData(data);
+      reader.onload = e => {
+        let data;
+        try {
+          data = JSON.parse(e.target.result);
+        } catch {
+          alert('Import failed: the selected file is not valid JSON.');
+          return;
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          alert('Import failed: the selected file is not a settings export.');
+          return;
+        }
+        // Merge over current values so exports without credentials don't blank
+        // out the passwords already loaded in the form.
+        setFormData(prev => ({ ...prev, ...data }));
       };
       reader.readAsText(file);
+      // Allow re-selecting the same file to trigger another change event.
+      evt.target.value = '';
     }
   };
 
@@ -497,7 +527,7 @@ export function Settings() {
         )}
       </form>
 
-      {tab === 'calibration' && <LazyCalibrationTab formData={formData} onChange={onChange} />}
+      {tab === 'calibration' && <LazyCalibrationTab formData={formData} setField={setField} />}
       {tab === 'bluetooth' && (isLoading ? <BluetoothTabSkeleton /> : <LazyBluetoothTab />)}
       {tab === 'system' && (isLoading ? <SystemTabSkeleton /> : <LazySystemTab />)}
     </PageLayout>

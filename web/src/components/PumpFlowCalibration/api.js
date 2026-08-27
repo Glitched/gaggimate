@@ -3,6 +3,7 @@
 
 import { parseBinaryIndex } from '../../pages/ShotHistory/parseBinaryIndex.js';
 import { parseBinaryShot } from '../../pages/ShotHistory/parseBinaryShot.js';
+import { invalidateSettingsCache } from '../../services/ApiService.js';
 import { SLOG_FETCH_DELAY_MS, SLOG_FETCH_RETRIES } from './constants.js';
 
 const SHOT_FLAG_DELETED = 0x02;
@@ -65,4 +66,7 @@ export async function postCoefficients(coeffs) {
     body,
   });
   if (!r.ok) throw new Error(`POST /api/settings ${r.status}`);
+  // The module-level settings cache still holds the old coefficients; drop it
+  // so the Settings form can't re-submit them and undo this calibration.
+  invalidateSettingsCache();
 }

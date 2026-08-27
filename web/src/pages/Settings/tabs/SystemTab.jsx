@@ -264,9 +264,17 @@ export function SystemTab() {
   }, [apiService]);
 
   useEffect(() => {
-    setTimeout(() => {
-      apiService.send({ tp: 'req:ota-settings' });
+    const timeoutId = setTimeout(() => {
+      try {
+        apiService.send({ tp: 'req:ota-settings' });
+      } catch (error) {
+        // Socket not connected yet — the loading skeleton stays until the
+        // next mount; don't crash the tab.
+        console.error('Failed to request OTA settings:', error);
+        setIsLoading(false);
+      }
     }, 500);
+    return () => clearTimeout(timeoutId);
   }, [apiService]);
 
   const formRef = useRef();
