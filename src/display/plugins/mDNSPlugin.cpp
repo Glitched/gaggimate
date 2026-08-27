@@ -39,12 +39,12 @@ void mDNSPlugin::start(Event const &event) {
     // Advertise HTTP service for web interface
     MDNS.addService("http", "tcp", 80);
 
-    // Advertise custom gaggimate service for Home Assistant discovery
-    MDNS.addService("gaggimate", "tcp", 80);
+    // Advertise custom service for Home Assistant discovery
+    MDNS.addService("exhalation", "tcp", 80);
 
     // Add service metadata as TXT records
-    MDNS.addServiceTxt("gaggimate", "tcp", "version", BUILD_GIT_VERSION);
-    MDNS.addServiceTxt("gaggimate", "tcp", "type", "espresso_machine");
+    MDNS.addServiceTxt("exhalation", "tcp", "version", BUILD_GIT_VERSION);
+    MDNS.addServiceTxt("exhalation", "tcp", "type", "espresso_machine");
 
     responderRunning = true;
     ESP_LOGI(LOG_TAG, "mDNS responder started with service advertisement (hostname=%s)", hostname.c_str());

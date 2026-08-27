@@ -7,11 +7,16 @@
 
 const String LOG_TAG = F("MQTTPlugin");
 
+// Identity reported to Home Assistant. Changing either makes HA rediscover
+// the machine as a new device, orphaning existing entity history.
+static constexpr const char *DEVICE_NAME = "Exhalation";
+static constexpr const char *TOPIC_PREFIX = "exhalation/";
+
 bool MQTTPlugin::connect(Controller *controller) {
     const Settings settings = controller->getSettings();
     const String ip = settings.getHomeAssistantIP();
     const int haPort = settings.getHomeAssistantPort();
-    const String clientId = "GaggiMate";
+    const String clientId = DEVICE_NAME;
     const String haUser = settings.getHomeAssistantUser();
     const String haPassword = settings.getHomeAssistantPassword();
 
@@ -45,17 +50,17 @@ void MQTTPlugin::publishDiscovery(Controller *controller) {
 
     // Device information
     device["ids"] = cmac;
-    device["name"] = "GaggiMate";
-    device["mf"] = "GaggiMate";
-    device["mdl"] = "GaggiMate";
+    device["name"] = DEVICE_NAME;
+    device["mf"] = DEVICE_NAME;
+    device["mdl"] = DEVICE_NAME;
     device["sn"] = cmac;
     device["sw"] = controller->getSystemInfo().version;
     device["hw"] = controller->getSystemInfo().hardware;
 
     // Origin information
-    origin["name"] = "GaggiMate";
+    origin["name"] = DEVICE_NAME;
     origin["sw"] = controller->getSystemInfo().version;
-    origin["url"] = "https://gaggimate.eu/";
+    origin["url"] = "https://github.com/Glitched/gaggimate";
 
     // Components information
     JsonDocument cmps(&psramAllocator);
@@ -69,7 +74,7 @@ void MQTTPlugin::publishDiscovery(Controller *controller) {
     boilerTemperature["unit_of_measurement"] = "°C";
     boilerTemperature["value_template"] = "{{ value_json.temperature | round(2) }}";
     boilerTemperature["unique_id"] = "boiler0Tmp";
-    boilerTemperature["state_topic"] = "gaggimate/" + String(cmac) + "/boilers/0/temperature";
+    boilerTemperature["state_topic"] = TOPIC_PREFIX + String(cmac) + "/boilers/0/temperature";
 
     boilerTargetTemperature["name"] = "Boiler Target Temperature";
     boilerTargetTemperature["p"] = "sensor";
@@ -77,14 +82,14 @@ void MQTTPlugin::publishDiscovery(Controller *controller) {
     boilerTargetTemperature["unit_of_measurement"] = "°C";
     boilerTargetTemperature["value_template"] = "{{ value_json.temperature | round(2) }}";
     boilerTargetTemperature["unique_id"] = "boiler0TargetTmp";
-    boilerTargetTemperature["state_topic"] = "gaggimate/" + String(cmac) + "/boilers/0/targetTemperature";
+    boilerTargetTemperature["state_topic"] = TOPIC_PREFIX + String(cmac) + "/boilers/0/targetTemperature";
 
     mode["name"] = "Mode";
     mode["p"] = "text";
     mode["device_class"] = "text";
     mode["value_template"] = "{{ value_json.mode_str }}";
     mode["unique_id"] = "mode";
-    mode["state_topic"] = "gaggimate/" + String(cmac) + "/controller/mode";
+    mode["state_topic"] = TOPIC_PREFIX + String(cmac) + "/controller/mode";
 
     cmps["boiler"] = boilerTemperature;
     cmps["boiler_target"] = boilerTargetTemperature;
@@ -95,7 +100,7 @@ void MQTTPlugin::publishDiscovery(Controller *controller) {
     payload["dev"] = device;
     payload["o"] = origin;
     payload["cmps"] = cmps;
-    payload["state_topic"] = "gaggimate/" + String(cmac) + "/state";
+    payload["state_topic"] = TOPIC_PREFIX + String(cmac) + "/state";
     payload["qos"] = 2;
 
     char publishTopic[80];
@@ -115,7 +120,7 @@ void MQTTPlugin::publish(const std::string &topic, const std::string &message) {
     mac.replace(":", "_");
     const char *cmac = mac.c_str();
     char publishTopic[80];
-    snprintf(publishTopic, sizeof(publishTopic), "gaggimate/%s/%s", cmac, topic.c_str());
+    snprintf(publishTopic, sizeof(publishTopic), "%s%s/%s", TOPIC_PREFIX, cmac, topic.c_str());
 
     ESP_LOGD(LOG_TAG.c_str(), "Publishing %s: %s", publishTopic, message.c_str());
     client.publish(publishTopic, message.c_str());
