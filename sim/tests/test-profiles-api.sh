@@ -16,7 +16,7 @@ check "minimal list omits phases" "False" "$haslabel"
 
 echo "--- 2. Create via POST returns 201 with generated id"
 code_body=$(curl -s -w "\n%{http_code}" -X POST -H 'Content-Type: application/json' -d "$VALID" $B)
-code=$(echo "$code_body" | tail -1); r=$(echo "$code_body" | head -n -1)
+code=$(echo "$code_body" | tail -1); r=$(echo "$code_body" | sed '$d')
 check "create returns 201" '201' "$code"
 ID=$(echo "$r" | jqf "['id']" | tr -d '"')
 check "id assigned" "yes" "$([ -n "$ID" ] && echo yes)"
@@ -29,7 +29,7 @@ check "load by id" '"API Test"' "$(echo "$r" | jqf "['label']")"
 echo "--- 4. PUT full-document update (path id wins)"
 UPDATED=$(echo "$VALID" | python3 -c "import sys,json; d=json.load(sys.stdin); d['label']='API Test v2'; d['id']='some-other-id'; d['temperature']=94.0; print(json.dumps(d))")
 code_body=$(curl -s -w "\n%{http_code}" -X PUT -H 'Content-Type: application/json' -d "$UPDATED" $B/$ID)
-code=$(echo "$code_body" | tail -1); r=$(echo "$code_body" | head -n -1)
+code=$(echo "$code_body" | tail -1); r=$(echo "$code_body" | sed '$d')
 check "PUT returns 200" '200' "$code"
 check "label updated" '"API Test v2"' "$(echo "$r" | jqf "['label']")"
 check "path id wins over body id" "\"$ID\"" "$(echo "$r" | jqf "['id']")"
