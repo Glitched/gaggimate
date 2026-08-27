@@ -42,6 +42,33 @@ static AsyncWebSocketSharedBuffer toWsBuffer(JsonDocument &doc) {
     return buffer;
 }
 
+// Shared by the WebSocket and REST profile-save paths; string literal so
+// ArduinoJson stores the pointer without copying.
+static constexpr const char *PROFILE_VALIDATION_ERROR =
+    "Invalid profile: 'label' (string), 'type' (string) and a non-empty 'phases' array are required";
+
+// Buffers a request body chunk by chunk into request->_tempObject. Ownership:
+// the consuming handler takes the pointer (and frees it); if none does, the
+// request destructor frees it. Oversized or inconsistent bodies are dropped,
+// which the handler observes as a missing body.
+static void bufferJsonBody(AsyncWebServerRequest *request, const uint8_t *data, size_t len, size_t index, size_t total,
+                           size_t maxLen) {
+    if (total == 0 || total > maxLen || index + len > total) {
+        return;
+    }
+    if (index == 0) {
+        request->_tempObject = ps_malloc(total + 1);
+    }
+    auto *buf = static_cast<char *>(request->_tempObject);
+    if (buf == nullptr) {
+        return;
+    }
+    memcpy(buf + index, data, len);
+    if (index + len == total) {
+        buf[total] = '\0';
+    }
+}
+
 // Route mbedTLS allocations to PSRAM.
 static void *mbedtlsPsramCalloc(size_t n, size_t size) { // NOSONAR
     void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -337,21 +364,16 @@ void WebUIPlugin::setupServer() {
     server.on(
         "/api/settings", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleSettings(request); }, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            constexpr size_t MAX_SETTINGS_BODY = 16 * 1024;
-            if (total == 0 || total > MAX_SETTINGS_BODY || index + len > total) {
-                return;
-            }
-            if (index == 0) {
-                request->_tempObject = ps_malloc(total + 1);
-            }
-            auto *buf = static_cast<char *>(request->_tempObject);
-            if (buf == nullptr) {
-                return;
-            }
-            memcpy(buf + index, data, len);
-            if (index + len == total) {
-                buf[total] = '\0';
-            }
+            bufferJsonBody(request, data, len, index, total, 16 * 1024);
+        });
+    // REST profile API for external tools (scripts, agents): the WebSocket
+    // req:profiles:* contract needs a stateful client, this needs only HTTP.
+    // The plain-string route matches /api/profiles and all subpaths.
+    server.on(
+        "/api/profiles", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleProfilesRest(request); }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Same cap as the WebSocket profile upload buffer.
+            bufferJsonBody(request, data, len, index, total, 64 * 1024);
         });
     server.on("/api/status", [this](AsyncWebServerRequest *request) {
         AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -642,12 +664,16 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
     } else if (type == "req:profiles:save") {
         auto obj = request["profile"].as<JsonObject>();
         Profile profile;
-        parseProfile(obj, profile);
-        if (!profileManager->saveProfile(profile)) {
+        // A rejected parse used to be saved anyway, silently writing a
+        // half-parsed profile to flash. Refuse it instead.
+        if (!parseProfile(obj, profile)) {
+            response["error"] = PROFILE_VALIDATION_ERROR;
+        } else if (!profileManager->saveProfile(profile)) {
             response["error"] = F("Save failed");
+        } else {
+            auto respObj = response["profile"].to<JsonObject>();
+            writeProfile(respObj, profile);
         }
-        auto respObj = response["profile"].to<JsonObject>();
-        writeProfile(respObj, profile);
     } else if (type == "req:profiles:delete") {
         auto id = request["id"].as<String>();
         if (!profileManager->deleteProfile(id)) {
@@ -969,6 +995,167 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
 
     if (restartRequested)
         ESP.restart();
+}
+
+// REST profile API: JSON in/out, full-document writes with save-echo.
+//   GET    /api/profiles            list (add ?minimal=1 for id+label only)
+//   POST   /api/profiles            create (409 if the body's id already exists)
+//   GET    /api/profiles/{id}       load
+//   PUT    /api/profiles/{id}       replace (the path id wins over the body's)
+//   DELETE /api/profiles/{id}       delete
+//   POST   /api/profiles/{id}/select | /favorite | /unfavorite
+// Invalid profile documents are refused with 422 — never partially stored.
+void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
+    // Split "/api/profiles[/{id}[/{action}]]" into id + action.
+    String rest = request->url().substring(String("/api/profiles").length());
+    if (rest.startsWith("/"))
+        rest = rest.substring(1);
+    if (rest.endsWith("/"))
+        rest = rest.substring(0, rest.length() - 1);
+    String id = rest;
+    String action = "";
+    const int slash = rest.indexOf('/');
+    if (slash >= 0) {
+        id = rest.substring(0, slash);
+        action = rest.substring(slash + 1);
+    }
+
+    const auto sendJson = [request](int code, JsonDocument &doc) {
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
+        response->setCode(code);
+        serializeJson(doc, *response);
+        request->send(response);
+    };
+    const auto sendError = [&sendJson](int code, const char *message) {
+        JsonDocument doc(&psramAllocator);
+        doc["error"] = message;
+        sendJson(code, doc);
+    };
+    const auto sendProfile = [&sendJson](const Profile &profile, int code) {
+        JsonDocument doc(&psramAllocator);
+        auto obj = doc.to<JsonObject>();
+        writeProfile(obj, profile);
+        sendJson(code, doc);
+    };
+    const auto sendOk = [request]() { request->send(200, "application/json", R"({"ok":true})"); };
+
+    // Take ownership of any buffered JSON body.
+    auto *body = static_cast<char *>(request->_tempObject);
+    request->_tempObject = nullptr;
+    JsonDocument bodyDoc(&psramAllocator);
+    bool bodyIsObject = false;
+    if (body != nullptr) {
+        bodyIsObject = deserializeJson(bodyDoc, static_cast<const char *>(body)) == DeserializationError::Ok &&
+                       bodyDoc.is<JsonObjectConst>();
+        free(body);
+    }
+
+    if (id.isEmpty()) { // Collection: /api/profiles
+        if (request->method() == HTTP_GET) {
+            JsonDocument doc(&psramAllocator);
+            auto arr = doc["profiles"].to<JsonArray>();
+            const bool minimal = request->hasArg("minimal");
+            for (auto const &profileId : profileManager->listProfiles()) {
+                Profile profile{};
+                if (!profileManager->loadProfile(profileId, profile)) {
+                    continue; // Same policy as the WS list: skip unreadable entries.
+                }
+                auto p = arr.add<JsonObject>();
+                if (minimal) {
+                    p["id"] = profile.id;
+                    p["label"] = profile.label;
+                } else {
+                    writeProfile(p, profile);
+                }
+            }
+            sendJson(200, doc);
+            return;
+        }
+        if (request->method() == HTTP_POST) {
+            if (!bodyIsObject) {
+                return sendError(400, "Request body must be a JSON profile object");
+            }
+            Profile profile;
+            auto obj = bodyDoc.as<JsonObject>();
+            if (!parseProfile(obj, profile)) {
+                return sendError(422, PROFILE_VALIDATION_ERROR);
+            }
+            if (!profile.id.isEmpty() && profileManager->profileExists(profile.id)) {
+                return sendError(409, "Profile id already exists; use PUT /api/profiles/{id} to update");
+            }
+            if (!profileManager->saveProfile(profile)) {
+                return sendError(500, "Save failed");
+            }
+            sendProfile(profile, 201);
+            return;
+        }
+        return sendError(405, "Method not allowed");
+    }
+
+    if (action.isEmpty()) { // Item: /api/profiles/{id}
+        if (request->method() == HTTP_GET) {
+            Profile profile;
+            if (!profileManager->loadProfile(id, profile)) {
+                return sendError(404, "Profile not found");
+            }
+            sendProfile(profile, 200);
+            return;
+        }
+        if (request->method() == HTTP_PUT) {
+            if (!profileManager->profileExists(id)) {
+                return sendError(404, "Profile not found; use POST /api/profiles to create");
+            }
+            if (!bodyIsObject) {
+                return sendError(400, "Request body must be a JSON profile object");
+            }
+            Profile profile;
+            auto obj = bodyDoc.as<JsonObject>();
+            if (!parseProfile(obj, profile)) {
+                return sendError(422, PROFILE_VALIDATION_ERROR);
+            }
+            profile.id = id;
+            if (!profileManager->saveProfile(profile)) {
+                return sendError(500, "Save failed");
+            }
+            sendProfile(profile, 200);
+            return;
+        }
+        if (request->method() == HTTP_DELETE) {
+            if (!profileManager->profileExists(id)) {
+                return sendError(404, "Profile not found");
+            }
+            if (!profileManager->deleteProfile(id)) {
+                return sendError(500, "Delete failed");
+            }
+            sendOk();
+            return;
+        }
+        return sendError(405, "Method not allowed");
+    }
+
+    // Action: /api/profiles/{id}/{action}
+    if (request->method() != HTTP_POST) {
+        return sendError(405, "Method not allowed");
+    }
+    if (!profileManager->profileExists(id)) {
+        return sendError(404, "Profile not found");
+    }
+    if (action == "select") {
+        profileManager->selectProfile(id);
+        sendOk();
+        return;
+    }
+    if (action == "favorite") {
+        profileManager->addFavoritedProfile(id);
+        sendOk();
+        return;
+    }
+    if (action == "unfavorite") {
+        profileManager->removeFavoritedProfile(id);
+        sendOk();
+        return;
+    }
+    sendError(404, "Unknown action; expected select, favorite or unfavorite");
 }
 
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {

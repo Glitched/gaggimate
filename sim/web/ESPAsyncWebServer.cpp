@@ -504,7 +504,13 @@ bool AsyncWebServer::handleHttp(Conn &c) {
     AsyncWebServerRequest req(c.fd, this);
     req._url = String(path.c_str());
     req._body = body;
-    req._method = method == "POST" ? HTTP_POST : method == "PUT" ? HTTP_PUT : method == "DELETE" ? HTTP_DELETE : HTTP_GET;
+    req._method = method == "POST"     ? HTTP_POST
+                  : method == "PUT"    ? HTTP_PUT
+                  : method == "DELETE" ? HTTP_DELETE
+                  : method == "PATCH"  ? HTTP_PATCH
+                  : method == "HEAD"   ? HTTP_HEAD
+                  : method == "OPTIONS" ? HTTP_OPTIONS
+                                        : HTTP_GET;
     auto parseArgs = [&](const std::string &s) {
         size_t i = 0;
         while (i < s.size()) {
@@ -536,7 +542,10 @@ bool AsyncWebServer::handleHttp(Conn &c) {
 void AsyncWebServer::dispatch(Conn &c, AsyncWebServerRequest &req) {
     std::string path(req._url.c_str());
     for (auto &r : _routes) {
-        if ((r.method == HTTP_ANY || (r.method & req._method)) && r.uri == path) {
+        // Match like the real library's default ("backward compatible")
+        // matcher: the exact uri, or the uri followed by a subpath.
+        const bool uriMatches = r.uri == path || path.rfind(r.uri + "/", 0) == 0;
+        if ((r.method == HTTP_ANY || (r.method & req._method)) && uriMatches) {
             // The sim has the full body up front; deliver it as one chunk the
             // way the real library streams it, then run the request handler.
             if (r.onBody && !req._body.empty()) {
