@@ -4802,7 +4802,7 @@ void create_screen_info_screen() {
                     objects.qrcode = obj;
                     lv_obj_set_pos(obj, 0, 80);
                     lv_obj_set_size(obj, 160, 160);
-                    lv_qrcode_update(obj, "WIFI:S:GaggiMate;;;;", 20);
+                    lv_qrcode_update(obj, "WIFI:S:Exhalation;;;;", 21);
                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
                 {

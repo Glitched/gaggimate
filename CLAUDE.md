@@ -10,6 +10,21 @@ Firmware + web UI for GaggiMate, a smart-control retrofit for Gaggia espresso ma
 
 ### Firmware (PlatformIO)
 
+PlatformIO is not bundled. Install it once with:
+
+```shell
+uv tool install --with pip platformio
+```
+
+The `--with pip` is required: PlatformIO's package manager shells out to
+`python -m pip` to install `tool-esptoolpy`'s dependencies, and a bare `uv tool
+install` creates a venv without pip. Without it the first build dies with
+`MissingPackageManifestError` after a misleading `No module named pip`. If you
+hit that, `rm -rf ~/.platformio/packages/tool-esptoolpy` before retrying — the
+package is left half-installed.
+
+The first `pio run` downloads the espressif32 toolchain (a large one-time fetch).
+
 ```shell
 pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
 pio run -e display-headless             # display firmware with no panel/LVGL
