@@ -1,0 +1,143 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Firmware + web UI for GaggiMate, a smart-control retrofit for Gaggia espresso machines. Two ESP32 firmwares talk to each other over BLE: a **controller** board that owns the hardware (heater, pump, valve, sensors) and a **display** unit that owns the UI, Wi-Fi, profiles, shot history, and the web interface. A Preact web app is embedded into the display firmware's flash.
+
+## Commands
+
+### Firmware (PlatformIO)
+
+```shell
+pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
+pio run -e display-headless             # display firmware with no panel/LVGL
+pio run -e display-headless-8m          # ditto, seeed_xiao_esp32s3
+pio run -e controller                   # controller board
+pio run -e display -t upload -t monitor # flash + serial console
+pio run -t buildfs -e display           # LittleFS image (seed profiles only)
+```
+
+### Web UI
+
+```shell
+cd web && npm install
+npm run dev          # http://localhost:5173, proxies /api and /ws to localhost:8080
+npm run build
+npm run lint         # eslint --fix
+npm run format       # prettier -w .
+```
+
+`scripts/build_webui.sh` is the firmware-facing build: `npm ci && npm run build`, gzips the assets, then `scripts/embed_webui.py` packs them into `src/display/webassets/` (git-ignored) for embedding into flash. Run it before `pio run -e display` if you changed the web UI. `scripts/embed_webui_pre.py` stubs an empty bundle when it hasn't been run, so a firmware build never hard-fails on a missing bundle — it just serves nothing.
+
+Node 22 (`nvm use`, see `.nvmrc`).
+
+### Simulator
+
+Runs the real display firmware natively with the BLE controller mocked and an SDL window as the panel. Fastest way to check a UI or process change. Needs SDL2 (`brew install sdl2`).
+
+```shell
+pio run -e display-sim -t run                                  # build + launch
+./.pio/build/display-sim/program --screenshot shot.bmp 4000    # render, screenshot, exit
+```
+
+WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA, watchdogs).
+
+### Tests
+
+```shell
+pio test -e native_autotune              # host-side Unity tests for the SIMC autotuner
+pio test -e native_autotune -f test_autotune_simc
+```
+
+Only `test/test_autotune_simc` exists. It direct-`#include`s `Autotune.cpp` so the native linker skips NayrodPID's Arduino-dependent siblings. There is no on-device test suite.
+
+### Lint / format / static analysis
+
+```shell
+scripts/format.sh                        # clang-format over src, lib, sim
+platformio check -e display              # cppcheck; CI uses --fail-on-defect=medium
+platformio check -e controller
+npx prettier -w <file>.md
+```
+
+`scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those.
+
+## Architecture
+
+### Two firmwares, one protocol
+
+`lib/NanoPbComm` defines the whole display↔controller link and is shared by both builds:
+
+- `proto/gaggimate.proto` — nanopb schema. A `Frame` carries a sequence id, an ack, and one or more `Payload`s; `Payload` is a `oneof` tagged union dispatched by tag (no runtime type erasure). Generated `gaggimate.pb.{c,h}` are **not committed** — PlatformIO's nanopb integration regenerates them each build from `custom_nanopb_protos` in `platformio.ini`.
+- `Endpoint.{h,cpp}` — transport-agnostic reliable session: coalescing priority send queue, one frame in flight until ACKed, id-based dedup of inbound frames, handlers dispatched on a dedicated task so slow app callbacks can't block the BLE host task.
+- `ble/` (BLE client + server transports) and `uart/` (future/alternate transport) implement `Transport`.
+- `GaggiMateClient` (display side) and `GaggiMateServer` (controller side) are the app-facing facades.
+
+Protocol version mismatches and pre-framing controllers fall back to an OTA-recovery-only path (`Controller::onIncompatibleController`).
+
+### Controller firmware (`src/controller/`, `lib/GaggiMateController/`)
+
+Thin `main.cpp`; everything lives in `GaggiMateController`. It detects the board variant (`ControllerConfig`, `boards/*.json`) and addon hardware at boot, instantiates peripherals under `peripherals/` (`Heater`, `DimmedPump`/`SimplePump`, `SimpleRelay`, `Max31855Thermocouple`, `PressureSensor`, `FlowSensor`, `DistanceSensor`, `ADSAdc`, `LedController`), and owns the safety layer: thermal-runaway shutdown and a ping-timeout watchdog (`PING_TIMEOUT_SECONDS`) that kills outputs when the display goes quiet. Most peripherals run their own FreeRTOS task.
+
+`lib/NayrodPID` holds the control math used here: `PressureController` (pressure/flow/power modes with a pump-flow + rotary-vane-slip model), Kalman filters, `HydraulicParameterEstimator`, and `Autotune` (SIMC integrator+lag rule).
+
+### Display firmware (`src/display/`)
+
+`core/Controller` is the hub. Task layout matters:
+
+- Arduino `loop()` — housekeeping only, 50 ms cadence.
+- `Controller::loopLogic` — own task pinned to core 0, priority 3 (`Controller::loopLogicTask`).
+- `DefaultUI::loop` — own task pinned to core 1 (LVGL).
+- `Settings::loop` — a task that batches NVS writes.
+- AsyncTCP runs on core 0 (`CONFIG_ASYNC_TCP_RUNNING_CORE=0`) — see the comment in `platformio.ini`; moving it off core 0 wedged the IP stack.
+
+Consequences to respect when editing:
+
+- `currentProcess`/`lastProcess` are guarded by `Controller::processMutex` (recursive). Holding the pointer returned by `getProcess()` without the lock is a use-after-free. The `*Locked` helpers collect event ids and the public wrappers dispatch them **after** unlocking, so plugin handlers never run under the lock.
+- Wi-Fi connect/disconnect is only *flagged* from the Arduino Wi-Fi event task (`wifiConnectedPending`/`wifiDisconnectedPending`) and acted on in `loop()` — doing server/mDNS work in that small-stack callback corrupted the heap.
+- `updateControl()` only transmits boiler/pump/relay components that changed since `lastBoiler`/`lastPump`/`lastRelay`; these reset on reconnect to force a full resend.
+
+**Plugins and events.** `PluginManager` holds `Plugin`s (`setup()` + `loop()`) and a string-keyed event bus (`on(id, cb)` / `trigger(...)`, `Event` carries a small typed key/value list). Registration order is in `Controller::setup()` (`src/display/core/Controller.cpp` ~line 80). Existing plugins: `WebUIPlugin`, `ShotHistoryPlugin`, `BLEScalePlugin`, `MQTTPlugin` (Home Assistant), `HomekitPlugin`, `mDNSPlugin`, `BoilerFillPlugin`, `SmartGrindPlugin`, `LedControlPlugin`, `AutoWakeupPlugin`, `ImprovPlugin`, and two network watchdogs. New cross-cutting features belong here, not in `Controller`.
+
+Event id conventions: `controller:*` for machine state, `evt:*` for things pushed to the web UI, `req:*`/`res:*` for the WebSocket request/response pairs.
+
+**Processes.** `core/process/` — `BrewProcess`, `SteamProcess`, `PumpProcess`, `GrindProcess` implement `Process` (`getPumpValue()`, `isRelayActive()`, `progress()`, `isComplete()`, ...). Exactly one runs at a time via `Controller::startProcess`.
+
+**Profiles.** `models/profile.h` defines the shape: a profile is a list of `Phase`s (preinfusion/brew), each with a pump target (pressure or flow), a `Transition` (instant/linear/ease*, over time/volumetric/pumped), and exit `Target`s. `ProfileManager` persists JSON under `/p` on LittleFS and handles schema migration. `PhaseExitReason` values are persisted in shot logs — **never renumber them**.
+
+**Storage.** Settings live in NVS via `Preferences` (`Settings.h`, key `controller`). LittleFS holds only `/p` (profiles) and `/h` (shot history `.slog` binary + `.json` notes), so OTA never touches user data. The web bundle is memory-mapped from firmware flash, not the filesystem.
+
+**UI.** LVGL 8.4. `ui/default/DefaultUI` is hand-written; `ui/default/eez/` is generated by EEZ Studio from `eez-ui/gaggimate.eez-project` — regenerate, don't hand-edit. `drivers/` has the panel drivers (LilyGo T-RGB, Waveshare, Amoled) behind `Driver.h`. All of this compiles out under `GAGGIMATE_HEADLESS`.
+
+### Web UI (`web/`)
+
+Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. All messages are JSON with a `tp` field — `req:` from client, `res:`/`evt:` from device. The contract is documented in `docs/websocket-api.yaml` (AsyncAPI); keep it in sync when adding a message type. Bulk data (shot history index, `.slog` files) goes over plain HTTP under `/api/history/`.
+
+`vite.config.js` forces hash-only asset filenames — the device's filesystem caps path length at 32 chars and silently drops longer paths. Don't restore default chunk names.
+
+JSON schemas for profiles, shot history, and notes are in `schema/`.
+
+### OTA (`lib/OTA`, `lib/ble_ota_dfu`)
+
+`GitHubOTA` pulls display firmware from the update server / GitHub releases; `ControllerOTA` pushes the controller image over BLE DFU. Channels: `latest` / `nightly` (`DEFAULT_OTA_CHANNEL`).
+
+## Conventions
+
+- clang-format, LLVM base, 4-space indent, 130-col limit (`.clang-format`).
+- `src/version.h` is generated at build time by `scripts/auto_firmware_version.py` from `git describe` — git-ignored, never commit it.
+- Code comments reference Linear issue ids (`GM-106`, `GM-147`, ...). Follow that when a comment explains a non-obvious fix.
+- Commits are Conventional-Commit-ish: `fix:`, `feat:`, `chore:`, often with a `(#PR)` suffix.
+- Contributions require a signed CLA (see `CONTRIBUTING.md`). Note that `CONTRIBUTING.md` still refers to a `ui/` SquareLine Studio project — the current source is `eez-ui/` (EEZ Studio).
+- License: CC BY-NC-SA 4.0.
+
+## Debugging
+
+Core dumps: download from the device web UI (System & Updates → Download Core Dump) or the `/api/core-dump` endpoint, then:
+
+```shell
+./scripts/analyze_coredump.sh <coredump_file> [display|controller|display-headless]
+```
+
+Serial monitor has `esp32_exception_decoder` enabled by default at 115200.
