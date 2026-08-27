@@ -1,7 +1,7 @@
 import Card from '../../components/Card.jsx';
 import { useCallback, useState, useContext } from 'preact/hooks';
 import { HistoryChart } from './HistoryChart.jsx';
-import { downloadJson } from '../../utils/download.js';
+import { downloadJson, downloadText } from '../../utils/download.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
@@ -12,6 +12,9 @@ import { faStar } from '@fortawesome/free-solid-svg-icons/faStar';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faMinus } from '@fortawesome/free-solid-svg-icons/faMinus';
 import { faMagnifyingGlassChart } from '@fortawesome/free-solid-svg-icons/faMagnifyingGlassChart';
+import { faRobot } from '@fortawesome/free-solid-svg-icons/faRobot';
+import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
+import { buildShotText } from '../ShotAnalyzer/services/shotTextExport.js';
 import ShotNotesCard from './ShotNotesCard.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 
@@ -31,6 +34,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const [expanded, setExpanded] = useState(false);
   const { armed: confirmDelete, armOrRun: confirmOrDelete } = useConfirmAction(4000);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [copiedForLlm, setCopiedForLlm] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
   const date = new Date(shot.timestamp * 1000);
@@ -61,6 +65,32 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     // duration left as integer ms
     downloadJson(exportData, 'shot-' + shot.id + '.json');
   }, [shot, shotNotes]);
+
+  // Compact text export (YAML frontmatter + CSV) sized for pasting into an LLM.
+  // ~6% the tokens of the JSON export with no samples dropped; see shotTextExport.js.
+  const onCopyForLlm = useCallback(async () => {
+    if (!shot.loaded) return;
+    let profileData = null;
+    if (shot.profileId && apiService) {
+      try {
+        const res = await apiService.request({ tp: 'req:profiles:load', id: shot.profileId });
+        if (res.profile) profileData = res.profile;
+      } catch (error) {
+        // Planned-vs-actual is then omitted; the rest of the export is unaffected.
+        console.warn('Failed to fetch profile for LLM export:', error);
+      }
+    }
+    const text = buildShotText(shot, profileData, { notes: shotNotes });
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedForLlm(true);
+      setTimeout(() => setCopiedForLlm(false), 2000);
+    } catch (error) {
+      console.error('Clipboard write failed, falling back to download:', error);
+      downloadText(text, 'shot-' + shot.id + '.md');
+    }
+  }, [shot, shotNotes, apiService]);
 
   const handleNotesLoaded = useCallback(notes => {
     setShotNotes(notes);
@@ -186,6 +216,21 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                       aria-label='Export shot data'
                     >
                       <FontAwesomeIcon icon={faFileExport} className='h-4 w-4' />
+                    </button>
+                  </Tooltip>
+
+                  {/* Copy for LLM */}
+                  <Tooltip content={shot.loaded ? 'Copy for LLM' : 'Load first'}>
+                    <button
+                      disabled={!shot.loaded}
+                      onClick={onCopyForLlm}
+                      className='text-base-content/50 hover:text-success hover:bg-success/10 cursor-pointer rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40'
+                      aria-label='Copy shot summary for an LLM'
+                    >
+                      <FontAwesomeIcon
+                        icon={copiedForLlm ? faCheck : faRobot}
+                        className={`h-4 w-4 ${copiedForLlm ? 'text-success' : ''}`}
+                      />
                     </button>
                   </Tooltip>
 

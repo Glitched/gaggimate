@@ -20,3 +20,8 @@ export function downloadJson(json, filename) {
   const blob = new Blob([jsonStr], { type: 'application/json' });
   downloadBlob(blob, filename);
 }
+
+export function downloadText(text, filename, type = 'text/plain') {
+  const blob = new Blob([text], { type: `${type};charset=utf-8` });
+  downloadBlob(blob, filename);
+}
