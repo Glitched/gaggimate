@@ -275,6 +275,15 @@ void WebUIPlugin::loop() {
     }
 }
 
+// The bundle is pulled into flash by web_ui_blob.S via .incbin, a dependency the
+// build system cannot see (scripts/check_webui_blob.py is the build-time guard).
+// If a stale object from a stub build ever slips through, the linked blob is a
+// single byte while the manifest still describes the full bundle — serving from
+// it would hand out whatever rodata follows the symbol. Refuse instead. [GM-106]
+static bool webBlobIsIntact() {
+    return static_cast<size_t>(gWebUiBlobEnd - gWebUiBlobStart) >= WEB_UI_BLOB_SIZE;
+}
+
 // Linear lookup over the embedded asset table (~60 entries) — a couple of
 // strcmps per request, negligible next to the network round-trip.
 static const WebAsset *findWebAsset(const String &path) {
@@ -287,6 +296,11 @@ static const WebAsset *findWebAsset(const String &path) {
 }
 
 void WebUIPlugin::serveWebAsset(AsyncWebServerRequest *request) {
+    if (!webBlobIsIntact()) {
+        request->send(503, "text/plain", "Web UI bundle missing from this firmware image.");
+        return;
+    }
+
     String path = request->url();
     if (path.isEmpty() || path == "/") {
         path = WEB_UI_INDEX_PATH;
