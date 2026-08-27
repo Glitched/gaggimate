@@ -1,11 +1,19 @@
+name: CI
+
 on: [push, pull_request]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # cppcheck static analysis (pre-existing job, unchanged behavior).
+  analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: 'recursive'
       - uses: actions/cache@v4
@@ -13,7 +21,10 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+          key: ${{ runner.os }}-pio-analyze-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-analyze-
+            ${{ runner.os }}-pio
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -24,3 +35,121 @@ jobs:
         run: platformio check -e display --fail-on-defect=medium -f "-<*>" -f "+<src/display/>" -f "-<src/display/ui>"
       - name: Run static code analysis for controller
         run: platformio check -e controller --fail-on-defect=medium -f "-<*>" -f "+<src/controller/>"
+
+  # Compile the real firmware images on every push, not just on release tags —
+  # the tag-only build.yml meant firmware changes could merge without ever
+  # having been compiled for the ESP32 target.
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [display, display-headless, controller]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-fw-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-fw-${{ matrix.env }}-
+            ${{ runner.os }}-pio-fw-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+      # embed_webui_pre.py stubs the embedded web bundle, so the compile check
+      # doesn't need a web build.
+      - name: Build ${{ matrix.env }}
+        run: platformio run -e ${{ matrix.env }}
+
+  # Host-side unit tests (SIMC autotuner).
+  native-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-native-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-native-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+      - name: Run native tests
+        run: platformio test -e native_autotune
+
+  # Web UI: lint and production build.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+      - name: Lint
+        run: npm run lint:check
+        working-directory: web
+      - name: Build
+        run: npm run build
+        working-directory: web
+
+  # Build the simulator (which compiles the real display firmware natively)
+  # and run the black-box HTTP API suites against it. This is the only job
+  # that exercises the firmware's request handlers end to end.
+  sim-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-sim-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-sim-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Node >= 22 for the WebSocket assertions in the profile suite.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+      - name: Build simulator
+        run: platformio run -e display-sim
+      - name: Run HTTP API suites
+        run: ./sim/tests/run.sh
