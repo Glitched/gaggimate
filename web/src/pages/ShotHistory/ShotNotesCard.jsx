@@ -32,28 +32,56 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
     return '';
   }, []);
 
-  // Load notes ONLY on component mount
+  // Load notes whenever the shot changes; ignore results that land after
+  // unmount or after the shot switched again.
   useEffect(() => {
-    if (initialLoaded) return; // Prevent reloading
+    let cancelled = false;
+    setInitialLoaded(false);
+    setIsEditing(false);
+
+    const buildDefaults = () => ({
+      id: shot.id,
+      rating: 0,
+      beanType: '',
+      doseIn: '',
+      doseOut: '',
+      ratio: '',
+      grindSetting: '',
+      balanceTaste: 'balanced',
+      notes: '',
+    });
+
+    const finalize = loadedNotes => {
+      // Pre-populate doseOut with shot.volume if it's empty and shot.volume exists
+      if (!loadedNotes.doseOut && shot.volume) {
+        loadedNotes.doseOut = shot.volume.toFixed(1);
+      }
+      if (loadedNotes.doseIn && loadedNotes.doseOut) {
+        loadedNotes.ratio = calculateRatio(loadedNotes.doseIn, loadedNotes.doseOut);
+      }
+      if (cancelled) return;
+      setNotes(loadedNotes);
+      setInitialLoaded(true);
+      if (onNotesLoaded) {
+        onNotesLoaded(loadedNotes);
+      }
+    };
 
     const loadNotes = async () => {
+      // The shot index already records whether notes exist — when it says no,
+      // skip the round-trip to the device and render empty defaults.
+      if (shot.hasNotes === false) {
+        finalize(buildDefaults());
+        return;
+      }
+
       try {
         const response = await apiService.request({
           tp: 'req:history:notes:get',
           id: shot.id,
         });
 
-        let loadedNotes = {
-          id: shot.id,
-          rating: 0,
-          beanType: '',
-          doseIn: '',
-          doseOut: '',
-          ratio: '',
-          grindSetting: '',
-          balanceTaste: 'balanced',
-          notes: '',
-        };
+        let loadedNotes = buildDefaults();
 
         if (response.notes && Object.keys(response.notes).length > 0) {
           // Parse response.notes if it's a string
@@ -71,56 +99,19 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
           loadedNotes = { ...loadedNotes, ...parsedNotes };
         }
 
-        // Pre-populate doseOut with shot.volume if it's empty and shot.volume exists
-        if (!loadedNotes.doseOut && shot.volume) {
-          loadedNotes.doseOut = shot.volume.toFixed(1);
-        }
-
-        // Calculate ratio from loaded data
-        if (loadedNotes.doseIn && loadedNotes.doseOut) {
-          loadedNotes.ratio = calculateRatio(loadedNotes.doseIn, loadedNotes.doseOut);
-        }
-
-        setNotes(loadedNotes);
-        setInitialLoaded(true);
-        // Pass loaded notes to parent
-        if (onNotesLoaded) {
-          onNotesLoaded(loadedNotes);
-        }
+        finalize(loadedNotes);
       } catch (error) {
         console.error('Failed to load notes:', error);
-
         // Even if loading fails, set up defaults
-        const defaultNotes = {
-          id: shot.id,
-          rating: 0,
-          beanType: '',
-          doseIn: '',
-          doseOut: shot.volume ? shot.volume.toFixed(1) : '',
-          ratio: '',
-          grindSetting: '',
-          balanceTaste: 'balanced',
-          notes: '',
-        };
-
-        setNotes(defaultNotes);
-        setInitialLoaded(true);
-        if (onNotesLoaded) {
-          onNotesLoaded(defaultNotes);
-        }
+        finalize(buildDefaults());
       }
     };
 
     loadNotes();
-  }, []); // No dependencies - only run once
-
-  // Reset if shot changes
-  useEffect(() => {
-    if (notes.id !== shot.id) {
-      setInitialLoaded(false);
-      setIsEditing(false);
-    }
-  }, [shot.id, notes.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [shot.id]);
 
   const saveNotes = async () => {
     setLoading(true);

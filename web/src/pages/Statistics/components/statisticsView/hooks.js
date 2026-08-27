@@ -1,5 +1,5 @@
 // Custom hooks for StatisticsView state management: metadata, filters, compare, detail section, and bulk selection
-import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
 import { libraryService } from '../../../ShotAnalyzer/services/LibraryService';
 import {
   cleanName,
@@ -243,18 +243,29 @@ export function useStatisticsSelectionModel({
   dateToLocal,
   dateBasisMode,
 }) {
-  const matchesPinnedShotMeta = shotMeta =>
-    matchesPinnedShotMetaWithPins(shotMeta, {
-      shotKeyToCanonicalProfile,
-      pinnedShotsByProfile,
-      pinnedProfiles,
-    });
+  // Stable identities matter here: these three are dependencies of the memo
+  // chain below (compiled DSL filter, selection item lists). Inline versions
+  // re-created each render invalidated every one of those memos per render.
+  const matchesPinnedShotMeta = useCallback(
+    shotMeta =>
+      matchesPinnedShotMetaWithPins(shotMeta, {
+        shotKeyToCanonicalProfile,
+        pinnedShotsByProfile,
+        pinnedProfiles,
+      }),
+    [shotKeyToCanonicalProfile, pinnedShotsByProfile, pinnedProfiles],
+  );
 
-  const getProfilePinDisabledReason = profileName =>
-    getProfilePinDisabledReasonText(profileName, pinnedProfiles);
+  const getProfilePinDisabledReason = useCallback(
+    profileName => getProfilePinDisabledReasonText(profileName, pinnedProfiles),
+    [pinnedProfiles],
+  );
 
-  const getShotPinDisabledReason = shotMeta =>
-    getShotPinDisabledReasonText(shotMeta, shotKeyToCanonicalProfile, pinnedShotsByProfile);
+  const getShotPinDisabledReason = useCallback(
+    shotMeta =>
+      getShotPinDisabledReasonText(shotMeta, shotKeyToCanonicalProfile, pinnedShotsByProfile),
+    [shotKeyToCanonicalProfile, pinnedShotsByProfile],
+  );
 
   const dateBasisWarningState = useMemo(
     () => buildDateBasisWarningState(rawShotCandidates),

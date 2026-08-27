@@ -142,6 +142,7 @@ export function indexToShotList(indexData) {
       avgTemp: entry.avgTemp,
       maxPressure: entry.maxPressure,
       avgFlow: entry.avgFlow,
+      hasNotes: entry.hasNotes,
       notes: null,
       loaded: false,
       data: null,

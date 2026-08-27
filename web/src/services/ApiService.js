@@ -2,25 +2,35 @@ import { createContext } from 'preact';
 import { signal } from '@preact/signals';
 import uuidv4 from '../utils/uuid.js';
 
-function randomId() {
-  return Math.random()
-    .toString(36)
-    .replace(/[^a-z]+/g, '')
-    .substr(2, 10);
-}
+// The firmware pushes evt:status every 500ms, so a quiet connection is a dead
+// one. Half-open sockets (phone sleep, Wi-Fi drop without FIN, device brownout)
+// never fire `close`, which would otherwise leave the UI showing stale "live"
+// data indefinitely.
+const LIVENESS_TIMEOUT_MS = 10000;
+const LIVENESS_CHECK_INTERVAL_MS = 2500;
 
 export default class ApiService {
   socket = null;
   listeners = {};
+  listenerIdCounter = 0;
+  pendingRequests = new Map();
   reconnectAttempts = 0;
   maxReconnectDelay = 30000; // Maximum delay of 30 seconds
   baseReconnectDelay = 1000; // Start with 1 second delay
   reconnectTimeout = null;
   isConnecting = false;
+  lastMessageAt = 0;
 
   constructor() {
-    console.log('Established websocket connection');
     this.connect();
+
+    setInterval(() => this._checkLiveness(), LIVENESS_CHECK_INTERVAL_MS);
+    // A phone waking from sleep or regaining network shouldn't wait out the
+    // exponential backoff before the dashboard comes back.
+    window.addEventListener('visibilitychange', () => {
+      if (!document.hidden) this._kickReconnect();
+    });
+    window.addEventListener('online', () => this._kickReconnect());
   }
 
   async connect() {
@@ -29,12 +39,22 @@ export default class ApiService {
 
     try {
       if (this.socket) {
-        this.socket.close();
+        // Replace before closing so the old socket's late close/error events
+        // fail the `event.target !== this.socket` guard in the handlers and
+        // can't tear down the new connection.
+        const oldSocket = this.socket;
+        this.socket = null;
+        try {
+          oldSocket.close();
+        } catch {
+          // Old socket may already be dead; nothing to do.
+        }
       }
 
       const apiHost = window.location.host;
       const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
       this.socket = new WebSocket(`${wsProtocol}${apiHost}/ws`);
+      this.lastMessageAt = Date.now();
 
       this.socket.addEventListener('message', this._onMessage.bind(this));
       this.socket.addEventListener('close', this._onClose.bind(this));
@@ -48,25 +68,64 @@ export default class ApiService {
     }
   }
 
-  _onOpen() {
+  _checkLiveness() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - this.lastMessageAt > LIVENESS_TIMEOUT_MS) {
+      console.warn('WebSocket silent for too long, forcing reconnect');
+      this.socket.close();
+    }
+  }
+
+  _kickReconnect() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this._checkLiveness();
+      return;
+    }
+    if (this.isConnecting || (this.socket && this.socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.reconnectAttempts = 0;
+    this.connect();
+  }
+
+  _onOpen(event) {
+    if (event.target !== this.socket) return;
     console.log('WebSocket connected successfully');
     this.reconnectAttempts = 0;
+    this.lastMessageAt = Date.now();
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
     machine.value = {
       ...machine.value,
       connected: true,
     };
   }
 
-  _onClose() {
+  _onClose(event) {
+    if (event.target !== this.socket) return;
     console.log('WebSocket connection closed');
     machine.value = {
       ...machine.value,
       connected: false,
     };
+    // Fail in-flight requests now instead of letting them run out their full
+    // timeout, so pages can surface the disconnect immediately.
+    const pending = [...this.pendingRequests.values()];
+    this.pendingRequests.clear();
+    for (const fail of pending) {
+      fail(new Error('WebSocket connection lost'));
+    }
     this._scheduleReconnect();
   }
 
   _onError(error) {
+    if (error.target !== this.socket) return;
     console.error('WebSocket error:', error);
     if (this.socket) {
       this.socket.close();
@@ -93,6 +152,8 @@ export default class ApiService {
   }
 
   _onMessage(event) {
+    if (event.target !== this.socket) return;
+    this.lastMessageAt = Date.now();
     let message;
     try {
       message = JSON.parse(event.data);
@@ -127,29 +188,47 @@ export default class ApiService {
     return new Promise((resolve, reject) => {
       let timeoutId;
 
+      const cleanup = () => {
+        clearTimeout(timeoutId);
+        this.off(returnType, listenerId);
+        this.pendingRequests.delete(rid);
+      };
+
       // Create a listener for the response with matching rid
       const listenerId = this.on(returnType, response => {
         if (response.rid === rid) {
-          // Clean up the listener and cancel the timeout to free the closure.
-          clearTimeout(timeoutId);
-          this.off(returnType, listenerId);
+          cleanup();
           resolve(response);
         }
       });
 
-      // Send the request
-      this.send(message);
+      // Registered so _onClose can fail this request the moment the socket
+      // drops instead of waiting out the timeout below.
+      this.pendingRequests.set(rid, error => {
+        cleanup();
+        reject(error);
+      });
+
+      try {
+        this.send(message);
+      } catch (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
 
       // Timeout: reject if no matching response arrives within 30 seconds
       timeoutId = setTimeout(() => {
-        this.off(returnType, listenerId);
+        cleanup();
         reject(new Error(`Request ${data.tp} timed out`));
       }, 30000); // 30 second timeout
     });
   }
 
   on(type, listener) {
-    const id = randomId();
+    // Monotonic ids: the previous Math.random-derived ids could collide (or
+    // come out empty), silently dropping another caller's listener.
+    const id = `l${++this.listenerIdCounter}`;
     if (!this.listeners[type]) {
       this.listeners[type] = {};
     }
@@ -158,7 +237,9 @@ export default class ApiService {
   }
 
   off(type, id) {
-    delete this.listeners[type][id];
+    if (this.listeners[type]) {
+      delete this.listeners[type][id];
+    }
   }
 
   _onStatus(message) {
@@ -251,7 +332,11 @@ let settingsData = null;
 
 export const prefetchSettings = () => {
   if (!settingsCache) {
-    settingsCache = fetch('/api/settings')
+    // Abort on stall so the cache doesn't hold a forever-pending promise —
+    // the catch below only self-heals on rejection.
+    const signal =
+      typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(15000) : undefined;
+    settingsCache = fetch('/api/settings', { signal })
       .then(res => {
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);

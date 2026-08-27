@@ -8,5 +8,25 @@
   "name": "Exhalation",
   "short_name": "Exhalation",
   "start_url": "/",
-  "scope": "/"
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/gm.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/gm-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/gm-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
 }

@@ -14,11 +14,12 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
   };
 
   const onTargetChange = (index, value) => {
-    const newPhase = {
+    // Replace the array too — the shallow copy shares `targets` with the
+    // previous state object, so writing into it would mutate parent state.
+    onChange({
       ...phase,
-    };
-    newPhase.targets[index] = value;
-    onChange(newPhase);
+      targets: (phase.targets || []).map((t, i) => (i === index ? value : t)),
+    });
   };
 
   const onTargetRemove = index => {
@@ -123,7 +124,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           <div className='input-group'>
             <label htmlFor={`phase-${index}-temperature`} className='input w-full'>
               <input
-                id={`phase-${index}-target`}
+                id={`phase-${index}-temperature`}
                 className='grow'
                 type='number'
                 value={`${phase.temperature || 0}`}
@@ -359,7 +360,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                 onClick={() =>
                   onFieldChange('transition', { ...phase.transition, type: 'instant', duration: 0 })
                 }
-                aria-pressed={mode === 'off'}
+                aria-pressed={(phase.transition?.type || 'instant') === 'instant'}
                 aria-label='Instant'
               >
                 Instant

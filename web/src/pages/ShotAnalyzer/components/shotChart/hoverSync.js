@@ -256,6 +256,7 @@ export function attachShotChartHoverSync({
   if (!hoverArea || !mainChart || !tempChart) return () => {};
 
   const clearAllHover = () => {
+    cancelPendingHover();
     clearTooltipState(mainChart);
     clearTooltipState(tempChart);
     hideExternalTooltip();
@@ -267,6 +268,16 @@ export function attachShotChartHoverSync({
   clearAllHoverRef.current = clearAllHover;
   let activeTouchPointerId = null;
   let touchHoverActive = false;
+  let pendingHoverPoint = null;
+  let hoverFrameId = null;
+
+  const cancelPendingHover = () => {
+    pendingHoverPoint = null;
+    if (hoverFrameId != null) {
+      cancelAnimationFrame(hoverFrameId);
+      hoverFrameId = null;
+    }
+  };
 
   const applyUnifiedHoverFromClientPoint = (clientX, clientY, options = {}) => {
     if (isReplayingRef.current) {
@@ -300,6 +311,21 @@ export function attachShotChartHoverSync({
     });
   };
 
+  // Coalesce high-frequency pointer moves to one hover update per frame —
+  // every update redraws both charts synchronously, and high-polling mice
+  // deliver several pointermove events per frame. (Same pattern as the
+  // compare chart canvas.)
+  const flushPendingHover = () => {
+    hoverFrameId = null;
+    const point = pendingHoverPoint;
+    pendingHoverPoint = null;
+    if (!point) return;
+    applyUnifiedHoverFromClientPoint(point.clientX, point.clientY, {
+      isTouch: false,
+      keepHoverOnMiss: false,
+    });
+  };
+
   const handleUnifiedMove = event => {
     if (isReplayingRef.current || isExportingRef.current) {
       clearAllHover();
@@ -318,10 +344,10 @@ export function attachShotChartHoverSync({
       return;
     }
 
-    applyUnifiedHoverFromClientPoint(point.clientX, point.clientY, {
-      isTouch,
-      keepHoverOnMiss: isTouch,
-    });
+    pendingHoverPoint = point;
+    if (hoverFrameId == null) {
+      hoverFrameId = requestAnimationFrame(flushPendingHover);
+    }
   };
 
   const handlePointerEnd = event => {
@@ -415,6 +441,7 @@ export function attachShotChartHoverSync({
 
   return () => {
     clearAllHoverRef.current = () => {};
+    cancelPendingHover();
     if (supportsPointerEvents) {
       hoverArea.removeEventListener('pointerdown', handlePointerDown);
       hoverArea.removeEventListener('pointermove', handleUnifiedMove);

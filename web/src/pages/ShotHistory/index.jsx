@@ -81,6 +81,7 @@ export function ShotHistory() {
               rating: newShot.rating,
               volume: newShot.volume,
               incomplete: newShot.incomplete,
+              hasNotes: newShot.hasNotes,
             };
           }
           return newShot;
@@ -104,9 +105,14 @@ export function ShotHistory() {
   const onDelete = useCallback(
     async id => {
       setLoading(true);
-      await apiService.request({ tp: 'req:history:delete', id });
-      // Reload the index after deletion
-      await loadHistory();
+      try {
+        await apiService.request({ tp: 'req:history:delete', id });
+        // Reload the index after deletion
+        await loadHistory();
+      } catch (error) {
+        console.error('Failed to delete shot:', error);
+        setLoading(false);
+      }
     },
     [apiService],
   );
@@ -118,7 +124,8 @@ export function ShotHistory() {
 
   // Filtered and sorted history with pagination
   const { paginatedHistory, totalPages, totalFilteredItems } = useMemo(() => {
-    let filtered = history;
+    // Copy so the in-place sort below never reorders the `history` state array.
+    let filtered = [...history];
 
     // Apply search filter
     if (searchTerm.trim()) {
@@ -179,13 +186,25 @@ export function ShotHistory() {
     const totalFilteredItems = filtered.length;
     const totalPages = Math.ceil(totalFilteredItems / itemsPerPage);
 
+    // Clamp so deleting/filtering away the last page's items doesn't leave the
+    // view on a page past the end showing "no shots".
+    const page = Math.min(currentPage, Math.max(1, totalPages));
+
     // Apply pagination
-    const startIndex = (currentPage - 1) * itemsPerPage;
+    const startIndex = (page - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     const paginatedHistory = filtered.slice(startIndex, endIndex);
 
     return { paginatedHistory, totalPages, totalFilteredItems };
   }, [history, searchTerm, filterBy, sortBy, sortOrder, currentPage]);
+
+  // Keep the page state itself in range too, so the pager controls agree with
+  // the clamped view.
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
 
   if (loading) {
     return (

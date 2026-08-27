@@ -1,7 +1,7 @@
 import Card from '../../components/Card.jsx';
 import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileChart } from '../../components/ExtendedProfileChart.jsx';
-import { useState } from 'preact/hooks';
+import { useMemo, useState } from 'preact/hooks';
 import { ExtendedPhase } from './ExtendedPhase.jsx';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronLeft } from '@fortawesome/free-solid-svg-icons/faChevronLeft';
@@ -59,10 +59,16 @@ export function ExtendedProfileForm(props) {
       ...data,
       phases: removePhaseAt(phases, index),
     });
-    setCurrentPhaseIndex(0);
+    // Stay near the removed phase instead of jumping back to the first one.
+    setCurrentPhaseIndex(Math.max(0, Math.min(index, phases.length - 2)));
   };
 
   const currentPhase = phases[currentPhaseIndex];
+
+  // The chart only reads `phases`; a stable object identity keyed on them
+  // keeps title/description keystrokes from re-rendering the chart.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chartData = useMemo(() => ({ ...data, phases }), [phases]);
 
   return (
     <form
@@ -81,7 +87,7 @@ export function ExtendedProfileForm(props) {
         />
         <Card sm={10}>
           <ExtendedProfileChart
-            data={{ ...data, phases }}
+            data={chartData}
             selectedPhase={currentPhaseIndex}
             className='max-h-72 w-full'
             onPhaseClick={setCurrentPhaseIndex}

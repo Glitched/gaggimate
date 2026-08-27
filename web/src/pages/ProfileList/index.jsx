@@ -601,9 +601,16 @@ export function ProfileList() {
   }, [hasUtilityProfiles]);
 
   const loadProfiles = async () => {
-    const response = await apiService.request({ tp: 'req:profiles:list' });
-    setProfiles(response.profiles);
-    setLoading(false);
+    try {
+      const response = await apiService.request({ tp: 'req:profiles:list' });
+      setProfiles(response.profiles);
+    } catch (error) {
+      // Keep whatever list we have; a failed refresh must not strand the page
+      // on the loading spinner.
+      console.error('Failed to load profiles:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Placeholder for future persistence of order (intentionally empty)
@@ -815,58 +822,82 @@ export function ProfileList() {
     loadData();
   }, [connected.value]);
 
+  // Select/favorite/delete update the list optimistically instead of tearing
+  // the whole page down to a spinner and re-fetching from the device for a
+  // one-bit change; on failure we re-sync from the device.
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const onDelete = useCallback(
     async id => {
-      setLoading(true);
-      await apiService.request({ tp: 'req:profiles:delete', id });
-      await loadProfiles();
+      setProfiles(prev => prev.filter(p => p.id !== id));
+      try {
+        await apiService.request({ tp: 'req:profiles:delete', id });
+      } catch (error) {
+        console.error('Failed to delete profile:', error);
+        await loadProfiles();
+      }
     },
-    [apiService, setLoading],
+    [apiService],
   );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const onSelect = useCallback(
     async id => {
-      setLoading(true);
-      await apiService.request({ tp: 'req:profiles:select', id });
-      await loadProfiles();
+      setProfiles(prev => prev.map(p => ({ ...p, selected: p.id === id })));
+      try {
+        await apiService.request({ tp: 'req:profiles:select', id });
+      } catch (error) {
+        console.error('Failed to select profile:', error);
+        await loadProfiles();
+      }
     },
-    [apiService, setLoading],
+    [apiService],
   );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const onFavorite = useCallback(
     async id => {
-      setLoading(true);
-      await apiService.request({ tp: 'req:profiles:favorite', id });
-      await loadProfiles();
+      setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: true } : p)));
+      try {
+        await apiService.request({ tp: 'req:profiles:favorite', id });
+      } catch (error) {
+        console.error('Failed to favorite profile:', error);
+        await loadProfiles();
+      }
     },
-    [apiService, setLoading],
+    [apiService],
   );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const onUnfavorite = useCallback(
     async id => {
-      setLoading(true);
-      await apiService.request({ tp: 'req:profiles:unfavorite', id });
-      await loadProfiles();
+      setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: false } : p)));
+      try {
+        await apiService.request({ tp: 'req:profiles:unfavorite', id });
+      } catch (error) {
+        console.error('Failed to unfavorite profile:', error);
+        await loadProfiles();
+      }
     },
-    [apiService, setLoading],
+    [apiService],
   );
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const onDuplicate = useCallback(
     async id => {
       setLoading(true);
-      const original = profiles.find(p => p.id === id);
-      if (original) {
-        const copy = { ...original };
-        delete copy.id;
-        delete copy.selected;
-        delete copy.favorite;
-        copy.label = `${original.label} Copy`;
-        await apiService.request({ tp: 'req:profiles:save', profile: copy });
+      try {
+        const original = profiles.find(p => p.id === id);
+        if (original) {
+          const copy = { ...original };
+          delete copy.id;
+          delete copy.selected;
+          delete copy.favorite;
+          copy.label = `${original.label} Copy`;
+          await apiService.request({ tp: 'req:profiles:save', profile: copy });
+        }
+      } catch (error) {
+        console.error('Failed to duplicate profile:', error);
       }
       await loadProfiles();
     },
@@ -894,19 +925,36 @@ export function ProfileList() {
       reader.onload = async e => {
         const result = e.target.result;
         if (typeof result === 'string') {
-          setLoading(true);
+          let parsed = [];
           try {
-            const profiles = parseProfile(result);
-            for (const p of profiles) {
+            parsed = parseProfile(result);
+          } catch (error) {
+            console.error('Failed to parse profile file:', error);
+          }
+          if (!parsed.length) {
+            alert('No profiles could be read from that file — is it a profile export?');
+            return;
+          }
+          setLoading(true);
+          let failed = 0;
+          for (const p of parsed) {
+            try {
               await apiService.request({ tp: 'req:profiles:save', profile: p });
+            } catch (error) {
+              // Keep importing the remaining profiles even if one save fails.
+              console.error('Failed to save imported profile:', error);
+              failed++;
             }
-          } catch {
-            // Individual save errors are surfaced by WS timeout; continue to reload list.
           }
           await loadProfiles();
+          if (failed > 0) {
+            alert(`${failed} of ${parsed.length} profiles failed to import.`);
+          }
         }
       };
       reader.readAsText(file);
+      // Allow selecting the same file again to re-trigger the change event.
+      evt.target.value = '';
     }
   };
 
@@ -914,7 +962,12 @@ export function ProfileList() {
     setLoading(true);
     for (const p of profiles) {
       if (!p.selected) {
-        await apiService.request({ tp: 'req:profiles:delete', id: p.id });
+        try {
+          await apiService.request({ tp: 'req:profiles:delete', id: p.id });
+        } catch (error) {
+          // Keep deleting the rest; the reload below shows what remains.
+          console.error('Failed to delete profile:', error);
+        }
       }
     }
     await loadProfiles();

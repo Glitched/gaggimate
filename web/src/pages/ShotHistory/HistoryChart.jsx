@@ -1,3 +1,4 @@
+import { useMemo } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from '../../components/Chart.jsx';
 
@@ -311,7 +312,10 @@ function getChartData(shot) {
 }
 
 export function HistoryChart({ shot }) {
-  const chartData = getChartData(shot);
+  // The parent card re-renders for reasons unrelated to the shot (notes
+  // edits, copy-feedback timers); only rebuild the datasets when the shot
+  // itself changes.
+  const chartData = useMemo(() => getChartData(shot), [shot]);
 
   return (
     <ChartComponent
