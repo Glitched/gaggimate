@@ -273,28 +273,3 @@ export function calculateShotMetrics(shotData, profileData, settings) {
     startTime: globalStartTime,
   };
 }
-
-/**
- * Auto-Delay Detection
- * Optimization Loop: 0 to 3000ms in 100ms steps.
- * Special Handling: Last phase weight target is calculated independently.
- * * @param {Object} shotData - Shot data
- * @param {Object|null} profileData - Profile data with targets
- * @param {number} fallbackDelay - Delay used when automatic detection cannot find a match
- * @returns {Object} { delay: number, auto: boolean }
- */
-export function detectAutoDelay(shotData, profileData, fallbackDelay) {
-  // Perform a quick check using calculateShotMetrics logic
-  const results = calculateShotMetrics(shotData, profileData, {
-    scaleDelayMs: fallbackDelay,
-    sensorDelayMs: fallbackDelay,
-    isAutoAdjusted: true,
-  });
-
-  if (results?.usedSettings) {
-    // Return scale delay as primary "detected" delay for legacy compatibility
-    return { delay: results.usedSettings.scaleDelayMs, auto: true };
-  }
-
-  return { delay: fallbackDelay, auto: false };
-}

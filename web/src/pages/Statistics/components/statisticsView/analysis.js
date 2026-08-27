@@ -4,10 +4,7 @@ import {
   getProfileDisplayLabel,
   getShotDisplayName,
 } from '../../../ShotAnalyzer/utils/analyzerUtils';
-import {
-  calculateShotMetrics,
-  detectAutoDelay,
-} from '../../../ShotAnalyzer/services/AnalyzerService';
+import { calculateShotMetrics } from '../../../ShotAnalyzer/services/AnalyzerService';
 import { libraryService } from '../../../ShotAnalyzer/services/LibraryService';
 import { DEFAULT_SETTINGS } from './constants';
 import {
@@ -77,14 +74,12 @@ export function attachProfileSource(profile, matchedProfileEntry) {
   return profile;
 }
 
-export function getStatisticsAnalysisSettings(fullShot, matchedProfile) {
-  const settings = { ...DEFAULT_SETTINGS };
-  const autoResult = detectAutoDelay(fullShot, matchedProfile, settings.scaleDelayMs);
-  if (autoResult.auto) {
-    settings.scaleDelayMs = autoResult.delay;
-    settings.isAutoAdjusted = true;
-  }
-  return settings;
+export function getStatisticsAnalysisSettings() {
+  // Statistics runs analyses over hundreds of shots; the old detectAutoDelay
+  // pre-pass doubled that work by running a full calculateShotMetrics just to
+  // echo back delays that the auto-adjusted analysis only ever uses as
+  // no-match fallbacks (where they equal the defaults regardless).
+  return { ...DEFAULT_SETTINGS };
 }
 
 export async function analyzeStatisticsShot({
@@ -109,7 +104,7 @@ export async function analyzeStatisticsShot({
       matchedProfileEntry,
     });
     const matchedProfile = attachProfileSource(loadedProfile, matchedProfileEntry);
-    const settings = getStatisticsAnalysisSettings(fullShot, matchedProfile);
+    const settings = getStatisticsAnalysisSettings();
     const profileField = fullShot.profile || '';
 
     return {
