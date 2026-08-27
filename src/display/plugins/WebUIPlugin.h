@@ -15,6 +15,10 @@ constexpr size_t UPDATE_CHECK_INTERVAL = 30 * 60 * 1000;
 constexpr size_t CLEANUP_PERIOD = 1000;
 constexpr size_t STATUS_PERIOD = 500;
 constexpr size_t DNS_PERIOD = 50;
+// How long a firmware upload may go without a chunk before the Updater is
+// reclaimed. Comfortably longer than any real network hiccup, short enough that
+// a user who lost a transfer can just retry instead of power-cycling.
+constexpr unsigned long UPLOAD_STALL_TIMEOUT = 30 * 1000;
 
 const String LOCAL_URL = "http://4.4.4.1/";
 const String RELEASE_URL = "https://github.com/Glitched/gaggimate/releases/";
@@ -78,6 +82,7 @@ class WebUIPlugin : public Plugin {
     bool uploadInProgress = false;
     size_t uploadTotal = 0;
     int uploadLastPct = -1;
+    unsigned long uploadLastChunk = 0;
 
     GitHubOTA *ota = nullptr;
     AsyncWebServer server;

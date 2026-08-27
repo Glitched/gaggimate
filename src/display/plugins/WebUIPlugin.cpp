@@ -148,6 +148,17 @@ void WebUIPlugin::loop() {
         return;
     }
     const unsigned long now = millis();
+    // An upload that dies mid-stream -- client sleeps, Wi-Fi drops, browser tab
+    // closes -- never reaches handleFirmwareUploadResult, so nothing clears
+    // uploadInProgress and the Updater keeps the OTA slot open. Every later
+    // attempt is then rejected as "another update is already running" until the
+    // display is power-cycled. Reclaim it once the stream has clearly stopped.
+    if (uploadInProgress && now - uploadLastChunk > UPLOAD_STALL_TIMEOUT) {
+        ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", now - uploadLastChunk);
+        Update.abort();
+        uploadInProgress = false;
+        pluginManager->trigger("ota:upload:failed");
+    }
     // Skip the (blocking, TLS) update check while a process is active: a brew/steam/grind
     // must not have the control loop stalled for the duration of the handshake, nor compete
     // with it for memory. isActive() is the reliable "a process is running" signal. Subtraction
@@ -1090,6 +1101,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         uploadInProgress = true;
         uploadTotal = 0;
         uploadLastPct = -1;
+        uploadLastChunk = millis();
         pluginManager->trigger("ota:upload:start");
         ESP_LOGI("WebUIPlugin", "Firmware upload started");
     }
@@ -1103,6 +1115,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         return;
     }
     uploadTotal += len;
+    uploadLastChunk = millis();
     // Progress is reported against the partition size, which is the only bound
     // available while streaming; it is a lower bound on the real percentage.
     const size_t capacity = Update.size();
