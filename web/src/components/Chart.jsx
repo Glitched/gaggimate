@@ -27,9 +27,12 @@ export function ChartComponent({ data, className, chartClassName, style }) {
   useEffect(() => {
     if (!chart) return;
 
-    // Preserve dataset visibility state when updating data
-    const hiddenDatasets = chart.data.datasets.map((dataset, index) => {
-      return chart.getDatasetMeta(index).hidden;
+    // Preserve dataset visibility keyed by label, not index — callers add and
+    // remove datasets conditionally (e.g. weight series once a scale connects),
+    // so index-keyed state would land on the wrong series.
+    const hiddenByLabel = new Map();
+    chart.data.datasets.forEach((dataset, index) => {
+      hiddenByLabel.set(dataset.label ?? index, chart.getDatasetMeta(index).hidden);
     });
 
     chart.data = data.data;
@@ -37,8 +40,9 @@ export function ChartComponent({ data, className, chartClassName, style }) {
 
     // Restore dataset visibility state
     chart.data.datasets.forEach((dataset, index) => {
-      if (hiddenDatasets[index] !== undefined) {
-        chart.getDatasetMeta(index).hidden = hiddenDatasets[index];
+      const hidden = hiddenByLabel.get(dataset.label ?? index);
+      if (hidden !== undefined) {
+        chart.getDatasetMeta(index).hidden = hidden;
       }
     });
 
@@ -63,7 +67,7 @@ export function ChartComponent({ data, className, chartClassName, style }) {
       return target;
     };
 
-    const handleResize = () => {
+    const applyResize = () => {
       const isSmallScreen = window.innerWidth < 640;
 
       // Update legend font size
@@ -88,13 +92,27 @@ export function ChartComponent({ data, className, chartClassName, style }) {
       chart.update('none'); // Use 'none' mode for better performance
     };
 
+    // Coalesce bursts into one resize per frame — iOS fires visualViewport
+    // resize on every scroll frame and keyboard show/hide, and a full
+    // chart.resize()+update() per event janks the page.
+    let rafId = null;
+    const handleResize = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        applyResize();
+      });
+    };
+
     // Add event listeners for different orientation change scenarios
     window.addEventListener('resize', handleResize);
 
     // iOS PWA specific: orientationchange event
+    let orientationTimeoutId = null;
     const handleOrientationChange = () => {
       // Use a small delay to ensure the orientation change is complete
-      setTimeout(handleResize, 100);
+      clearTimeout(orientationTimeoutId);
+      orientationTimeoutId = setTimeout(handleResize, 100);
     };
     window.addEventListener('orientationchange', handleOrientationChange);
 
@@ -104,7 +122,7 @@ export function ChartComponent({ data, className, chartClassName, style }) {
     }
 
     // Initial call to ensure correct sizing
-    handleResize();
+    applyResize();
 
     // Cleanup
     return () => {
@@ -113,6 +131,9 @@ export function ChartComponent({ data, className, chartClassName, style }) {
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', handleResize);
       }
+      // The deferred handlers would otherwise fire against a destroyed chart.
+      clearTimeout(orientationTimeoutId);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [chart]);
 

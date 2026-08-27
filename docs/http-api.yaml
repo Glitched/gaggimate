@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: GaggiMate Display HTTP API
+  version: "1.0"
+  description: |
+    HTTP API served by the display firmware on port 80. Designed so external
+    tools (scripts, automations, LLM agents) can read machine state, manage
+    profiles, and fetch shot data with nothing but plain HTTP.
+
+    Realtime control and events (process start/stop, live status, autotune,
+    shot notes) remain on the WebSocket API — see `docs/websocket-api.yaml`.
+
+    Conventions:
+    - All JSON endpoints respond `application/json`.
+    - Errors are `{"error": "<message>"}` with a 4xx/5xx status.
+    - There is no authentication; the API trusts the local network, like the
+      web UI itself.
+paths:
+  /api/status:
+    get:
+      summary: Minimal machine status snapshot
+      description: Mode, target temperature, and current temperature. The full
+        realtime status stream (pressure, flow, process state, ...) is pushed
+        over the WebSocket as `evt:status`.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: integer, description: "0=standby, 1=brew, 2=steam, 3=water, 4=grind" }
+                  tt: { type: number, description: Target temperature (°C) }
+                  ct: { type: number, description: Current temperature (°C) }
+
+  /api/settings:
+    get:
+      summary: Read all settings
+      responses:
+        "200":
+          description: Flat JSON object of every setting. `wifiPassword` reads
+            as the sentinel `"---unchanged---"` while in AP mode.
+    post:
+      summary: Partial settings update
+      description: |
+        Applies ONLY the keys present in the request and returns the full
+        resulting settings object. Omitted keys are never modified, so a
+        boolean cannot be cleared by omission.
+
+        Two encodings are accepted:
+        - `application/json` (preferred): real JSON types. Numeric fields also
+          accept numeric strings.
+        - `application/x-www-form-urlencoded` (legacy): boolean fields require
+          an explicit value; anything except `0`/`false` counts as true.
+
+        Special keys: `restart` (boolean) reboots the machine after the
+        response is sent. `wifiPassword` equal to `"---unchanged---"` is
+        ignored. `apPassword` shorter than the minimum length is ignored.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Any subset of the keys returned by GET.
+      responses:
+        "200":
+          description: Full settings object after the update.
+        "400":
+          description: Malformed or non-object JSON body.
+
+  /api/profiles:
+    get:
+      summary: List profiles
+      parameters:
+        - name: minimal
+          in: query
+          required: false
+          schema: { type: integer }
+          description: When present, each entry carries only `id` and `label`.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profiles:
+                    type: array
+                    items: { $ref: "#/components/schemas/Profile" }
+    post:
+      summary: Create a profile
+      description: Full profile document (see `schema/profile.json`). Omit `id`
+        to have one generated. The response echoes the profile exactly as
+        stored — compare it against what was sent to verify the write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Profile" }
+      responses:
+        "201":
+          description: Stored profile, including the generated `id`.
+        "400": { description: Body is not a JSON object. }
+        "409": { description: A profile with the body's `id` already exists — use PUT to update. }
+        "422": { description: "Structurally invalid: `label` (string), `type` (string) and a non-empty `phases` array are required. Nothing is stored." }
+
+  /api/profiles/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Load a profile
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "404": { description: Profile not found. }
+    put:
+      summary: Replace a profile (full document)
+      description: Read–modify–write contract. The path `id` always wins over
+        any `id` in the body. Partial documents are rejected, not merged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Profile" }
+      responses:
+        "200": { description: Stored profile after the update. }
+        "400": { description: Body is not a JSON object. }
+        "404": { description: Profile not found — use POST /api/profiles to create. }
+        "422": { description: Structurally invalid; the stored profile is untouched. }
+    delete:
+      summary: Delete a profile
+      responses:
+        "200": { description: "`{\"ok\": true}`" }
+        "404": { description: Profile not found. }
+
+  /api/profiles/{id}/select:
+    post:
+      summary: Make this the active profile
+      responses:
+        "200": { description: "`{\"ok\": true}`" }
+        "404": { description: Profile not found. }
+  /api/profiles/{id}/favorite:
+    post:
+      summary: Add to favorites
+      responses:
+        "200": { description: "`{\"ok\": true}`" }
+        "404": { description: Profile not found. }
+  /api/profiles/{id}/unfavorite:
+    post:
+      summary: Remove from favorites
+      responses:
+        "200": { description: "`{\"ok\": true}`" }
+        "404": { description: Profile not found. }
+
+  /api/history/index.bin:
+    get:
+      summary: Shot index (binary)
+      description: SIDX header plus fixed-size entries; parser reference is
+        `web/src/pages/ShotHistory/parseBinaryIndex.js`.
+      responses:
+        "200": { content: { application/octet-stream: {} } }
+        "404": { description: Index not built yet. }
+  /api/history/recent.bin:
+    get:
+      summary: Most recent shots (binary, same format as index.bin)
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 8 }
+      responses:
+        "200": { content: { application/octet-stream: {} } }
+  /api/history/{id}.slog:
+    get:
+      summary: Full shot recording (binary)
+      description: Zero-padded 6-digit id, e.g. `/api/history/000042.slog`.
+        Parser reference is `web/src/pages/ShotHistory/parseBinaryShot.js`;
+        `web/scripts/shot-scrape.mjs` converts shots to a compact text format
+        suitable for LLM input.
+      responses:
+        "200": { content: { application/octet-stream: {} } }
+  /api/history/{id}.json:
+    get:
+      summary: Shot notes (dose, grind, rating, tasting notes)
+      description: Present only for shots that have notes. Schema is
+        `schema/shot_notes.json`. Notes are written over the WebSocket.
+      responses:
+        "200": { content: { application/json: {} } }
+
+  /api/core-dump:
+    get:
+      summary: Download the last crash core dump, if any
+      responses:
+        "200": { content: { application/octet-stream: {} } }
+
+components:
+  schemas:
+    Profile:
+      type: object
+      description: Canonical schema lives in `schema/profile.json`; this is a
+        summary. Writes are full-document; the stored result is echoed back.
+      required: [label, type, phases]
+      properties:
+        id:
+          type: string
+          description: Server-generated when omitted on create.
+        label: { type: string }
+        type:
+          type: string
+          enum: [standard, pro]
+        description: { type: string }
+        temperature:
+          type: number
+          description: Brew temperature (°C).
+        favorite: { type: boolean }
+        selected:
+          type: boolean
+          readOnly: true
+        utility: { type: boolean }
+        phases:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              phase: { type: string, enum: [preinfusion, brew] }
+              valve: { type: integer, enum: [0, 1] }
+              duration: { type: number, description: Seconds. }
+              temperature: { type: number, description: "°C; 0 means use the profile temperature." }
+              pump:
+                description: Integer 0–100 for simple power control, or an
+                  object for pressure/flow control.
+                oneOf:
+                  - type: integer
+                  - type: object
+                    properties:
+                      target: { type: string, enum: [pressure, flow] }
+                      pressure: { type: number }
+                      flow: { type: number }
+              transition:
+                type: object
+                properties:
+                  type: { type: string, enum: [instant, linear, ease-in, ease-out, ease-in-out] }
+                  target: { type: string, enum: [time, volumetric, pumped] }
+                  duration: { type: number }
+                  adaptive: { type: boolean }
+              targets:
+                type: array
+                description: Phase exit conditions.
+                items:
+                  type: object
+                  properties:
+                    type: { type: string, enum: [volumetric, pressure, flow, pumped] }
+                    operator: { type: string, enum: [gte, lte], default: gte }
+                    value: { type: number }

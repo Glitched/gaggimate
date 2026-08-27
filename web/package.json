@@ -26,7 +26,7 @@
     "preact": "^10.22.1",
     "preact-fetching": "^1.0.0",
     "preact-iso": "^2.8.1",
-    "preact-render-to-string": "^6.5.13",
+    "prop-types": "^15.8.1",
     "sortablejs": "^1.15.7"
   },
   "devDependencies": {

@@ -4,6 +4,7 @@ import { faEllipsisVertical } from '@fortawesome/free-solid-svg-icons/faEllipsis
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { useCallback, useEffect, useRef, useState, useContext } from 'preact/hooks';
 import { useRoute } from 'preact-iso';
+import { computed } from '@preact/signals';
 import {
   ApiServiceContext,
   machine,
@@ -18,6 +19,8 @@ import {
 } from '../../utils/dashboardManager.js';
 import { downloadJson } from '../../utils/download.js';
 import { getStoredTheme, handleThemeChange } from '../../utils/themeManager.js';
+import { showToast } from '../../services/toast.js';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
 
 import PageLayout from '../../components/PageLayout.jsx';
 import PageHeader from '../../components/PageHeader.jsx';
@@ -56,6 +59,11 @@ import { faCrosshairs } from '@fortawesome/free-solid-svg-icons/faCrosshairs';
 import { faPuzzlePiece } from '@fortawesome/free-solid-svg-icons/faPuzzlePiece';
 import { faBluetoothB } from '@fortawesome/free-brands-svg-icons/faBluetoothB';
 import { faRotate } from '@fortawesome/free-solid-svg-icons/faRotate';
+
+// Module-level computed so reading connection state during render only
+// re-renders this page when the boolean flips — the machine signal itself is
+// replaced by every 500ms status frame.
+const connected = computed(() => machine.value.connected);
 
 function splitPidString(pidString) {
   if (!pidString) return { pid: pidString, kf: '0.000' };
@@ -114,61 +122,70 @@ function transformFetchedSettings(fetchedSettings) {
   return settingsWithToggle;
 }
 
-function buildSubmitFormData(formData, autowakeupSchedules, restart) {
-  const formDataToSubmit = new FormData();
-  const checkboxKeys = [
-    'homekit',
-    'boilerFillActive',
-    'smartGrindActive',
-    'homeAssistant',
-    'momentaryButtons',
-    'delayAdjust',
-    'clock24hFormat',
-    'autowakeupEnabled',
-    'smartGrindToggle',
-  ];
+const SETTINGS_BOOLEAN_KEYS = [
+  'homekit',
+  'boilerFillActive',
+  'smartGrindActive',
+  'homeAssistant',
+  'momentaryButtons',
+  'delayAdjust',
+  'clock24hFormat',
+  'autowakeupEnabled',
+  'smartGrindToggle',
+];
 
+// Form-model keys that are folded into combined firmware keys (buttonBehavior,
+// pid) or exist only client-side — never sent as-is.
+const SETTINGS_CLIENT_ONLY_KEYS = new Set(['button0', 'button1', 'button2', 'kf', 'standbyDisplayEnabled']);
+
+// Maps the form model onto the firmware's settings keys, with real booleans.
+function buildSettingsPayload(formData, autowakeupSchedules) {
+  const payload = {};
   for (const [key, value] of Object.entries(formData)) {
     if (value === undefined || value === null) continue;
-
-    if (checkboxKeys.includes(key)) {
-      if (value) {
-        formDataToSubmit.set(key, '1');
-      }
-    } else {
-      formDataToSubmit.set(key, String(value));
-    }
+    if (SETTINGS_CLIENT_ONLY_KEYS.has(key)) continue;
+    payload[key] = SETTINGS_BOOLEAN_KEYS.includes(key) ? !!value : value;
   }
 
-  formDataToSubmit.set('steamPumpPercentage', String(formData.steamPumpPercentage ?? 0));
-  formDataToSubmit.set(
-    'altRelayFunction',
-    formData.altRelayFunction !== undefined ? String(formData.altRelayFunction) : '1',
-  );
-  formDataToSubmit.set(
-    'buttonBehavior',
-    `${formData.button0},${formData.button1},${formData.button2}`,
-  );
+  if (
+    formData.button0 !== undefined &&
+    formData.button1 !== undefined &&
+    formData.button2 !== undefined
+  ) {
+    payload.buttonBehavior = `${formData.button0},${formData.button1},${formData.button2}`;
+  }
 
   if (formData.pid && formData.kf !== undefined) {
-    const combinedPid = `${formData.pid},${formData.kf}`;
-    formDataToSubmit.set('pid', combinedPid);
+    payload.pid = `${formData.pid},${formData.kf}`;
   }
 
-  const schedulesStr = autowakeupSchedules
+  payload.autowakeupSchedules = (autowakeupSchedules || [])
     .map(schedule => `${schedule.time}|${schedule.days.map(d => (d ? '1' : '0')).join('')}`)
     .join(';');
-  formDataToSubmit.set('autowakeupSchedules', schedulesStr);
 
   if (!formData.standbyDisplayEnabled) {
-    formDataToSubmit.set('standbyBrightness', '0');
+    payload.standbyBrightness = 0;
   }
 
-  if (restart) {
-    formDataToSubmit.append('restart', '1');
-  }
+  return payload;
+}
 
-  return formDataToSubmit;
+// The firmware applies only the keys present in the body (partial-update
+// semantics), so send just what changed since load/save: unrelated settings
+// are never rewritten and a boolean can no longer be cleared by omission.
+function diffSettingsPayload(current, baseline) {
+  const changed = {};
+  for (const [key, value] of Object.entries(current)) {
+    const prev = baseline[key];
+    const isSame =
+      typeof value === 'boolean' || typeof prev === 'boolean'
+        ? !!value === !!prev
+        : prev !== undefined && String(value) === String(prev);
+    if (!isSame) {
+      changed[key] = value;
+    }
+  }
+  return changed;
 }
 
 export function Settings() {
@@ -189,6 +206,7 @@ export function Settings() {
 
   const [fetchedSettings, setFetchedSettings] = useState(() => getCachedSettings());
   const [isLoading, setIsLoading] = useState(!fetchedSettings);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     if (!fetchedSettings) {
@@ -199,20 +217,45 @@ export function Settings() {
         })
         .catch(err => {
           console.error('Failed to prefetch settings:', err);
+          // Show an explicit error instead of an editable empty form — saving
+          // a form bound to {} would post blank values to the machine.
+          setLoadError(true);
           setIsLoading(false);
         });
     }
   }, [fetchedSettings]);
 
+  const retryLoad = useCallback(() => {
+    // prefetchSettings clears its cache on rejection, so calling it again
+    // issues a fresh request.
+    setLoadError(false);
+    setIsLoading(true);
+    prefetchSettings()
+      .then(data => {
+        setFetchedSettings(data);
+        setIsLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to prefetch settings:', err);
+        setLoadError(true);
+        setIsLoading(false);
+      });
+  }, []);
+
   useEffect(() => {
     const loadProfiles = async () => {
-      if (machine.value.connected) {
-        const response = await apiService.request({ tp: 'req:profiles:list', minimal: true });
-        setProfiles(response.profiles);
+      if (connected.value) {
+        try {
+          const response = await apiService.request({ tp: 'req:profiles:list', minimal: true });
+          setProfiles(response.profiles);
+        } catch (error) {
+          console.error('Failed to load profiles:', error);
+        }
       }
     };
     loadProfiles();
-  }, [machine.value.connected, apiService]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connected.value is a signal read; the render-time read subscribes this component
+  }, [connected.value, apiService]);
 
   const formRef = useRef();
   const dropdownRef = useRef(null);
@@ -231,6 +274,10 @@ export function Settings() {
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [dropdownOpen]);
 
+  // Snapshot of the last loaded/saved state, for unsaved-changes detection
+  // and for diffing what to send on save.
+  const baselineRef = useRef({ form: '{}', schedules: '[]' });
+
   useEffect(() => {
     if (fetchedSettings) {
       const settingsWithToggle = transformFetchedSettings(fetchedSettings);
@@ -238,11 +285,24 @@ export function Settings() {
       setAutoWakeupSchedules(parsedSchedules);
       setClock24h(!!fetchedSettings.clock24hFormat);
       setFormData(settingsWithToggle);
+      baselineRef.current = {
+        form: JSON.stringify(settingsWithToggle),
+        schedules: JSON.stringify(parsedSchedules),
+      };
     } else {
       setFormData({});
       setAutoWakeupSchedules([{ time: '07:00', days: [true, true, true, true, true, true, true] }]);
     }
   }, [fetchedSettings]);
+
+  const isDirty =
+    !isLoading &&
+    !!fetchedSettings &&
+    (JSON.stringify(formData) !== baselineRef.current.form ||
+      JSON.stringify(autowakeupSchedules) !== baselineRef.current.schedules);
+
+  // Tab switches within /settings keep this form mounted, so let them through.
+  useUnsavedChangesGuard(isDirty, { ignorePrefix: '/settings' });
 
   useEffect(() => {
     setCurrentTheme(getStoredTheme());
@@ -250,44 +310,41 @@ export function Settings() {
 
   const onChange = key => {
     return e => {
-      let value = e.currentTarget.value;
-      if (
-        [
-          'homekit',
-          'boilerFillActive',
-          'smartGrindActive',
-          'smartGrindToggle',
-          'homeAssistant',
-          'momentaryButtons',
-          'delayAdjust',
-          'clock24hFormat',
-          'autowakeupEnabled',
-        ].includes(key)
-      ) {
-        value = !formData[key];
-      }
-      if (key === 'clock24hFormat') {
-        setClock24h(value);
-      }
+      const inputValue = e.currentTarget.value;
+      const toggleKeys = [
+        'homekit',
+        'boilerFillActive',
+        'smartGrindActive',
+        'smartGrindToggle',
+        'homeAssistant',
+        'momentaryButtons',
+        'delayAdjust',
+        'clock24hFormat',
+        'autowakeupEnabled',
+      ];
       if (key === 'standbyDisplayEnabled') {
-        value = !formData.standbyDisplayEnabled;
-        const newFormData = {
-          ...formData,
-          [key]: value,
-        };
-        if (!value) {
-          newFormData.standbyBrightness = 0;
-        }
-        setFormData(newFormData);
+        setFormData(prev => {
+          const value = !prev.standbyDisplayEnabled;
+          const next = { ...prev, [key]: value };
+          if (!value) {
+            next.standbyBrightness = 0;
+          }
+          return next;
+        });
         return;
       }
-      if (key === 'dashboardLayout') {
-        setDashboardLayout(value);
+      if (key === 'clock24hFormat') {
+        setClock24h(!formData[key]);
       }
-      setFormData({
-        ...formData,
-        [key]: value,
-      });
+      if (key === 'dashboardLayout') {
+        setDashboardLayout(inputValue);
+      }
+      // Functional update: two changes dispatched in the same tick (e.g. a
+      // toggle plus a dependent field) must not clobber each other.
+      setFormData(prev => ({
+        ...prev,
+        [key]: toggleKeys.includes(key) ? !prev[key] : inputValue,
+      }));
     };
   };
 
@@ -296,8 +353,8 @@ export function Settings() {
   }, []);
 
   const addAutoWakeupSchedule = () => {
-    setAutoWakeupSchedules([
-      ...autowakeupSchedules,
+    setAutoWakeupSchedules(prev => [
+      ...prev,
       {
         time: '07:00',
         days: [true, true, true, true, true, true, true],
@@ -306,22 +363,25 @@ export function Settings() {
   };
 
   const removeAutoWakeupSchedule = index => {
-    if (autowakeupSchedules.length > 1) {
-      const newSchedules = autowakeupSchedules.filter((_, i) => i !== index);
-      setAutoWakeupSchedules(newSchedules);
-    }
+    setAutoWakeupSchedules(prev => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
   };
 
+  // Replace the schedule objects instead of mutating them in place — the old
+  // entries are shared with previous state snapshots.
   const updateAutoWakeupTime = (index, value) => {
-    const newSchedules = [...autowakeupSchedules];
-    newSchedules[index].time = value;
-    setAutoWakeupSchedules(newSchedules);
+    setAutoWakeupSchedules(prev =>
+      prev.map((schedule, i) => (i === index ? { ...schedule, time: value } : schedule)),
+    );
   };
 
   const updateAutoWakeupDay = (scheduleIndex, dayIndex, enabled) => {
-    const newSchedules = [...autowakeupSchedules];
-    newSchedules[scheduleIndex].days[dayIndex] = enabled;
-    setAutoWakeupSchedules(newSchedules);
+    setAutoWakeupSchedules(prev =>
+      prev.map((schedule, i) =>
+        i === scheduleIndex
+          ? { ...schedule, days: schedule.days.map((d, j) => (j === dayIndex ? enabled : d)) }
+          : schedule,
+      ),
+    );
   };
 
   const onSubmit = useCallback(
@@ -329,13 +389,32 @@ export function Settings() {
       if (e) e.preventDefault();
       setSubmitting(true);
       const form = formRef.current;
-      const formDataToSubmit = buildSubmitFormData(formData, autowakeupSchedules, restart);
+
+      let baselineForm = {};
+      let baselineSchedules = [];
+      try {
+        baselineForm = JSON.parse(baselineRef.current.form || '{}');
+        baselineSchedules = JSON.parse(baselineRef.current.schedules || '[]');
+      } catch {
+        // Corrupt baseline: fall back to sending the full payload.
+      }
+      const payload = diffSettingsPayload(
+        buildSettingsPayload(formData, autowakeupSchedules),
+        buildSettingsPayload(baselineForm, baselineSchedules),
+      );
+      if (restart) {
+        payload.restart = true;
+      }
 
       try {
         const response = await fetch(form.action, {
           method: 'post',
-          body: formDataToSubmit,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
 
         const splitPid = data.pid ? splitPidString(data.pid) : null;
@@ -351,8 +430,18 @@ export function Settings() {
 
         updateSettingsCache(data);
         setFormData(updatedData);
+        baselineRef.current = {
+          form: JSON.stringify(updatedData),
+          schedules: JSON.stringify(autowakeupSchedules),
+        };
+        showToast(restart ? 'Settings saved — restarting machine' : 'Settings saved', {
+          type: 'success',
+        });
       } catch (error) {
         console.error('Failed to save settings:', error);
+        showToast('Saving settings failed — check the machine connection and try again.', {
+          type: 'error',
+        });
       } finally {
         setSubmitting(false);
       }
@@ -361,18 +450,41 @@ export function Settings() {
   );
 
   const onExport = useCallback(() => {
-    downloadJson(formData, 'settings.json');
+    // Never write credentials to an export file (mirrors the support-data
+    // download, which strips them for the same reason).
+    const exportData = { ...formData };
+    delete exportData.wifiPassword;
+    delete exportData.apPassword;
+    delete exportData.haPassword;
+    downloadJson(exportData, 'settings.json');
   }, [formData]);
 
   const onUpload = function (evt) {
     if (evt.target.files.length) {
       const file = evt.target.files[0];
       const reader = new FileReader();
-      reader.onload = async e => {
-        const data = JSON.parse(e.target.result);
-        setFormData(data);
+      reader.onload = e => {
+        let data;
+        try {
+          data = JSON.parse(e.target.result);
+        } catch {
+          showToast('Import failed: the selected file is not valid JSON.', { type: 'error' });
+          return;
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          showToast('Import failed: the selected file is not a settings export.', {
+            type: 'error',
+          });
+          return;
+        }
+        // Merge over current values so exports without credentials don't blank
+        // out the passwords already loaded in the form.
+        setFormData(prev => ({ ...prev, ...data }));
+        showToast('Settings imported — review and press Save to apply.', { type: 'info' });
       };
       reader.readAsText(file);
+      // Allow re-selecting the same file to trigger another change event.
+      evt.target.value = '';
     }
   };
 
@@ -445,6 +557,18 @@ export function Settings() {
         }
       />
 
+      {loadError && !fetchedSettings && (
+        <div className='alert alert-error my-4'>
+          <span>
+            Could not load settings from the machine. Check that it is powered on and reachable,
+            then try again.
+          </span>
+          <button type='button' className='btn btn-sm' onClick={retryLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+
       <form
         id='settings-page-form'
         key='settings'
@@ -452,7 +576,7 @@ export function Settings() {
         method='post'
         action='/api/settings'
         onSubmit={onSubmit}
-        className={isFormTab ? '' : 'hidden'}
+        className={isFormTab && !(loadError && !fetchedSettings) ? '' : 'hidden'}
       >
         {tab === 'general' &&
           (isLoading ? (
@@ -497,7 +621,7 @@ export function Settings() {
         )}
       </form>
 
-      {tab === 'calibration' && <LazyCalibrationTab formData={formData} onChange={onChange} />}
+      {tab === 'calibration' && <LazyCalibrationTab formData={formData} setField={setField} />}
       {tab === 'bluetooth' && (isLoading ? <BluetoothTabSkeleton /> : <LazyBluetoothTab />)}
       {tab === 'system' && (isLoading ? <SystemTabSkeleton /> : <LazySystemTab />)}
     </PageLayout>

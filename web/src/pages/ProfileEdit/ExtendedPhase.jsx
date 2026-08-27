@@ -4,6 +4,7 @@ import { useCallback } from 'preact/hooks';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { Tooltip } from '../../components/Tooltip.jsx';
+import { NumberInput } from '../../components/NumberInput.jsx';
 
 export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvailable }) {
   const onFieldChange = (field, value) => {
@@ -14,11 +15,12 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
   };
 
   const onTargetChange = (index, value) => {
-    const newPhase = {
+    // Replace the array too — the shallow copy shares `targets` with the
+    // previous state object, so writing into it would mutate parent state.
+    onChange({
       ...phase,
-    };
-    newPhase.targets[index] = value;
-    onChange(newPhase);
+      targets: (phase.targets || []).map((t, i) => (i === index ? value : t)),
+    });
   };
 
   const onTargetRemove = index => {
@@ -43,12 +45,15 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
 
   const targets = phase?.targets || [];
 
-  const pumpPower = isNumber(phase.pump) ? phase.pump : 100;
-  const pressure = !isNumber(phase.pump) ? phase.pump.pressure : 0;
-  const flow = !isNumber(phase.pump) ? phase.pump.flow : 0;
-  let mode = isNumber(phase.pump) ? (phase.pump === 0 ? 'off' : 'power') : phase.pump.target;
-  if (mode === 'pressure' && phase.pump.pressure === -1) mode = 'hold-pressure';
-  if (mode === 'flow' && phase.pump.flow === -1) mode = 'hold-flow';
+  // Imported profiles can lack `pump` entirely — treat that as full power
+  // instead of crashing on `undefined.pressure`.
+  const pump = phase.pump ?? 100;
+  const pumpPower = isNumber(pump) ? pump : 100;
+  const pressure = !isNumber(pump) ? pump.pressure : 0;
+  const flow = !isNumber(pump) ? pump.flow : 0;
+  let mode = isNumber(pump) ? (pump === 0 ? 'off' : 'power') : pump.target;
+  if (mode === 'pressure' && pressure === -1) mode = 'hold-pressure';
+  if (mode === 'flow' && flow === -1) mode = 'hold-flow';
   const availableTargetTypes = TargetTypes.filter(
     t => !targets.find(t2 => t2.type === t.type && t2.operator === t.operator),
   );
@@ -103,13 +108,12 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-duration`} className='input w-full'>
-              <input
+              <NumberInput
                 id={`phase-${index}-duration`}
                 className='grow'
-                type='number'
-                min='1'
+                min={0}
                 value={phase.duration}
-                onChange={e => onFieldChange('duration', e.target.value)}
+                onCommit={value => onFieldChange('duration', value)}
                 aria-label='Duration in seconds'
               />
               <span aria-label='seconds'>s</span>
@@ -122,14 +126,13 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-temperature`} className='input w-full'>
-              <input
-                id={`phase-${index}-target`}
+              <NumberInput
+                id={`phase-${index}-temperature`}
                 className='grow'
-                type='number'
-                value={`${phase.temperature || 0}`}
-                onChange={e => onFieldChange('temperature', parseFloat(e.target.value))}
+                value={phase.temperature || 0}
+                onCommit={value => onFieldChange('temperature', value)}
                 aria-label='Target temperature'
-                min='0'
+                min={0}
                 step='0.1'
               />
               <span aria-label='celsius'>°C</span>
@@ -199,7 +202,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     mode !== 'pressure' &&
                     onFieldChange('pump', {
                       target: 'pressure',
-                      pressure: Math.max(phase.pump.pressure || 0, 0),
+                      pressure: Math.max(phase.pump?.pressure || 0, 0),
                       flow: Math.max(phase.pump?.flow || 0, 0),
                     })
                   }
@@ -215,7 +218,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     mode !== 'flow' &&
                     onFieldChange('pump', {
                       target: 'flow',
-                      pressure: Math.max(phase.pump.pressure || 0, 0),
+                      pressure: Math.max(phase.pump?.pressure || 0, 0),
                       flow: Math.max(phase.pump?.flow || 0, 0),
                     })
                   }
@@ -247,7 +250,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                     mode !== 'hold-flow' &&
                     onFieldChange('pump', {
                       target: 'flow',
-                      pressure: Math.max(phase.pump.pressure || 0, 0),
+                      pressure: Math.max(phase.pump?.pressure || 0, 0),
                       flow: -1,
                     })
                   }
@@ -269,15 +272,14 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-power`} className='input w-full'>
-              <input
+              <NumberInput
                 id={`phase-${index}-power`}
                 className='grow'
-                type='number'
                 step='1'
                 min={0}
                 max={100}
-                value={pumpPower.toString()}
-                onChange={e => onFieldChange('pump', parseFloat(e.target.value))}
+                value={pumpPower}
+                onCommit={value => onFieldChange('pump', value)}
                 aria-label='Pump power as percentage'
               />
               <span aria-label='percent'>%</span>
@@ -299,15 +301,17 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
               </label>
               <div className='input-group'>
                 <label htmlFor={`phase-${index}-pressure`} className='input w-full'>
-                  <input
+                  <NumberInput
                     id={`phase-${index}-pressure`}
                     className='grow'
-                    type='number'
                     step='0.01'
-                    min={mode === 'pressure' ? '0.1' : '0'}
-                    value={pressure.toString()}
-                    onChange={e =>
-                      onFieldChange('pump', { ...phase.pump, pressure: parseFloat(e.target.value) })
+                    min={mode === 'pressure' ? 0.1 : 0}
+                    value={pressure}
+                    onCommit={value =>
+                      onFieldChange('pump', {
+                        ...phase.pump,
+                        pressure: value,
+                      })
                     }
                     aria-label='Pressure in bar'
                   />
@@ -324,17 +328,19 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
               </label>
               <div className='input-group'>
                 <label htmlFor={`phase-${index}-flow`} className='input w-full'>
-                  <input
+                  <NumberInput
                     id={`phase-${index}-flow`}
                     className='grow'
-                    type='number'
                     step='0.01'
-                    value={flow.toString()}
-                    onChange={e =>
-                      onFieldChange('pump', { ...phase.pump, flow: parseFloat(e.target.value) })
+                    value={flow}
+                    onCommit={value =>
+                      onFieldChange('pump', {
+                        ...phase.pump,
+                        flow: value,
+                      })
                     }
                     aria-label='Flow rate in grams per second'
-                    min={mode === 'flow' ? '0.1' : '0'}
+                    min={mode === 'flow' ? 0.1 : 0}
                   />
                   <span aria-label='grams per second'>g/s</span>
                 </label>
@@ -359,7 +365,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
                 onClick={() =>
                   onFieldChange('transition', { ...phase.transition, type: 'instant', duration: 0 })
                 }
-                aria-pressed={mode === 'off'}
+                aria-pressed={(phase.transition?.type || 'instant') === 'instant'}
                 aria-label='Instant'
               >
                 Instant
@@ -468,19 +474,18 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
               </label>
               <div className='input-group'>
                 <label htmlFor={`phase-${index}-transition-duration`} className='input w-full'>
-                  <input
+                  <NumberInput
                     id={`phase-${index}-transition-duration`}
                     className='grow'
-                    type='number'
                     value={phase.transition?.duration || 0}
-                    onChange={e =>
+                    onCommit={value =>
                       onFieldChange('transition', {
                         ...phase.transition,
-                        duration: parseFloat(e.target.value),
+                        duration: value,
                       })
                     }
                     aria-label={`Transition duration in ${rampUnit}`}
-                    min='0'
+                    min={0}
                     step='0.1'
                   />
                   <span aria-label={rampUnit}>{rampUnit}</span>

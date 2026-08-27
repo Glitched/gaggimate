@@ -1,7 +1,8 @@
 import Card from '../../components/Card.jsx';
-import { useCallback, useState, useContext } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState, useContext } from 'preact/hooks';
 import { HistoryChart } from './HistoryChart.jsx';
 import { downloadJson, downloadText } from '../../utils/download.js';
+import { showToast } from '../../services/toast.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
@@ -36,6 +37,8 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [copiedForLlm, setCopiedForLlm] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const copiedTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
 
   const date = new Date(shot.timestamp * 1000);
 
@@ -85,7 +88,8 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     try {
       await navigator.clipboard.writeText(text);
       setCopiedForLlm(true);
-      setTimeout(() => setCopiedForLlm(false), 2000);
+      clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopiedForLlm(false), 2000);
     } catch (error) {
       console.error('Clipboard write failed, falling back to download:', error);
       downloadText(text, 'shot-' + shot.id + '.md');
@@ -148,10 +152,10 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
         await visualizerService.uploadShot(shotWithNotes, username, password, profileData);
 
         // Show success message
-        alert('Shot uploaded successfully to visualizer.coffee!');
+        showToast('Shot uploaded to visualizer.coffee', { type: 'success' });
       } catch (error) {
         console.error('Upload failed:', error);
-        alert(`Upload failed: ${error.message}`);
+        showToast(`Upload failed: ${error.message}`, { type: 'error' });
         throw error; // Re-throw to prevent modal from closing
       } finally {
         setIsUploading(false);

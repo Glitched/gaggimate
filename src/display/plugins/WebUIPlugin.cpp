@@ -43,6 +43,33 @@ static AsyncWebSocketSharedBuffer toWsBuffer(JsonDocument &doc) {
     return buffer;
 }
 
+// Shared by the WebSocket and REST profile-save paths; string literal so
+// ArduinoJson stores the pointer without copying.
+static constexpr const char *PROFILE_VALIDATION_ERROR =
+    "Invalid profile: 'label' (string), 'type' (string) and a non-empty 'phases' array are required";
+
+// Buffers a request body chunk by chunk into request->_tempObject. Ownership:
+// the consuming handler takes the pointer (and frees it); if none does, the
+// request destructor frees it. Oversized or inconsistent bodies are dropped,
+// which the handler observes as a missing body.
+static void bufferJsonBody(AsyncWebServerRequest *request, const uint8_t *data, size_t len, size_t index, size_t total,
+                           size_t maxLen) {
+    if (total == 0 || total > maxLen || index + len > total) {
+        return;
+    }
+    if (index == 0) {
+        request->_tempObject = ps_malloc(total + 1);
+    }
+    auto *buf = static_cast<char *>(request->_tempObject);
+    if (buf == nullptr) {
+        return;
+    }
+    memcpy(buf + index, data, len);
+    if (index + len == total) {
+        buf[total] = '\0';
+    }
+}
+
 // Route mbedTLS allocations to PSRAM.
 static void *mbedtlsPsramCalloc(size_t n, size_t size) { // NOSONAR
     void *p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -362,7 +389,23 @@ void WebUIPlugin::setupServer() {
               [](AsyncWebServerRequest *request) { request->redirect(LOCAL_URL); });       // firefox captive portal call home
     server.on("/success.txt", [](AsyncWebServerRequest *request) { request->send(200); }); // firefox captive portal call home
     server.on("/ncsi.txt", [](AsyncWebServerRequest *request) { request->redirect(LOCAL_URL); }); // windows call home
-    server.on("/api/settings", [this](AsyncWebServerRequest *request) { handleSettings(request); });
+    // Settings accepts a JSON body (preferred, partial update) or legacy form
+    // args. The JSON body streams in through the body callback and is buffered
+    // into _tempObject, which the request frees if we never consume it.
+    server.on(
+        "/api/settings", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleSettings(request); }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            bufferJsonBody(request, data, len, index, total, 16 * 1024);
+        });
+    // REST profile API for external tools (scripts, agents): the WebSocket
+    // req:profiles:* contract needs a stateful client, this needs only HTTP.
+    // The plain-string route matches /api/profiles and all subpaths.
+    server.on(
+        "/api/profiles", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleProfilesRest(request); }, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Same cap as the WebSocket profile upload buffer.
+            bufferJsonBody(request, data, len, index, total, 64 * 1024);
+        });
     server.on("/api/status", [this](AsyncWebServerRequest *request) {
         AsyncResponseStream *response = request->beginResponseStream("application/json");
         JsonDocument doc(&psramAllocator);
@@ -661,12 +704,16 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
     } else if (type == "req:profiles:save") {
         auto obj = request["profile"].as<JsonObject>();
         Profile profile;
-        parseProfile(obj, profile);
-        if (!profileManager->saveProfile(profile)) {
+        // A rejected parse used to be saved anyway, silently writing a
+        // half-parsed profile to flash. Refuse it instead.
+        if (!parseProfile(obj, profile)) {
+            response["error"] = PROFILE_VALIDATION_ERROR;
+        } else if (!profileManager->saveProfile(profile)) {
             response["error"] = F("Save failed");
+        } else {
+            auto respObj = response["profile"].to<JsonObject>();
+            writeProfile(respObj, profile);
         }
-        auto respObj = response["profile"].to<JsonObject>();
-        writeProfile(respObj, profile);
     } else if (type == "req:profiles:delete") {
         auto id = request["id"].as<String>();
         if (!profileManager->deleteProfile(id)) {
@@ -700,114 +747,172 @@ void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request)
     ws.text(clientId, toWsBuffer(response));
 }
 
+namespace {
+// Uniform view over the two /api/settings POST encodings: a JSON object body
+// (preferred) or legacy form args. Only keys present in the request are
+// applied, so a POST is a partial update in both encodings — omitting a key
+// never resets it. Note this changes the historical form-checkbox contract:
+// booleans were presence-based (an omitted checkbox cleared the flag), which
+// forced clients to resend the whole settings payload on every save. Boolean
+// form args now need an explicit value; anything except "0"/"false" is true.
+struct SettingsPatch {
+    AsyncWebServerRequest *request;
+    JsonDocument *json;
+
+    bool has(const char *key) const { return json != nullptr ? !(*json)[key].isNull() : request->hasArg(key); }
+    String str(const char *key) const { return json != nullptr ? (*json)[key].as<String>() : request->arg(key); }
+    int asInt(const char *key) const { return json != nullptr ? (*json)[key].as<int>() : request->arg(key).toInt(); }
+    float asFloat(const char *key) const { return json != nullptr ? (*json)[key].as<float>() : request->arg(key).toFloat(); }
+    double asDouble(const char *key) const { return json != nullptr ? (*json)[key].as<double>() : request->arg(key).toDouble(); }
+    bool asBool(const char *key) const {
+        if (json != nullptr) {
+            return (*json)[key].as<bool>();
+        }
+        const String v = request->arg(key);
+        return !(v == "0" || v == "false");
+    }
+};
+} // namespace
+
 void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
+    bool restartRequested = false;
     if (request->method() == HTTP_POST) {
-        controller->getSettings().batchUpdate([request](Settings *settings) {
-            if (request->hasArg("startupMode"))
-                settings->setStartupMode(request->arg("startupMode") == "brew" ? MODE_BREW : MODE_STANDBY);
-            if (request->hasArg("startupProfile"))
-                settings->setStartupProfile(request->arg("startupProfile"));
-            if (request->hasArg("targetSteamTemp"))
-                settings->setTargetSteamTemp(request->arg("targetSteamTemp").toInt());
-            if (request->hasArg("targetWaterTemp"))
-                settings->setTargetWaterTemp(request->arg("targetWaterTemp").toInt());
-            if (request->hasArg("temperatureOffset"))
-                settings->setTemperatureOffset(request->arg("temperatureOffset").toInt());
-            if (request->hasArg("pressureScaling"))
-                settings->setPressureScaling(request->arg("pressureScaling").toFloat());
-            if (request->hasArg("pid"))
-                settings->setPid(request->arg("pid"));
-            if (request->hasArg("pumpModelCoeffs"))
-                settings->setPumpModelCoeffs(request->arg("pumpModelCoeffs"));
-            if (request->hasArg("pumpSlipCoeffs"))
-                settings->setPumpSlipCoeffs(request->arg("pumpSlipCoeffs"));
-            if (request->hasArg("wifiSsid"))
-                settings->setWifiSsid(request->arg("wifiSsid"));
-            if (request->hasArg("mdnsName"))
-                settings->setMdnsName(request->arg("mdnsName"));
-            if (request->hasArg("otaUploadToken"))
-                settings->setOtaUploadToken(request->arg("otaUploadToken"));
-            if (request->hasArg("wifiPassword") && request->arg("wifiPassword") != "---unchanged---")
-                settings->setWifiPassword(request->arg("wifiPassword"));
-            if (request->hasArg("apPassword") && request->arg("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
-                settings->setWifiApPassword(request->arg("apPassword"));
-            settings->setHomekit(request->hasArg("homekit"));
-            settings->setBoilerFillActive(request->hasArg("boilerFillActive"));
-            if (request->hasArg("startupFillTime"))
-                settings->setStartupFillTime(request->arg("startupFillTime").toInt() * 1000);
-            if (request->hasArg("steamFillTime"))
-                settings->setSteamFillTime(request->arg("steamFillTime").toInt() * 1000);
-            settings->setSmartGrindActive(request->hasArg("smartGrindActive"));
-            if (request->hasArg("smartGrindIp"))
-                settings->setSmartGrindIp(request->arg("smartGrindIp"));
-            if (request->hasArg("smartGrindMode"))
-                settings->setSmartGrindMode(request->arg("smartGrindMode").toInt());
-            settings->setHomeAssistant(request->hasArg("homeAssistant"));
-            if (request->hasArg("haUser"))
-                settings->setHomeAssistantUser(request->arg("haUser"));
-            if (request->hasArg("haPassword"))
-                settings->setHomeAssistantPassword(request->arg("haPassword"));
-            if (request->hasArg("haIP"))
-                settings->setHomeAssistantIP(request->arg("haIP"));
-            if (request->hasArg("haPort"))
-                settings->setHomeAssistantPort(request->arg("haPort").toInt());
-            if (request->hasArg("haTopic"))
-                settings->setHomeAssistantTopic(request->arg("haTopic"));
-            settings->setMomentaryButtons(request->hasArg("momentaryButtons"));
-            settings->setDelayAdjust(request->hasArg("delayAdjust"));
-            if (request->hasArg("brewDelay"))
-                settings->setBrewDelay(request->arg("brewDelay").toDouble());
-            if (request->hasArg("grindDelay"))
-                settings->setGrindDelay(request->arg("grindDelay").toDouble());
-            if (request->hasArg("timezone"))
-                settings->setTimezone(request->arg("timezone"));
-            settings->setClockFormat(request->hasArg("clock24hFormat"));
-            if (request->hasArg("standbyTimeout"))
-                settings->setStandbyTimeout(request->arg("standbyTimeout").toInt() * 1000);
-            if (request->hasArg("mainBrightness"))
-                settings->setMainBrightness(request->arg("mainBrightness").toInt());
-            if (request->hasArg("standbyBrightness"))
-                settings->setStandbyBrightness(request->arg("standbyBrightness").toInt());
-            if (request->hasArg("standbyBrightnessTimeout"))
-                settings->setStandbyBrightnessTimeout(request->arg("standbyBrightnessTimeout").toInt() * 1000);
-            if (request->hasArg("steamPumpPercentage"))
-                settings->setSteamPumpPercentage(request->arg("steamPumpPercentage").toFloat());
-            if (request->hasArg("steamPumpCutoff"))
-                settings->setSteamPumpCutoff(request->arg("steamPumpCutoff").toFloat());
-            if (request->hasArg("themeMode"))
-                settings->setThemeMode(request->arg("themeMode").toInt());
-            if (request->hasArg("sunriseIdle"))
-                settings->setSunriseIdle(request->arg("sunriseIdle"));
-            if (request->hasArg("sunriseActive"))
-                settings->setSunriseActive(request->arg("sunriseActive"));
-            if (request->hasArg("sunriseFinished"))
-                settings->setSunriseFinished(request->arg("sunriseFinished"));
-            if (request->hasArg("sunriseError"))
-                settings->setSunriseError(request->arg("sunriseError"));
-            if (request->hasArg("sunriseExtBrightness"))
-                settings->setSunriseExtBrightness(request->arg("sunriseExtBrightness").toInt());
-            if (request->hasArg("emptyTankDistance"))
-                settings->setEmptyTankDistance(request->arg("emptyTankDistance").toInt());
-            if (request->hasArg("fullTankDistance"))
-                settings->setFullTankDistance(request->arg("fullTankDistance").toInt());
-            if (request->hasArg("altRelayFunction"))
-                settings->setAltRelayFunction(request->arg("altRelayFunction").toInt());
-            if (request->hasArg("buttonBehavior"))
-                settings->setButtonBehaviorList(explode(request->arg("buttonBehavior"), ','));
-            if (request->hasArg("commutationGain"))
-                settings->setCommutationGain(request->arg("commutationGain").toFloat());
-            if (request->hasArg("convergenceGain"))
-                settings->setConvergenceGain(request->arg("convergenceGain").toFloat());
-            if (request->hasArg("integralGain"))
-                settings->setIntegralGain(request->arg("integralGain").toFloat());
-            if (request->hasArg("maxPumpPower"))
-                settings->setMaxPumpPower(request->arg("maxPumpPower").toFloat());
-            if (request->hasArg("savedScale"))
-                settings->setSavedScale(request->arg("savedScale"));
-            settings->setAutoWakeupEnabled(request->hasArg("autowakeupEnabled"));
-            if (request->hasArg("autowakeupSchedules")) {
+        JsonDocument json(&psramAllocator);
+        // Take ownership of the buffered body unconditionally so it can't
+        // outlive this handler whatever the content type was.
+        auto *body = static_cast<char *>(request->_tempObject);
+        request->_tempObject = nullptr;
+        const bool isJson = request->contentType().startsWith("application/json");
+        if (isJson) {
+            // const char* input makes ArduinoJson copy the strings instead of
+            // zero-copy linking into the buffer we free right after.
+            const DeserializationError err = deserializeJson(json, static_cast<const char *>(body != nullptr ? body : ""));
+            free(body);
+            body = nullptr;
+            if (err != DeserializationError::Ok || !json.is<JsonObjectConst>()) {
+                request->send(400, "application/json", R"({"error":"invalid JSON body"})");
+                return;
+            }
+        } else {
+            free(body);
+            body = nullptr;
+        }
+        const SettingsPatch patch{request, isJson ? &json : nullptr};
+        restartRequested = patch.has("restart") && patch.asBool("restart");
+        controller->getSettings().batchUpdate([&patch](Settings *settings) {
+            if (patch.has("startupMode"))
+                settings->setStartupMode(patch.str("startupMode") == "brew" ? MODE_BREW : MODE_STANDBY);
+            if (patch.has("startupProfile"))
+                settings->setStartupProfile(patch.str("startupProfile"));
+            if (patch.has("targetSteamTemp"))
+                settings->setTargetSteamTemp(patch.asInt("targetSteamTemp"));
+            if (patch.has("targetWaterTemp"))
+                settings->setTargetWaterTemp(patch.asInt("targetWaterTemp"));
+            if (patch.has("temperatureOffset"))
+                settings->setTemperatureOffset(patch.asInt("temperatureOffset"));
+            if (patch.has("pressureScaling"))
+                settings->setPressureScaling(patch.asFloat("pressureScaling"));
+            if (patch.has("pid"))
+                settings->setPid(patch.str("pid"));
+            if (patch.has("pumpModelCoeffs"))
+                settings->setPumpModelCoeffs(patch.str("pumpModelCoeffs"));
+            if (patch.has("pumpSlipCoeffs"))
+                settings->setPumpSlipCoeffs(patch.str("pumpSlipCoeffs"));
+            if (patch.has("wifiSsid"))
+                settings->setWifiSsid(patch.str("wifiSsid"));
+            if (patch.has("mdnsName"))
+                settings->setMdnsName(patch.str("mdnsName"));
+            if (patch.has("otaUploadToken"))
+                settings->setOtaUploadToken(patch.str("otaUploadToken"));
+            if (patch.has("wifiPassword") && patch.str("wifiPassword") != "---unchanged---")
+                settings->setWifiPassword(patch.str("wifiPassword"));
+            if (patch.has("apPassword") && patch.str("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
+                settings->setWifiApPassword(patch.str("apPassword"));
+            if (patch.has("homekit"))
+                settings->setHomekit(patch.asBool("homekit"));
+            if (patch.has("boilerFillActive"))
+                settings->setBoilerFillActive(patch.asBool("boilerFillActive"));
+            if (patch.has("startupFillTime"))
+                settings->setStartupFillTime(patch.asInt("startupFillTime") * 1000);
+            if (patch.has("steamFillTime"))
+                settings->setSteamFillTime(patch.asInt("steamFillTime") * 1000);
+            if (patch.has("smartGrindActive"))
+                settings->setSmartGrindActive(patch.asBool("smartGrindActive"));
+            if (patch.has("smartGrindIp"))
+                settings->setSmartGrindIp(patch.str("smartGrindIp"));
+            if (patch.has("smartGrindMode"))
+                settings->setSmartGrindMode(patch.asInt("smartGrindMode"));
+            if (patch.has("homeAssistant"))
+                settings->setHomeAssistant(patch.asBool("homeAssistant"));
+            if (patch.has("haUser"))
+                settings->setHomeAssistantUser(patch.str("haUser"));
+            if (patch.has("haPassword"))
+                settings->setHomeAssistantPassword(patch.str("haPassword"));
+            if (patch.has("haIP"))
+                settings->setHomeAssistantIP(patch.str("haIP"));
+            if (patch.has("haPort"))
+                settings->setHomeAssistantPort(patch.asInt("haPort"));
+            if (patch.has("haTopic"))
+                settings->setHomeAssistantTopic(patch.str("haTopic"));
+            if (patch.has("momentaryButtons"))
+                settings->setMomentaryButtons(patch.asBool("momentaryButtons"));
+            if (patch.has("delayAdjust"))
+                settings->setDelayAdjust(patch.asBool("delayAdjust"));
+            if (patch.has("brewDelay"))
+                settings->setBrewDelay(patch.asDouble("brewDelay"));
+            if (patch.has("grindDelay"))
+                settings->setGrindDelay(patch.asDouble("grindDelay"));
+            if (patch.has("timezone"))
+                settings->setTimezone(patch.str("timezone"));
+            if (patch.has("clock24hFormat"))
+                settings->setClockFormat(patch.asBool("clock24hFormat"));
+            if (patch.has("standbyTimeout"))
+                settings->setStandbyTimeout(patch.asInt("standbyTimeout") * 1000);
+            if (patch.has("mainBrightness"))
+                settings->setMainBrightness(patch.asInt("mainBrightness"));
+            if (patch.has("standbyBrightness"))
+                settings->setStandbyBrightness(patch.asInt("standbyBrightness"));
+            if (patch.has("standbyBrightnessTimeout"))
+                settings->setStandbyBrightnessTimeout(patch.asInt("standbyBrightnessTimeout") * 1000);
+            if (patch.has("steamPumpPercentage"))
+                settings->setSteamPumpPercentage(patch.asFloat("steamPumpPercentage"));
+            if (patch.has("steamPumpCutoff"))
+                settings->setSteamPumpCutoff(patch.asFloat("steamPumpCutoff"));
+            if (patch.has("themeMode"))
+                settings->setThemeMode(patch.asInt("themeMode"));
+            if (patch.has("sunriseIdle"))
+                settings->setSunriseIdle(patch.str("sunriseIdle"));
+            if (patch.has("sunriseActive"))
+                settings->setSunriseActive(patch.str("sunriseActive"));
+            if (patch.has("sunriseFinished"))
+                settings->setSunriseFinished(patch.str("sunriseFinished"));
+            if (patch.has("sunriseError"))
+                settings->setSunriseError(patch.str("sunriseError"));
+            if (patch.has("sunriseExtBrightness"))
+                settings->setSunriseExtBrightness(patch.asInt("sunriseExtBrightness"));
+            if (patch.has("emptyTankDistance"))
+                settings->setEmptyTankDistance(patch.asInt("emptyTankDistance"));
+            if (patch.has("fullTankDistance"))
+                settings->setFullTankDistance(patch.asInt("fullTankDistance"));
+            if (patch.has("altRelayFunction"))
+                settings->setAltRelayFunction(patch.asInt("altRelayFunction"));
+            if (patch.has("buttonBehavior"))
+                settings->setButtonBehaviorList(explode(patch.str("buttonBehavior"), ','));
+            if (patch.has("commutationGain"))
+                settings->setCommutationGain(patch.asFloat("commutationGain"));
+            if (patch.has("convergenceGain"))
+                settings->setConvergenceGain(patch.asFloat("convergenceGain"));
+            if (patch.has("integralGain"))
+                settings->setIntegralGain(patch.asFloat("integralGain"));
+            if (patch.has("maxPumpPower"))
+                settings->setMaxPumpPower(patch.asFloat("maxPumpPower"));
+            if (patch.has("savedScale"))
+                settings->setSavedScale(patch.str("savedScale"));
+            if (patch.has("autowakeupEnabled"))
+                settings->setAutoWakeupEnabled(patch.asBool("autowakeupEnabled"));
+            if (patch.has("autowakeupSchedules")) {
                 // Handle schedule format with days
-                String schedulesStr = request->arg("autowakeupSchedules");
+                String schedulesStr = patch.str("autowakeupSchedules");
                 std::vector<AutoWakeupSchedule> schedules;
 
                 if (schedulesStr.length() > 0) {
@@ -932,8 +1037,169 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     serializeJson(doc, *response);
     request->send(response);
 
-    if (request->method() == HTTP_POST && request->hasArg("restart"))
+    if (restartRequested)
         ESP.restart();
+}
+
+// REST profile API: JSON in/out, full-document writes with save-echo.
+//   GET    /api/profiles            list (add ?minimal=1 for id+label only)
+//   POST   /api/profiles            create (409 if the body's id already exists)
+//   GET    /api/profiles/{id}       load
+//   PUT    /api/profiles/{id}       replace (the path id wins over the body's)
+//   DELETE /api/profiles/{id}       delete
+//   POST   /api/profiles/{id}/select | /favorite | /unfavorite
+// Invalid profile documents are refused with 422 — never partially stored.
+void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
+    // Split "/api/profiles[/{id}[/{action}]]" into id + action.
+    String rest = request->url().substring(String("/api/profiles").length());
+    if (rest.startsWith("/"))
+        rest = rest.substring(1);
+    if (rest.endsWith("/"))
+        rest = rest.substring(0, rest.length() - 1);
+    String id = rest;
+    String action = "";
+    const int slash = rest.indexOf('/');
+    if (slash >= 0) {
+        id = rest.substring(0, slash);
+        action = rest.substring(slash + 1);
+    }
+
+    const auto sendJson = [request](int code, JsonDocument &doc) {
+        AsyncResponseStream *response = request->beginResponseStream("application/json");
+        response->setCode(code);
+        serializeJson(doc, *response);
+        request->send(response);
+    };
+    const auto sendError = [&sendJson](int code, const char *message) {
+        JsonDocument doc(&psramAllocator);
+        doc["error"] = message;
+        sendJson(code, doc);
+    };
+    const auto sendProfile = [&sendJson](const Profile &profile, int code) {
+        JsonDocument doc(&psramAllocator);
+        auto obj = doc.to<JsonObject>();
+        writeProfile(obj, profile);
+        sendJson(code, doc);
+    };
+    const auto sendOk = [request]() { request->send(200, "application/json", R"({"ok":true})"); };
+
+    // Take ownership of any buffered JSON body.
+    auto *body = static_cast<char *>(request->_tempObject);
+    request->_tempObject = nullptr;
+    JsonDocument bodyDoc(&psramAllocator);
+    bool bodyIsObject = false;
+    if (body != nullptr) {
+        bodyIsObject = deserializeJson(bodyDoc, static_cast<const char *>(body)) == DeserializationError::Ok &&
+                       bodyDoc.is<JsonObjectConst>();
+        free(body);
+    }
+
+    if (id.isEmpty()) { // Collection: /api/profiles
+        if (request->method() == HTTP_GET) {
+            JsonDocument doc(&psramAllocator);
+            auto arr = doc["profiles"].to<JsonArray>();
+            const bool minimal = request->hasArg("minimal");
+            for (auto const &profileId : profileManager->listProfiles()) {
+                Profile profile{};
+                if (!profileManager->loadProfile(profileId, profile)) {
+                    continue; // Same policy as the WS list: skip unreadable entries.
+                }
+                auto p = arr.add<JsonObject>();
+                if (minimal) {
+                    p["id"] = profile.id;
+                    p["label"] = profile.label;
+                } else {
+                    writeProfile(p, profile);
+                }
+            }
+            sendJson(200, doc);
+            return;
+        }
+        if (request->method() == HTTP_POST) {
+            if (!bodyIsObject) {
+                return sendError(400, "Request body must be a JSON profile object");
+            }
+            Profile profile;
+            auto obj = bodyDoc.as<JsonObject>();
+            if (!parseProfile(obj, profile)) {
+                return sendError(422, PROFILE_VALIDATION_ERROR);
+            }
+            if (!profile.id.isEmpty() && profileManager->profileExists(profile.id)) {
+                return sendError(409, "Profile id already exists; use PUT /api/profiles/{id} to update");
+            }
+            if (!profileManager->saveProfile(profile)) {
+                return sendError(500, "Save failed");
+            }
+            sendProfile(profile, 201);
+            return;
+        }
+        return sendError(405, "Method not allowed");
+    }
+
+    if (action.isEmpty()) { // Item: /api/profiles/{id}
+        if (request->method() == HTTP_GET) {
+            Profile profile;
+            if (!profileManager->loadProfile(id, profile)) {
+                return sendError(404, "Profile not found");
+            }
+            sendProfile(profile, 200);
+            return;
+        }
+        if (request->method() == HTTP_PUT) {
+            if (!profileManager->profileExists(id)) {
+                return sendError(404, "Profile not found; use POST /api/profiles to create");
+            }
+            if (!bodyIsObject) {
+                return sendError(400, "Request body must be a JSON profile object");
+            }
+            Profile profile;
+            auto obj = bodyDoc.as<JsonObject>();
+            if (!parseProfile(obj, profile)) {
+                return sendError(422, PROFILE_VALIDATION_ERROR);
+            }
+            profile.id = id;
+            if (!profileManager->saveProfile(profile)) {
+                return sendError(500, "Save failed");
+            }
+            sendProfile(profile, 200);
+            return;
+        }
+        if (request->method() == HTTP_DELETE) {
+            if (!profileManager->profileExists(id)) {
+                return sendError(404, "Profile not found");
+            }
+            if (!profileManager->deleteProfile(id)) {
+                return sendError(500, "Delete failed");
+            }
+            sendOk();
+            return;
+        }
+        return sendError(405, "Method not allowed");
+    }
+
+    // Action: /api/profiles/{id}/{action}
+    if (request->method() != HTTP_POST) {
+        return sendError(405, "Method not allowed");
+    }
+    if (!profileManager->profileExists(id)) {
+        return sendError(404, "Profile not found");
+    }
+    if (action == "select") {
+        profileManager->selectProfile(id);
+        sendOk();
+        return;
+    }
+    if (action == "favorite") {
+        profileManager->addFavoritedProfile(id);
+        sendOk();
+        return;
+    }
+    if (action == "unfavorite") {
+        profileManager->removeFavoritedProfile(id);
+        sendOk();
+        return;
+    }
+    sendError(404, "Unknown action; expected select, favorite or unfavorite");
 }
 
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {

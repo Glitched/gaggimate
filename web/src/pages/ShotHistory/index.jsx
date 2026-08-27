@@ -44,6 +44,14 @@ export function ShotHistory() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const loadHistoryAbortRef = useRef(null);
+
+  // One controller for all per-shot .slog fetches: navigating away must not
+  // leave requests queued on the ESP32's tiny HTTP server.
+  const shotLoadAbortRef = useRef(null);
+  useEffect(() => {
+    shotLoadAbortRef.current = new AbortController();
+    return () => shotLoadAbortRef.current?.abort();
+  }, []);
   const loadHistory = async () => {
     // Abort any in-flight fetch to prevent request pileup on the ESP32.
     loadHistoryAbortRef.current?.abort();
@@ -81,6 +89,7 @@ export function ShotHistory() {
               rating: newShot.rating,
               volume: newShot.volume,
               incomplete: newShot.incomplete,
+              hasNotes: newShot.hasNotes,
             };
           }
           return newShot;
@@ -104,9 +113,14 @@ export function ShotHistory() {
   const onDelete = useCallback(
     async id => {
       setLoading(true);
-      await apiService.request({ tp: 'req:history:delete', id });
-      // Reload the index after deletion
-      await loadHistory();
+      try {
+        await apiService.request({ tp: 'req:history:delete', id });
+        // Reload the index after deletion
+        await loadHistory();
+      } catch (error) {
+        console.error('Failed to delete shot:', error);
+        setLoading(false);
+      }
     },
     [apiService],
   );
@@ -118,7 +132,8 @@ export function ShotHistory() {
 
   // Filtered and sorted history with pagination
   const { paginatedHistory, totalPages, totalFilteredItems } = useMemo(() => {
-    let filtered = history;
+    // Copy so the in-place sort below never reorders the `history` state array.
+    let filtered = [...history];
 
     // Apply search filter
     if (searchTerm.trim()) {
@@ -179,13 +194,25 @@ export function ShotHistory() {
     const totalFilteredItems = filtered.length;
     const totalPages = Math.ceil(totalFilteredItems / itemsPerPage);
 
+    // Clamp so deleting/filtering away the last page's items doesn't leave the
+    // view on a page past the end showing "no shots".
+    const page = Math.min(currentPage, Math.max(1, totalPages));
+
     // Apply pagination
-    const startIndex = (currentPage - 1) * itemsPerPage;
+    const startIndex = (page - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     const paginatedHistory = filtered.slice(startIndex, endIndex);
 
     return { paginatedHistory, totalPages, totalFilteredItems };
   }, [history, searchTerm, filterBy, sortBy, sortOrder, currentPage]);
+
+  // Keep the page state itself in range too, so the pager controls agree with
+  // the clamped view.
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
 
   if (loading) {
     return (
@@ -287,7 +314,9 @@ export function ShotHistory() {
               try {
                 // Pad ID to 6 digits with zeros to match backend filename format
                 const paddedId = id.padStart(6, '0');
-                const resp = await fetch(`/api/history/${paddedId}.slog`);
+                const resp = await fetch(`/api/history/${paddedId}.slog`, {
+                  signal: shotLoadAbortRef.current?.signal,
+                });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const buf = await resp.arrayBuffer();
                 const parsed = parseBinaryShot(buf, id);
@@ -309,7 +338,7 @@ export function ShotHistory() {
                   ),
                 );
               } catch (e) {
-                console.error('Failed loading shot', e);
+                if (e.name !== 'AbortError') console.error('Failed loading shot', e);
               }
             }}
           />

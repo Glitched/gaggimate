@@ -5,9 +5,12 @@ import { faChevronDown } from '@fortawesome/free-solid-svg-icons/faChevronDown';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
+import { faArrowUp } from '@fortawesome/free-solid-svg-icons/faArrowUp';
+import { faArrowDown } from '@fortawesome/free-solid-svg-icons/faArrowDown';
 import { Tooltip } from '../../components/Tooltip.jsx';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
-import { getProfilePhases, removePhaseAt, updatePhaseAt } from './profilePhases.js';
+import { NumberInput } from '../../components/NumberInput.jsx';
+import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
 
 export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
@@ -51,6 +54,13 @@ export function StandardProfileForm(props) {
     });
   };
 
+  const onPhaseMove = (index, direction) => {
+    onChange({
+      ...data,
+      phases: movePhase(phases, index, index + direction),
+    });
+  };
+
   return (
     <form
       onSubmit={e => {
@@ -63,7 +73,7 @@ export function StandardProfileForm(props) {
           data={data}
           onChangeLabel={e => onFieldChange('label', e.target.value)}
           onChangeDescription={e => onFieldChange('description', e.target.value)}
-          onChangeTemperature={e => onFieldChange('temperature', e.target.value)}
+          onCommitTemperature={value => onFieldChange('temperature', value)}
           onChangeUtility={e => onFieldChange('utility', !!e.target.checked)}
         />
 
@@ -84,6 +94,10 @@ export function StandardProfileForm(props) {
                   index={index}
                   onChange={phase => onPhaseChange(index, phase)}
                   onRemove={() => onPhaseRemove(index)}
+                  onMoveUp={() => onPhaseMove(index, -1)}
+                  onMoveDown={() => onPhaseMove(index, 1)}
+                  isFirst={index === 0}
+                  isLast={index === phases.length - 1}
                   pressureAvailable={pressureAvailable}
                 />
               </div>
@@ -123,7 +137,17 @@ export function StandardProfileForm(props) {
   );
 }
 
-function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
+function Phase({
+  phase,
+  index,
+  onChange,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
+  pressureAvailable,
+}) {
   const onFieldChange = (field, value) => {
     onChange({
       ...phase,
@@ -154,10 +178,13 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
   const volumetricTarget = targets.find(t => t.type === 'volumetric') || {};
   const targetWeight = volumetricTarget?.value || 0;
 
-  const pumpPower = isNumber(phase.pump) ? phase.pump : 100;
-  const pressure = !isNumber(phase.pump) ? phase.pump.pressure : 0;
-  const flow = !isNumber(phase.pump) ? phase.pump.flow : 0;
-  const mode = isNumber(phase.pump) ? (phase.pump === 0 ? 'off' : 'power') : phase.pump.target;
+  // Imported profiles can lack `pump` entirely — treat that as full power
+  // instead of crashing on `undefined.pressure`.
+  const pump = phase.pump ?? 100;
+  const pumpPower = isNumber(pump) ? pump : 100;
+  const pressure = !isNumber(pump) ? pump.pressure : 0;
+  const flow = !isNumber(pump) ? pump.flow : 0;
+  const mode = isNumber(pump) ? (pump === 0 ? 'off' : 'power') : pump.target;
 
   return (
     <div
@@ -194,6 +221,28 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
               onChange={e => onFieldChange('name', e.target.value)}
               aria-label='Enter a name for this phase'
             />
+            <Tooltip content='Move phase earlier'>
+              <button
+                type='button'
+                onClick={onMoveUp}
+                disabled={isFirst}
+                className='btn btn-sm btn-ghost'
+                aria-label={`Move phase ${index + 1} earlier`}
+              >
+                <FontAwesomeIcon icon={faArrowUp} />
+              </button>
+            </Tooltip>
+            <Tooltip content='Move phase later'>
+              <button
+                type='button'
+                onClick={onMoveDown}
+                disabled={isLast}
+                className='btn btn-sm btn-ghost'
+                aria-label={`Move phase ${index + 1} later`}
+              >
+                <FontAwesomeIcon icon={faArrowDown} />
+              </button>
+            </Tooltip>
             <Tooltip content='Delete this phase'>
               <button
                 type='button'
@@ -215,13 +264,12 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-duration`} className='input w-full'>
-              <input
+              <NumberInput
                 id={`phase-${index}-duration`}
                 className='grow'
-                type='number'
-                min='1'
+                min={0}
                 value={phase.duration}
-                onChange={e => onFieldChange('duration', e.target.value)}
+                onCommit={value => onFieldChange('duration', value)}
                 aria-label='Duration in seconds'
               />
               <span aria-label='seconds'>s</span>
@@ -234,14 +282,13 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-target`} className='input w-full'>
-              <input
+              <NumberInput
                 id={`phase-${index}-target`}
                 className='grow'
-                type='number'
                 value={targetWeight}
-                onChange={e => onVolumetricTargetChange(parseFloat(e.target.value))}
+                onCommit={onVolumetricTargetChange}
                 aria-label='Target weight in grams'
-                min='0'
+                min={0}
                 step='0.1'
               />
               <span aria-label='grams'>g</span>
@@ -345,15 +392,14 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
           </label>
           <div className='input-group'>
             <label htmlFor={`phase-${index}-power`} className='input w-full'>
-              <input
+              <NumberInput
                 id={`phase-${index}-power`}
                 className='grow'
-                type='number'
                 step='1'
                 min={0}
                 max={100}
                 value={pumpPower}
-                onChange={e => onFieldChange('pump', parseFloat(e.target.value))}
+                onCommit={value => onFieldChange('pump', value)}
                 aria-label='Pump power as percentage'
               />
               <span aria-label='percent'>%</span>
@@ -370,17 +416,19 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
             </label>
             <div className='input-group'>
               <label htmlFor={`phase-${index}-pressure`} className='input w-full'>
-                <input
+                <NumberInput
                   id={`phase-${index}-pressure`}
                   className='grow'
-                  type='number'
                   step='0.01'
                   value={pressure}
-                  onChange={e =>
-                    onFieldChange('pump', { ...phase.pump, pressure: parseFloat(e.target.value) })
+                  onCommit={value =>
+                    onFieldChange('pump', {
+                      ...phase.pump,
+                      pressure: value,
+                    })
                   }
                   aria-label='Pressure in bar'
-                  min='0'
+                  min={0}
                 />
                 <span aria-label='bar'>bar</span>
               </label>
@@ -392,17 +440,19 @@ function Phase({ phase, index, onChange, onRemove, pressureAvailable }) {
             </label>
             <div className='input-group'>
               <label htmlFor={`phase-${index}-flow`} className='input w-full'>
-                <input
+                <NumberInput
                   id={`phase-${index}-flow`}
                   className='grow'
-                  type='number'
                   step='0.01'
                   value={flow}
-                  onChange={e =>
-                    onFieldChange('pump', { ...phase.pump, flow: parseFloat(e.target.value) })
+                  onCommit={value =>
+                    onFieldChange('pump', {
+                      ...phase.pump,
+                      flow: value,
+                    })
                   }
                   aria-label='Flow rate in grams per second'
-                  min='0'
+                  min={0}
                 />
                 <span aria-label='grams per second'>g/s</span>
               </label>

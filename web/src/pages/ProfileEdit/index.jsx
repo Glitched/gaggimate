@@ -1,5 +1,5 @@
 import { useLocation, useRoute } from 'preact-iso';
-import { useCallback, useEffect, useState, useContext } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState, useContext } from 'preact/hooks';
 import {
   CategoryScale,
   Chart,
@@ -17,8 +17,8 @@ import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faFileExport } from '@fortawesome/free-solid-svg-icons/faFileExport';
+import { showToast } from '../../services/toast.js';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
 
 Chart.register(
   LineController,
@@ -41,10 +41,16 @@ export function ProfileEdit() {
   const [saving, setSaving] = useState(false);
   const { params } = useRoute();
   const [data, setData] = useState(null);
+  // Snapshot of the loaded (or last saved) profile for unsaved-changes checks.
+  const baselineRef = useRef(null);
+  const setInitialData = useCallback(profile => {
+    baselineRef.current = JSON.stringify(profile);
+    setData(profile);
+  }, []);
   useEffect(() => {
     async function fetchData() {
       if (params.id === 'new') {
-        setData({
+        setInitialData({
           label: 'New Profile',
           description: '',
           temperature: 93,
@@ -97,24 +103,37 @@ export function ProfileEdit() {
         });
         setLoading(false);
       } else if (connected.value) {
-        const response = await apiService.request({ tp: 'req:profiles:load', id: params.id });
-        setData({
-          ...response.profile,
-          phases: Array.isArray(response.profile?.phases) ? response.profile.phases : [],
-        });
-        setLoading(false);
+        try {
+          const response = await apiService.request({ tp: 'req:profiles:load', id: params.id });
+          setInitialData({
+            ...response.profile,
+            phases: Array.isArray(response.profile?.phases) ? response.profile.phases : [],
+          });
+        } catch (error) {
+          console.error('Failed to load profile:', error);
+        } finally {
+          setLoading(false);
+        }
       }
     }
     fetchData();
-  }, [params.id, setData, connected.value, apiService]);
+  }, [params.id, setInitialData, connected.value, apiService]);
   const onSave = useCallback(
     async data => {
       setSaving(true);
-      console.log(data);
-      const response = await apiService.request({ tp: 'req:profiles:save', profile: data });
-      setData(response.profile);
-      setSaving(false);
-      location.route('/profiles');
+      try {
+        const response = await apiService.request({ tp: 'req:profiles:save', profile: data });
+        setInitialData(response.profile);
+        location.route('/profiles');
+      } catch (error) {
+        // Leave the form intact so the user's edits survive a failed save.
+        console.error('Failed to save profile:', error);
+        showToast('Saving the profile failed — check the machine connection and try again.', {
+          type: 'error',
+        });
+      } finally {
+        setSaving(false);
+      }
     },
     [apiService, params.id, location],
   );
@@ -125,10 +144,26 @@ export function ProfileEdit() {
     });
   }, [data, setData]);
 
+  const isDirty = !!data && JSON.stringify(data) !== baselineRef.current;
+  useUnsavedChangesGuard(isDirty);
+
   if (loading) {
     return (
       <div className='flex w-full flex-row items-center justify-center py-16'>
         <Spinner size={8} />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className='flex w-full flex-col items-center gap-4 py-16'>
+        <div className='alert alert-error max-w-md'>
+          <span>This profile could not be loaded from the machine.</span>
+        </div>
+        <a href='/profiles' className='btn btn-outline'>
+          Back to Profiles
+        </a>
       </div>
     );
   }

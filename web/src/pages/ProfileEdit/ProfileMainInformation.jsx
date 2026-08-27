@@ -1,7 +1,7 @@
 import Card from '../../components/Card.jsx';
+import { NumberInput } from '../../components/NumberInput.jsx';
 
 export function ProfileMainInformation(props) {
-  console.log(props.data);
   return (
     <Card sm={10} title='Profile Information'>
       <div className='form-control'>
@@ -38,16 +38,15 @@ export function ProfileMainInformation(props) {
         </label>
         <div className='input-group'>
           <label htmlFor='temperature' className='input w-full'>
-            <input
+            <NumberInput
               id='temperature'
               name='temperature'
-              type='number'
               className='grow'
               value={props.data?.temperature}
-              onChange={props.onChangeTemperature}
+              onCommit={props.onCommitTemperature}
               aria-label='Temperature in degrees Celsius'
-              min='0'
-              max='150'
+              min={0}
+              max={150}
               step='0.1'
             />
             <span aria-label='degrees Celsius'>°C</span>

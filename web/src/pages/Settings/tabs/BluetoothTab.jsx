@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { useQuery } from 'preact-fetching';
+import { computed } from '@preact/signals';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanced';
 import { machine } from '../../../services/ApiService.js';
@@ -13,6 +14,10 @@ import { faBatteryHalf } from '@fortawesome/free-solid-svg-icons/faBatteryHalf';
 import { faBatteryQuarter } from '@fortawesome/free-solid-svg-icons/faBatteryQuarter';
 import { faBatteryEmpty } from '@fortawesome/free-solid-svg-icons/faBatteryEmpty';
 import { BluetoothTabSkeleton } from '../../../components/skeletons/SettingsSkeletons.jsx';
+
+// Only re-render when the mode actually changes, not on every 500ms status
+// frame that replaces the machine signal.
+const machineMode = computed(() => machine.value.status.mode);
 
 function batteryIcon(pct) {
   if (pct >= 87) return faBatteryFull;
@@ -32,7 +37,7 @@ export function BluetoothTab() {
   const [key, setKey] = useState(0);
   const [scaleData, setScaleData] = useState([]);
   const [isScanning, setIsScanning] = useState(false);
-  const mode = machine.value.status.mode;
+  const mode = machineMode.value;
 
   useEffect(() => {
     const intervalHandle = setInterval(() => {
@@ -53,8 +58,11 @@ export function BluetoothTab() {
   });
 
   const {
-    isInfoLoading,
-    isInfoError,
+    // preact-fetching only exposes isLoading/isError; the previous
+    // isInfoLoading/isInfoError names didn't exist and were always undefined,
+    // so the info query's loading and error states never rendered.
+    isLoading: isInfoLoading,
+    isError: isInfoError,
     data: connectedScale = [],
   } = useQuery(`scale-info-${key}`, async () => {
     const response = await fetch(`/api/scales/info`);
@@ -63,12 +71,14 @@ export function BluetoothTab() {
   });
 
   useEffect(() => {
-    if (!connectedScale || fetchedScales.length === 0) {
+    // Wait for both queries to settle, then always update — including to an
+    // empty list, so a scale that disappeared doesn't linger on screen.
+    if (isLoading || isInfoLoading) {
       return;
     }
-    const scales = connectedScale.connected ? [connectedScale] : fetchedScales;
+    const scales = connectedScale?.connected ? [connectedScale] : fetchedScales;
     setScaleData(scales);
-  }, [connectedScale, fetchedScales]);
+  }, [connectedScale, fetchedScales, isLoading, isInfoLoading]);
 
   const onScan = useCallback(async () => {
     setIsScanning(true);

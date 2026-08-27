@@ -3,6 +3,7 @@
 
 import { parseBinaryIndex } from '../../pages/ShotHistory/parseBinaryIndex.js';
 import { parseBinaryShot } from '../../pages/ShotHistory/parseBinaryShot.js';
+import { invalidateSettingsCache } from '../../services/ApiService.js';
 import { SLOG_FETCH_DELAY_MS, SLOG_FETCH_RETRIES } from './constants.js';
 
 const SHOT_FLAG_DELETED = 0x02;
@@ -58,11 +59,16 @@ export async function fetchAndParseShot(id, onWait) {
 }
 
 export async function postCoefficients(coeffs) {
-  const body = new URLSearchParams({ pumpModelCoeffs: coeffs }).toString();
+  // JSON body = partial update: only this key is applied. (The old form post
+  // relied on checkbox-presence semantics firmware-side, so this call used to
+  // clear every boolean setting as a side effect.)
   const r = await fetch('/api/settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pumpModelCoeffs: coeffs }),
   });
   if (!r.ok) throw new Error(`POST /api/settings ${r.status}`);
+  // The module-level settings cache still holds the old coefficients; drop it
+  // so the Settings form can't re-submit them and undo this calibration.
+  invalidateSettingsCache();
 }

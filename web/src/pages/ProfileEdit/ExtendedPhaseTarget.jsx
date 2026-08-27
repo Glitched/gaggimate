@@ -1,5 +1,6 @@
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTrashCan } from '@fortawesome/free-solid-svg-icons/faTrashCan';
+import { NumberInput } from '../../components/NumberInput.jsx';
 
 export const TargetTypes = [
   {
@@ -54,19 +55,20 @@ export function ExtendedPhaseTarget({ onChange, target, index, onRemove }) {
           <div className='flex flex-row gap-2'>
             <div className='input-group flex-grow'>
               <label htmlFor={`phase-${index}-target-value`} className='input w-full'>
-                <input
+                {/* The previous code called toFiniteNumber without importing
+                    it — editing a target value threw a ReferenceError. */}
+                <NumberInput
                   id={`phase-${index}-target-value`}
                   className='grow'
-                  type='number'
                   value={target.value || 0}
-                  onChange={e =>
+                  onCommit={value =>
                     onChange({
                       ...target,
-                      value: parseFloat(e.target.value),
+                      value,
                     })
                   }
                   aria-label={`Target value in ${targetType.unit}`}
-                  min='0'
+                  min={0}
                   step='0.1'
                 />
                 <span aria-label={targetType.unit}>{targetType.unit}</span>

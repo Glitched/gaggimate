@@ -25,7 +25,15 @@
           var key = 'gaggimate-daisyui-theme';
           var allowed = ['light', 'dark', 'coffee', 'nord'];
           var saved = localStorage.getItem(key);
-          var theme = allowed.indexOf(saved) >= 0 ? saved : 'light';
+          var theme;
+          if (allowed.indexOf(saved) >= 0) {
+            theme = saved;
+          } else {
+            // 'system' (the default) or nothing stored: resolve against the OS
+            // preference, matching themeManager's runtime behavior, so dark-mode
+            // users don't flash the light theme while the bundle loads.
+            theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
           document.documentElement.setAttribute('data-theme', theme);
         } catch (e) {}
       })();

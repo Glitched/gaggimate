@@ -1,5 +1,7 @@
+import { useMemo } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from '../../components/Chart.jsx';
+import { getChartAnnotationLabelColors } from '../../utils/chartTheme.js';
 
 // Helper function to get phase name from shot data (v5+) or fallback to profile/generic
 function getPhaseName(shot, phaseNumber) {
@@ -56,13 +58,25 @@ function getChartData(shot) {
       phaseName: t.phaseName,
     }));
   }
-  // No phase tracking for versions before v5
-  const tempValues = ct.map(i => i.y).concat(tt.map(i => i.y));
-  const timeValues = ct.map(i => i.x);
-  const minTemp = Math.floor(Math.min(...tempValues));
-  const maxTemp = Math.ceil(Math.max(...tempValues));
-  const minX = Math.min(...timeValues);
-  const maxX = Math.max(...timeValues);
+  // No phase tracking for versions before v5.
+  // Loop instead of Math.min(...arr): spreading tens of thousands of samples
+  // as arguments can overflow the call stack on long shots.
+  let rawMinTemp = Infinity;
+  let rawMaxTemp = -Infinity;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const point of ct) {
+    if (point.y < rawMinTemp) rawMinTemp = point.y;
+    if (point.y > rawMaxTemp) rawMaxTemp = point.y;
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+  }
+  for (const point of tt) {
+    if (point.y < rawMinTemp) rawMinTemp = point.y;
+    if (point.y > rawMaxTemp) rawMaxTemp = point.y;
+  }
+  const minTemp = Math.floor(rawMinTemp);
+  const maxTemp = Math.ceil(rawMaxTemp);
   const padding = maxTemp - minTemp > 10 ? 2 : 5;
 
   // Check if weight data has any non-zero values
@@ -72,6 +86,7 @@ function getChartData(shot) {
   // Create phase annotations
   const phaseAnnotations = {};
   const isSmall = window.innerWidth < 640;
+  const annotationLabelColors = getChartAnnotationLabelColors();
 
   // Add shot start marker
   if (data.length > 0) {
@@ -91,8 +106,8 @@ function getChartData(shot) {
         xAdjust: -5,
         yAdjust: 0,
         padding: { x: 6, y: 0 },
-        color: 'rgb(255,255,255)',
-        backgroundColor: 'rgba(22,33,50,0.75)',
+        color: annotationLabelColors.color,
+        backgroundColor: annotationLabelColors.backgroundColor,
         textAlign: 'start',
         font: {
           size: isSmall ? 9 : 11,
@@ -123,8 +138,8 @@ function getChartData(shot) {
         xAdjust: -10,
         yAdjust: 0,
         padding: { x: 6, y: 0 },
-        color: 'rgb(255,255,255)',
-        backgroundColor: 'rgba(22,33,50,0.75)',
+        color: annotationLabelColors.color,
+        backgroundColor: annotationLabelColors.backgroundColor,
         textAlign: 'start',
         font: {
           size: isSmall ? 9 : 11,
@@ -311,7 +326,10 @@ function getChartData(shot) {
 }
 
 export function HistoryChart({ shot }) {
-  const chartData = getChartData(shot);
+  // The parent card re-renders for reasons unrelated to the shot (notes
+  // edits, copy-feedback timers); only rebuild the datasets when the shot
+  // itself changes.
+  const chartData = useMemo(() => getChartData(shot), [shot]);
 
   return (
     <ChartComponent

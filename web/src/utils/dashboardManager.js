@@ -83,7 +83,10 @@ export const getMetricOrder = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_METRICS_KEY);
-    return stored ? JSON.parse(stored) : [...defaultOrder];
+    // Guard the shape: a corrupted stored value would otherwise crash every
+    // consumer that maps/filters the result.
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : [...defaultOrder];
   } catch {
     return [...defaultOrder];
   }
@@ -114,7 +117,8 @@ export const getPanelOrder = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_PANELS_KEY);
-    return stored ? JSON.parse(stored) : [...DEFAULT_PANEL_ORDER];
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : [...DEFAULT_PANEL_ORDER];
   } catch {
     return [...DEFAULT_PANEL_ORDER];
   }
@@ -248,7 +252,8 @@ export const getCompactPanels = () => {
   if (!globalThis.window?.localStorage) return defaultPanels;
   try {
     const stored = localStorage.getItem(DASHBOARD_COMPACT_PANELS_KEY);
-    return stored ? JSON.parse(stored) : defaultPanels;
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) ? parsed : defaultPanels;
   } catch {
     return defaultPanels;
   }
@@ -382,7 +387,8 @@ export const getShotMetricSlots = () => {
   }
   try {
     const stored = localStorage.getItem(DASHBOARD_SHOT_METRIC_SLOTS_KEY);
-    return stored ? JSON.parse(stored) : [...DEFAULT_SHOT_METRIC_SLOTS];
+    const parsed = stored ? JSON.parse(stored) : null;
+    return Array.isArray(parsed) && parsed.length === 3 ? parsed : [...DEFAULT_SHOT_METRIC_SLOTS];
   } catch {
     return [...DEFAULT_SHOT_METRIC_SLOTS];
   }
@@ -489,23 +495,76 @@ const DASHBOARD_PRESETS = {
   },
 };
 
-// Binds each preset key to its signal and its stored-customization getter.
+// Binds each preset key to its signal, its stored-customization getter, and
+// its persisting setter.
 const DASHBOARD_SETTING_BINDINGS = [
-  { key: 'layout', signal: dashboardLayoutSignal, get: getDashboardLayout },
-  { key: 'cardMode', signal: dashboardCardModeSignal, get: getDashboardCardMode },
-  { key: 'metricOrder', signal: metricOrderSignal, get: getMetricOrder },
-  { key: 'panelOrder', signal: panelOrderSignal, get: getPanelOrder },
-  { key: 'stickyTop', signal: stickyTopSignal, get: getStickyTop },
-  { key: 'stickyBottom', signal: stickyBottomSignal, get: getStickyBottom },
-  { key: 'showRecentShots', signal: showRecentShotsSignal, get: getShowRecentShots },
-  { key: 'recentShotCount', signal: recentShotCountSignal, get: getRecentShotCount },
-  { key: 'metricsColumns', signal: metricsColumnsSignal, get: getMetricsColumns },
-  { key: 'metricsLastRowFill', signal: metricsLastRowFillSignal, get: getMetricsLastRowFill },
-  { key: 'compactPanels', signal: compactPanelsSignal, get: getCompactPanels },
-  { key: 'profileChartHeight', signal: profileChartHeightSignal, get: getProfileChartHeight },
-  { key: 'columnSpacing', signal: columnSpacingSignal, get: getColumnSpacing },
-  { key: 'shotMetricSlots', signal: shotMetricSlotsSignal, get: getShotMetricSlots },
+  {
+    key: 'layout',
+    signal: dashboardLayoutSignal,
+    get: getDashboardLayout,
+    set: setDashboardLayout,
+  },
+  {
+    key: 'cardMode',
+    signal: dashboardCardModeSignal,
+    get: getDashboardCardMode,
+    set: setDashboardCardMode,
+  },
+  { key: 'metricOrder', signal: metricOrderSignal, get: getMetricOrder, set: setMetricOrder },
+  { key: 'panelOrder', signal: panelOrderSignal, get: getPanelOrder, set: setPanelOrder },
+  { key: 'stickyTop', signal: stickyTopSignal, get: getStickyTop, set: setStickyTop },
+  { key: 'stickyBottom', signal: stickyBottomSignal, get: getStickyBottom, set: setStickyBottom },
+  {
+    key: 'showRecentShots',
+    signal: showRecentShotsSignal,
+    get: getShowRecentShots,
+    set: setShowRecentShots,
+  },
+  {
+    key: 'recentShotCount',
+    signal: recentShotCountSignal,
+    get: getRecentShotCount,
+    set: setRecentShotCount,
+  },
+  {
+    key: 'metricsColumns',
+    signal: metricsColumnsSignal,
+    get: getMetricsColumns,
+    set: setMetricsColumns,
+  },
+  {
+    key: 'metricsLastRowFill',
+    signal: metricsLastRowFillSignal,
+    get: getMetricsLastRowFill,
+    set: setMetricsLastRowFill,
+  },
+  { key: 'compactPanels', signal: compactPanelsSignal, get: getCompactPanels, set: setCompactPanels },
+  {
+    key: 'profileChartHeight',
+    signal: profileChartHeightSignal,
+    get: getProfileChartHeight,
+    set: setProfileChartHeight,
+  },
+  { key: 'columnSpacing', signal: columnSpacingSignal, get: getColumnSpacing, set: setColumnSpacing },
+  {
+    key: 'shotMetricSlots',
+    signal: shotMetricSlotsSignal,
+    get: getShotMetricSlots,
+    set: setShotMetricSlots,
+  },
 ];
+
+// Snapshot of the values currently in effect (preset values while a preset is
+// active, stored customization otherwise). Dashboard Settings initializes its
+// form from this so what it shows always matches the live dashboard.
+export const getEffectiveDashboardSettings = () => {
+  const snapshot = {};
+  for (const binding of DASHBOARD_SETTING_BINDINGS) {
+    const value = binding.signal.value;
+    snapshot[binding.key] = Array.isArray(value) ? [...value] : value;
+  }
+  return snapshot;
+};
 
 export const getDashboardMode = () => {
   if (!globalThis.window?.localStorage) return DASHBOARD_MODES.SIMPLE;
@@ -547,6 +606,19 @@ export const setDashboardMode = mode => {
   dashboardModeSignal.value = mode;
   applyDashboardSettings(mode);
   return true;
+};
+
+// Called on the first actual edit in Dashboard Settings. Persists the values
+// currently in effect (i.e. the active preset) as the stored customization
+// before switching to Customize, so the user edits starting from the dashboard
+// they were looking at — and merely opening the settings page never leaves the
+// preset.
+export const beginDashboardCustomization = () => {
+  if (dashboardModeSignal.value === DASHBOARD_MODES.CUSTOM) return;
+  for (const binding of DASHBOARD_SETTING_BINDINGS) {
+    binding.set(binding.signal.value);
+  }
+  setDashboardMode(DASHBOARD_MODES.CUSTOM);
 };
 
 // A preset may be active from a previous session — apply it on load.

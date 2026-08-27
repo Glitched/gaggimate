@@ -128,7 +128,7 @@ Event id conventions: `controller:*` for machine state, `evt:*` for things pushe
 
 ### Web UI (`web/`)
 
-Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. All messages are JSON with a `tp` field — `req:` from client, `res:`/`evt:` from device. The contract is documented in `docs/websocket-api.yaml` (AsyncAPI); keep it in sync when adding a message type. Bulk data (shot history index, `.slog` files) goes over plain HTTP under `/api/history/`.
+Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. All messages are JSON with a `tp` field — `req:` from client, `res:`/`evt:` from device. The contract is documented in `docs/websocket-api.yaml` (AsyncAPI); keep it in sync when adding a message type. The HTTP surface (settings partial update, REST profile CRUD, shot history downloads) is documented in `docs/http-api.yaml` (OpenAPI) — same rule. `sim/tests/` holds curl-based end-to-end suites for the HTTP API that run against the simulator. Bulk data (shot history index, `.slog` files) goes over plain HTTP under `/api/history/`.
 
 `vite.config.js` forces hash-only asset filenames — the device's filesystem caps path length at 32 chars and silently drops longer paths. Don't restore default chunk names.
 
