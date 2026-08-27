@@ -122,61 +122,70 @@ function transformFetchedSettings(fetchedSettings) {
   return settingsWithToggle;
 }
 
-function buildSubmitFormData(formData, autowakeupSchedules, restart) {
-  const formDataToSubmit = new FormData();
-  const checkboxKeys = [
-    'homekit',
-    'boilerFillActive',
-    'smartGrindActive',
-    'homeAssistant',
-    'momentaryButtons',
-    'delayAdjust',
-    'clock24hFormat',
-    'autowakeupEnabled',
-    'smartGrindToggle',
-  ];
+const SETTINGS_BOOLEAN_KEYS = [
+  'homekit',
+  'boilerFillActive',
+  'smartGrindActive',
+  'homeAssistant',
+  'momentaryButtons',
+  'delayAdjust',
+  'clock24hFormat',
+  'autowakeupEnabled',
+  'smartGrindToggle',
+];
 
+// Form-model keys that are folded into combined firmware keys (buttonBehavior,
+// pid) or exist only client-side — never sent as-is.
+const SETTINGS_CLIENT_ONLY_KEYS = new Set(['button0', 'button1', 'button2', 'kf', 'standbyDisplayEnabled']);
+
+// Maps the form model onto the firmware's settings keys, with real booleans.
+function buildSettingsPayload(formData, autowakeupSchedules) {
+  const payload = {};
   for (const [key, value] of Object.entries(formData)) {
     if (value === undefined || value === null) continue;
-
-    if (checkboxKeys.includes(key)) {
-      if (value) {
-        formDataToSubmit.set(key, '1');
-      }
-    } else {
-      formDataToSubmit.set(key, String(value));
-    }
+    if (SETTINGS_CLIENT_ONLY_KEYS.has(key)) continue;
+    payload[key] = SETTINGS_BOOLEAN_KEYS.includes(key) ? !!value : value;
   }
 
-  formDataToSubmit.set('steamPumpPercentage', String(formData.steamPumpPercentage ?? 0));
-  formDataToSubmit.set(
-    'altRelayFunction',
-    formData.altRelayFunction !== undefined ? String(formData.altRelayFunction) : '1',
-  );
-  formDataToSubmit.set(
-    'buttonBehavior',
-    `${formData.button0},${formData.button1},${formData.button2}`,
-  );
+  if (
+    formData.button0 !== undefined &&
+    formData.button1 !== undefined &&
+    formData.button2 !== undefined
+  ) {
+    payload.buttonBehavior = `${formData.button0},${formData.button1},${formData.button2}`;
+  }
 
   if (formData.pid && formData.kf !== undefined) {
-    const combinedPid = `${formData.pid},${formData.kf}`;
-    formDataToSubmit.set('pid', combinedPid);
+    payload.pid = `${formData.pid},${formData.kf}`;
   }
 
-  const schedulesStr = autowakeupSchedules
+  payload.autowakeupSchedules = (autowakeupSchedules || [])
     .map(schedule => `${schedule.time}|${schedule.days.map(d => (d ? '1' : '0')).join('')}`)
     .join(';');
-  formDataToSubmit.set('autowakeupSchedules', schedulesStr);
 
   if (!formData.standbyDisplayEnabled) {
-    formDataToSubmit.set('standbyBrightness', '0');
+    payload.standbyBrightness = 0;
   }
 
-  if (restart) {
-    formDataToSubmit.append('restart', '1');
-  }
+  return payload;
+}
 
-  return formDataToSubmit;
+// The firmware applies only the keys present in the body (partial-update
+// semantics), so send just what changed since load/save: unrelated settings
+// are never rewritten and a boolean can no longer be cleared by omission.
+function diffSettingsPayload(current, baseline) {
+  const changed = {};
+  for (const [key, value] of Object.entries(current)) {
+    const prev = baseline[key];
+    const isSame =
+      typeof value === 'boolean' || typeof prev === 'boolean'
+        ? !!value === !!prev
+        : prev !== undefined && String(value) === String(prev);
+    if (!isSame) {
+      changed[key] = value;
+    }
+  }
+  return changed;
 }
 
 export function Settings() {
@@ -265,8 +274,9 @@ export function Settings() {
     return () => document.removeEventListener('click', handleOutsideClick);
   }, [dropdownOpen]);
 
-  // Snapshot of the last loaded/saved state, for unsaved-changes detection.
-  const baselineRef = useRef({ form: '{}', schedules: '' });
+  // Snapshot of the last loaded/saved state, for unsaved-changes detection
+  // and for diffing what to send on save.
+  const baselineRef = useRef({ form: '{}', schedules: '[]' });
 
   useEffect(() => {
     if (fetchedSettings) {
@@ -379,12 +389,28 @@ export function Settings() {
       if (e) e.preventDefault();
       setSubmitting(true);
       const form = formRef.current;
-      const formDataToSubmit = buildSubmitFormData(formData, autowakeupSchedules, restart);
+
+      let baselineForm = {};
+      let baselineSchedules = [];
+      try {
+        baselineForm = JSON.parse(baselineRef.current.form || '{}');
+        baselineSchedules = JSON.parse(baselineRef.current.schedules || '[]');
+      } catch {
+        // Corrupt baseline: fall back to sending the full payload.
+      }
+      const payload = diffSettingsPayload(
+        buildSettingsPayload(formData, autowakeupSchedules),
+        buildSettingsPayload(baselineForm, baselineSchedules),
+      );
+      if (restart) {
+        payload.restart = true;
+      }
 
       try {
         const response = await fetch(form.action, {
           method: 'post',
-          body: formDataToSubmit,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);

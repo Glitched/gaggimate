@@ -59,11 +59,13 @@ export async function fetchAndParseShot(id, onWait) {
 }
 
 export async function postCoefficients(coeffs) {
-  const body = new URLSearchParams({ pumpModelCoeffs: coeffs }).toString();
+  // JSON body = partial update: only this key is applied. (The old form post
+  // relied on checkbox-presence semantics firmware-side, so this call used to
+  // clear every boolean setting as a side effect.)
   const r = await fetch('/api/settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pumpModelCoeffs: coeffs }),
   });
   if (!r.ok) throw new Error(`POST /api/settings ${r.status}`);
   // The module-level settings cache still holds the old coefficients; drop it
