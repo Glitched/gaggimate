@@ -25,6 +25,20 @@ semver_t from_string(const string &version) {
         return {0, 0, 0, nullptr, nullptr};
     }
     auto numbers = split(version, '.');
+    // vector::at() throws, and this runs from GitHubOTA's constructor during
+    // WebUIPlugin::setup() -- inside Controller::setup(), with no handler
+    // anywhere above it. A version string with fewer than three dot-separated
+    // parts therefore took the whole display down: std::out_of_range ->
+    // terminate() -> abort() -> reboot, in a loop, before Wi-Fi ever came up.
+    //
+    // BUILD_GIT_VERSION is whatever `git describe` prints, so any tag that is
+    // not semver-shaped (a dateless branch point, a release-candidate label, a
+    // fork's own tag) bricks the device until it is reflashed over USB. Treat an
+    // unparseable version as 0.0.0 instead: OTA then sees every release as
+    // newer, which is a harmless default, and the machine still boots.
+    if (numbers.size() < 3) {
+        return {0, 0, 0, nullptr, nullptr};
+    }
     auto major = atoi(numbers.at(0).c_str());
     auto minor = atoi(numbers.at(1).c_str());
     int patch;
