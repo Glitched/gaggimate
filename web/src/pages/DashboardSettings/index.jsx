@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useMemo, useState } from 'preact/hooks';
+import { useComputed } from '@preact/signals';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCompress } from '@fortawesome/free-solid-svg-icons/faCompress';
 import Card from '../../components/Card.jsx';
@@ -11,76 +12,69 @@ import {
 import { machine } from '../../services/ApiService.js';
 import {
   DASHBOARD_LAYOUTS,
-  getDashboardLayout,
   setDashboardLayout,
   DASHBOARD_CARD_MODES,
-  getDashboardCardMode,
   setDashboardCardMode,
-  getMetricOrder,
   setMetricOrder as persistMetricOrder,
-  getPanelOrder,
   setPanelOrder as persistPanelOrder,
-  getStickyBottom,
   setStickyBottom,
-  getStickyTop,
   setStickyTop,
-  getShowRecentShots,
   setShowRecentShots,
-  getRecentShotCount,
   setRecentShotCount,
-  getMetricsColumns,
   setMetricsColumns,
   METRICS_LAST_ROW_FILLS,
-  getMetricsLastRowFill,
   setMetricsLastRowFill,
   getCompactPanels,
   toggleCompactPanel,
-  getProfileChartHeight,
   setProfileChartHeight,
   COLUMN_SPACINGS,
-  getColumnSpacing,
   setColumnSpacing,
-  getShotMetricSlots,
   setShotMetricSlots,
-  DASHBOARD_MODES,
-  getDashboardMode,
-  setDashboardMode,
+  beginDashboardCustomization,
+  getEffectiveDashboardSettings,
 } from '../../utils/dashboardManager.js';
 import { METRIC_DEFINITIONS } from '../../utils/metricDefinitions.js';
 import { PANEL_DEFINITIONS, SPACER_ID, SPACER_DEFINITION } from '../../utils/panelDefinitions.js';
 
 export function DashboardSettings() {
-  const [dashboardLayout, setDashboardLayoutState] = useState(() => getDashboardLayout());
-  const [dashboardCardMode, setDashboardCardModeState] = useState(() => getDashboardCardMode());
-  const [showRecentShots, setShowRecentShotsState] = useState(() => getShowRecentShots());
-  const [recentShotCount, setRecentShotCountState] = useState(() => getRecentShotCount());
-  const [shotMetricSlots, setShotMetricSlotsState] = useState(() => getShotMetricSlots());
+  // Initialize from the values currently in effect (which may come from a
+  // preset), so the form always mirrors the live dashboard. Merely opening
+  // this page must not leave the active preset — beginDashboardCustomization
+  // runs on the first actual edit instead (GM: preset destroyed on view).
+  const [initial] = useState(() => getEffectiveDashboardSettings());
 
-  const [panelOrder, setPanelOrderState] = useState(() => getPanelOrder());
-  const [stickyBottom, setStickyBottomState] = useState(() => getStickyBottom());
-  const [stickyTop, setStickyTopState] = useState(() => getStickyTop());
-  const [compactPanels, setCompactPanelsState] = useState(() => getCompactPanels());
-  const [profileChartHeight, setProfileChartHeightState] = useState(() => getProfileChartHeight());
-  const [columnSpacing, setColumnSpacingState] = useState(() => getColumnSpacing());
+  const [dashboardLayout, setDashboardLayoutState] = useState(initial.layout);
+  const [dashboardCardMode, setDashboardCardModeState] = useState(initial.cardMode);
+  const [showRecentShots, setShowRecentShotsState] = useState(initial.showRecentShots);
+  const [recentShotCount, setRecentShotCountState] = useState(initial.recentShotCount);
+  const [shotMetricSlots, setShotMetricSlotsState] = useState(initial.shotMetricSlots);
 
-  const [metricOrder, setMetricOrderState] = useState(() => getMetricOrder());
-  const [metricsColumns, setMetricsColumnsState] = useState(() => getMetricsColumns());
-  const [metricsLastRowFill, setMetricsLastRowFillState] = useState(() => getMetricsLastRowFill());
+  const [panelOrder, setPanelOrderState] = useState(initial.panelOrder);
+  const [stickyBottom, setStickyBottomState] = useState(initial.stickyBottom);
+  const [stickyTop, setStickyTopState] = useState(initial.stickyTop);
+  const [compactPanels, setCompactPanelsState] = useState(initial.compactPanels);
+  const [profileChartHeight, setProfileChartHeightState] = useState(initial.profileChartHeight);
+  const [columnSpacing, setColumnSpacingState] = useState(initial.columnSpacing);
 
-  // Editing here means customizing — leave any active preset and show the stored values.
-  useEffect(() => {
-    setDashboardMode(DASHBOARD_MODES.CUSTOM);
-  }, []);
+  const [metricOrder, setMetricOrderState] = useState(initial.metricOrder);
+  const [metricsColumns, setMetricsColumnsState] = useState(initial.metricsColumns);
+  const [metricsLastRowFill, setMetricsLastRowFillState] = useState(initial.metricsLastRowFill);
 
-  // Covers a preset being selected from the nav dropdown while this page stays mounted.
-  const markCustomized = () => {
-    if (getDashboardMode() !== DASHBOARD_MODES.CUSTOM) {
-      setDashboardMode(DASHBOARD_MODES.CUSTOM);
-    }
-  };
+  // The availability guards only look at mode and ToF presence. Reading
+  // machine.value.status directly here would re-render the whole page (drag
+  // lists included) on every 500 ms status push; a computed over a primitive
+  // key only notifies when one of these two facts actually changes.
+  const availabilityKey = useComputed(() => {
+    const s = machine.value.status;
+    return `${s.mode}|${s.tofDistance ? 1 : 0}`;
+  });
+  const availabilityStatus = useMemo(() => {
+    const [mode, tof] = availabilityKey.value.split('|');
+    return { mode: Number(mode), tofDistance: Number(tof) };
+  }, [availabilityKey.value]);
 
   const hiddenMetrics = METRIC_DEFINITIONS.filter(
-    m => !m.required && !metricOrder.includes(m.id) && m.available(machine.value.status),
+    m => !m.required && !metricOrder.includes(m.id) && m.available(availabilityStatus),
   );
 
   const hiddenPanels = [
@@ -88,12 +82,13 @@ export function DashboardSettings() {
       if (def.required) return false;
       if (panelOrder.includes(def.id)) return false;
       const availFn = def.availableInSettings ?? def.available;
-      return availFn(machine.value.status);
+      return availFn(availabilityStatus);
     }),
     ...(panelOrder.includes(SPACER_ID) ? [] : [SPACER_DEFINITION]),
   ];
 
   const handleToggleCompact = id => {
+    beginDashboardCustomization();
     toggleCompactPanel(id);
     setCompactPanelsState(getCompactPanels());
   };
@@ -104,10 +99,13 @@ export function DashboardSettings() {
         <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Dashboard Settings</h2>
       </div>
 
+      {/* The capture handler runs before each control's own onChange persists
+          its new value, so the preset baseline is stored first. Button-driven
+          mutations (reorder/add/remove/compact) don't emit change events and
+          call beginDashboardCustomization in their handlers instead. */}
       <div
         className='grid grid-cols-1 gap-4 lg:grid-cols-10'
-        onChangeCapture={markCustomized}
-        onClickCapture={markCustomized}
+        onChangeCapture={beginDashboardCustomization}
       >
         {/* ── Card 1: General Settings ─────────────────────────────────── */}
         <Card sm={10} lg={5} title='General Settings'>
@@ -256,6 +254,7 @@ export function DashboardSettings() {
             definitions={[...PANEL_DEFINITIONS, SPACER_DEFINITION]}
             hidden={hiddenPanels}
             onOrderChange={ids => {
+              beginDashboardCustomization();
               setPanelOrderState(ids);
               persistPanelOrder(ids);
             }}
@@ -365,6 +364,7 @@ export function DashboardSettings() {
             definitions={METRIC_DEFINITIONS}
             hidden={hiddenMetrics}
             onOrderChange={ids => {
+              beginDashboardCustomization();
               setMetricOrderState(ids);
               persistMetricOrder(ids);
             }}

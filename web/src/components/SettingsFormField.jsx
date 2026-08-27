@@ -129,13 +129,13 @@ export function SortableConfigurator({
   };
 
   return (
-    <div className='grid grid-cols-2 gap-3'>
+    <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
       <div>
         <div className='mb-2 text-xs font-semibold tracking-wider uppercase opacity-50'>
           Visible
         </div>
         <div
-          className={`flex flex-col gap-1 rounded-lg transition-all duration-200${draggingSource === 'available' ? 'bg-primary/5 ring-primary/40 ring-1' : ''}`}
+          className={`flex flex-col gap-1 rounded-lg transition-all duration-200 ${draggingSource === 'available' ? 'bg-primary/5 ring-primary/40 ring-1' : ''}`}
           onDragOver={e => e.preventDefault()}
           onDrop={e => {
             e.preventDefault();
@@ -196,33 +196,39 @@ export function SortableConfigurator({
                 <span className='text-base-content/20 cursor-grab select-none'>⠿</span>
                 <span className='flex-1 text-sm'>{def.label}</span>
                 {extraControls?.(def)}
-                <div className='flex flex-col gap-px'>
+                {/* HTML5 drag events never fire on touch devices, so these
+                    buttons are the only reorder path on phones — keep them
+                    finger-sized. */}
+                <div className='flex flex-col'>
                   <button
                     type='button'
                     disabled={idx === 0}
                     onClick={() => move(id, 'up')}
-                    className='btn btn-ghost btn-xs flex h-5 w-5 items-center justify-center rounded p-0'
+                    aria-label={`Move ${def.label} up`}
+                    className='btn btn-ghost btn-xs flex h-7 w-8 items-center justify-center rounded p-0'
                   >
-                    <FontAwesomeIcon icon={faChevronUp} className='h-2.5 w-2.5' />
+                    <FontAwesomeIcon icon={faChevronUp} className='h-3 w-3' />
                   </button>
                   <button
                     type='button'
                     disabled={idx === order.length - 1}
                     onClick={() => move(id, 'down')}
-                    className='btn btn-ghost btn-xs flex h-5 w-5 items-center justify-center rounded p-0'
+                    aria-label={`Move ${def.label} down`}
+                    className='btn btn-ghost btn-xs flex h-7 w-8 items-center justify-center rounded p-0'
                   >
-                    <FontAwesomeIcon icon={faChevronDown} className='h-2.5 w-2.5' />
+                    <FontAwesomeIcon icon={faChevronDown} className='h-3 w-3' />
                   </button>
                 </div>
                 {def.required ? (
-                  <div className='flex h-6 w-6 items-center justify-center'>
+                  <div className='flex h-8 w-8 items-center justify-center'>
                     <FontAwesomeIcon icon={faLock} className='text-base-content/20 h-3 w-3' />
                   </div>
                 ) : (
                   <button
                     type='button'
                     onClick={() => remove(id)}
-                    className='btn btn-ghost btn-xs text-error flex h-6 w-6 items-center justify-center rounded p-0'
+                    aria-label={`Remove ${def.label}`}
+                    className='btn btn-ghost btn-xs text-error flex h-8 w-8 items-center justify-center rounded p-0'
                   >
                     <FontAwesomeIcon icon={faXmark} className='h-3.5 w-3.5' />
                   </button>
@@ -244,7 +250,7 @@ export function SortableConfigurator({
               draggable
               onDragStart={e => startDrag(e, def.id, 'available')}
               onDragEnd={endDrag}
-              className={`border-base-content/10 bg-base-100 flex min-h-14 cursor-grab items-center gap-2 rounded-lg border px-2 py-1.5 transition-all duration-150${draggingId === def.id ? 'opacity-40' : ''}`}
+              className={`border-base-content/10 bg-base-100 flex min-h-14 cursor-grab items-center gap-2 rounded-lg border px-2 py-1.5 transition-all duration-150 ${draggingId === def.id ? 'opacity-40' : ''}`}
             >
               <span className='text-base-content/20 select-none'>⠿</span>
               <span className='flex-1 text-sm'>{def.label}</span>
