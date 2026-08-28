@@ -46,6 +46,17 @@ npm run format       # prettier -w .
 
 `scripts/build_webui.sh` is the firmware-facing build: `npm ci && npm run build`, gzips the assets, then `scripts/embed_webui.py` packs them into `src/display/webassets/` (git-ignored) for embedding into flash. Run it before `pio run -e display` if you changed the web UI. `scripts/embed_webui_pre.py` stubs an empty bundle when it hasn't been run, so a firmware build never hard-fails on a missing bundle — it just serves nothing.
 
+The bundle reaches flash via `.incbin` in a `.S` file, which **no dependency
+scanner can see**: the build decides whether to reassemble by hashing the `.S`,
+and that doesn't change when the blob it pulls in does. A stale object therefore
+survives every later build, and the firmware then serves every asset out of
+whatever rodata follows the symbol — correct `Content-Length`, correct MIME type,
+garbage body, no error anywhere. `embed_webui.py` stamps the blob's size and
+digest into the `.S` to force a rebuild, `embed_webui_pre.py` drops objects older
+than `web_ui.bin` (the simulator's hand-written stub has no stamp), and
+`scripts/check_webui_blob.py` compares the linked bytes against `web_ui.bin`
+post-link and fails the build. Don't remove those without replacing them.
+
 Node 22 (`nvm use`, see `.nvmrc`).
 
 ### Simulator
@@ -58,6 +69,20 @@ pio run -e display-sim -t run                                  # build + launch
 ```
 
 WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA, watchdogs).
+
+Copy real profiles into `sim_data/littlefs/p/` and shots into `sim_data/littlefs/h/`
+before reviewing UI work — empty states hide most layout problems.
+
+For headless screenshots, don't use Chrome's `--screenshot` with
+`--virtual-time-budget`: it fires before the WebSocket delivers anything, so
+every page looks empty or shows the disconnected overlay, and the capture lies to
+you. Drive Chrome over CDP (`--remote-debugging-port`) with real `sleep`s and
+`Page.captureScreenshot` instead. Two related traps when scripting interaction:
+`element.click()` from `Runtime.evaluate` grants **no** transient user activation
+(so anything gated on it, e.g. the clipboard API, behaves differently than for a
+real user — use `Input.dispatchMouseEvent`), and a build passing tells you
+nothing about whether a component renders. A `ReferenceError` in a component body
+is valid at parse time; load each route and watch for `Runtime.exceptionThrown`.
 
 ### Tests
 
@@ -78,6 +103,12 @@ npx prettier -w <file>.md
 ```
 
 `scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those.
+
+`npm run lint` is not a reliable syntax gate — it has reported 0 errors on a
+`.jsx` file that Vite then refused to parse. Use `npm run build` to confirm the
+web UI compiles. Likewise don't pipe `npx prettier --write` to `/dev/null`: a
+parse failure is reported there and nowhere else, and prettier leaves the file
+unchanged when it can't parse it.
 
 ## Architecture
 
@@ -111,7 +142,7 @@ Thin `main.cpp`; everything lives in `GaggiMateController`. It detects the board
 Consequences to respect when editing:
 
 - `currentProcess`/`lastProcess` are guarded by `Controller::processMutex` (recursive). Holding the pointer returned by `getProcess()` without the lock is a use-after-free. The `*Locked` helpers collect event ids and the public wrappers dispatch them **after** unlocking, so plugin handlers never run under the lock.
-- Wi-Fi connect/disconnect is only *flagged* from the Arduino Wi-Fi event task (`wifiConnectedPending`/`wifiDisconnectedPending`) and acted on in `loop()` — doing server/mDNS work in that small-stack callback corrupted the heap.
+- Wi-Fi connect/disconnect is only _flagged_ from the Arduino Wi-Fi event task (`wifiConnectedPending`/`wifiDisconnectedPending`) and acted on in `loop()` — doing server/mDNS work in that small-stack callback corrupted the heap.
 - `updateControl()` only transmits boiler/pump/relay components that changed since `lastBoiler`/`lastPump`/`lastRelay`; these reset on reconnect to force a full resend.
 
 **Plugins and events.** `PluginManager` holds `Plugin`s (`setup()` + `loop()`) and a string-keyed event bus (`on(id, cb)` / `trigger(...)`, `Event` carries a small typed key/value list). Registration order is in `Controller::setup()` (`src/display/core/Controller.cpp` ~line 80). Existing plugins: `WebUIPlugin`, `ShotHistoryPlugin`, `BLEScalePlugin`, `MQTTPlugin` (Home Assistant), `HomekitPlugin`, `mDNSPlugin`, `BoilerFillPlugin`, `SmartGrindPlugin`, `LedControlPlugin`, `AutoWakeupPlugin`, `ImprovPlugin`, and two network watchdogs. New cross-cutting features belong here, not in `Controller`.
@@ -130,6 +161,19 @@ Event id conventions: `controller:*` for machine state, `evt:*` for things pushe
 
 Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. All messages are JSON with a `tp` field — `req:` from client, `res:`/`evt:` from device. The contract is documented in `docs/websocket-api.yaml` (AsyncAPI); keep it in sync when adding a message type. The HTTP surface (settings partial update, REST profile CRUD, shot history downloads) is documented in `docs/http-api.yaml` (OpenAPI) — same rule. `sim/tests/` holds curl-based end-to-end suites for the HTTP API that run against the simulator. Bulk data (shot history index, `.slog` files) goes over plain HTTP under `/api/history/`.
 
+daisyUI 5's `.input` is a flex **wrapper**, not a style for an `<input>`:
+`display:inline-flex; position:relative`. Use `<label class="input">` around an
+icon plus `<input class="grow">` (see `ProfileList`). Putting `.input` on the
+`<input>` itself makes it a positioned element later in DOM order than any
+absolutely-positioned sibling icon, so its background paints over the icon, and
+`inline-flex` centres the placeholder.
+
+Adding a theme takes four edits: the `@plugin "daisyui/theme"` block in
+`src/style.css`, `AVAILABLE_THEMES` in `utils/themeManager.js`, `DARK_THEMES` in
+`utils/chartTheme.js` (or charts render with light-theme colours), and the
+hardcoded `<option>` list in `Settings/tabs/GeneralTab.jsx`. `getAvailableThemes()`
+exists but nothing calls it, which is why the last one is needed.
+
 `vite.config.js` forces hash-only asset filenames — the device's filesystem caps path length at 32 chars and silently drops longer paths. Don't restore default chunk names.
 
 JSON schemas for profiles, shot history, and notes are in `schema/`.
@@ -142,9 +186,16 @@ JSON schemas for profiles, shot history, and notes are in `schema/`.
 
 - clang-format, LLVM base, 4-space indent, 130-col limit (`.clang-format`).
 - `src/version.h` is generated at build time by `scripts/auto_firmware_version.py` from `git describe` — git-ignored, never commit it.
+- **Do not create non-semver git tags.** `auto_firmware_version.py` runs `git describe --tags --dirty --exclude nightly --exclude db`, and whatever comes back becomes `BUILD_GIT_VERSION`. `lib/OTA`'s `from_string()` splits it on `.` — a string with fewer than three dot-separated parts used to throw `std::out_of_range` from `GitHubOTA`'s constructor during `Controller::setup()`, with no handler above it, so the display boot-looped and needed a USB reflash. That is why `nightly` and `db` are excluded. `from_string()` now returns 0.0.0 instead of throwing, but a device still running older firmware will brick, so prefer branches over tags for local bookmarks.
 - Code comments reference Linear issue ids (`GM-106`, `GM-147`, ...). Follow that when a comment explains a non-obvious fix.
 - Commits are Conventional-Commit-ish: `fix:`, `feat:`, `chore:`, often with a `(#PR)` suffix.
 - Contributions require a signed CLA (see `CONTRIBUTING.md`). Note that `CONTRIBUTING.md` still refers to a `ui/` SquareLine Studio project — the current source is `eez-ui/` (EEZ Studio).
+- `/api/settings` is unauthenticated. It echoes Wi-Fi and AP passwords back **only**
+  in AP mode, where the caller had to know the AP password to reach the device;
+  on a shared network both are replaced with `PASSWORD_PLACEHOLDER`
+  (`---unchanged---`). Every POST handler for a credential must skip that
+  sentinel, or saving an unedited settings form stores the placeholder as the
+  password. Don't widen what this endpoint discloses.
 - License: CC BY-NC-SA 4.0.
 
 ## Debugging
