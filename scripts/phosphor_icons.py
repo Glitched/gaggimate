@@ -49,8 +49,10 @@ ICONS = {
     "angle-left-40x40": ("caret-left", 1.0),
     "angle-right-40x40": ("caret-right", 1.0),
     "angle-up-40x40": ("caret-up", 1.0),
-    "bluetooth-alt-20x20": ("bluetooth", 1.0),
-    "wifi-20x20": ("wifi-high", 1.0),
+    # 20 px status icons and the two dial indicators take Bold: Regular's stroke is too
+    # light at that size, and the thermometer/gauge also appear zoomed down on the dial.
+    "bluetooth-alt-20x20": ("bluetooth", 1.0, "bold"),
+    "wifi-20x20": ("wifi-high", 1.0, "bold"),
     "refresh-20x20": ("arrows-clockwise", 1.0),
     "check-40x40": ("check", 1.0),
     "clock-40x40": ("clock", 1.0),
@@ -63,8 +65,8 @@ ICONS = {
     "gallery": ("squares-four", 1.0),  # Profile screen: gallery view
     "equality-40x40": ("scales", 1.0),
     "flowmeter": ("waves", 1.0),
-    "tachometer-fast-40x40": ("gauge", 1.0),
-    "thermometer-half-40x40": ("thermometer-simple", 1.0),
+    "tachometer-fast-40x40": ("gauge", 1.0, "bold"),
+    "thermometer-half-40x40": ("thermometer-simple", 1.0, "bold"),
     "minus-small-40x40": ("minus", 0.67, "bold"),
     "plus-small-40x40": ("plus", 0.67, "bold"),
     "pause-40x40": ("pause", 1.0),
