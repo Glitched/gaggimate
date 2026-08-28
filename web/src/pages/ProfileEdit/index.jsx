@@ -161,7 +161,10 @@ export function ProfileEdit() {
         <div className='alert alert-error max-w-md'>
           <span>This profile could not be loaded from the machine.</span>
         </div>
-        <a href='/profiles' className='btn btn-outline'>
+        <a
+          href='/profiles'
+          className='btn btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none'
+        >
           Back to Profiles
         </a>
       </div>

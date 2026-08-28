@@ -76,7 +76,7 @@ export function ExtendedPhaseTarget({ onChange, target, index, onRemove }) {
             </div>
             <button
               type='button'
-              className={`join-item btn btn-outline text-error`}
+              className='text-error/70 hover:text-error hover:bg-error/10 cursor-pointer rounded-lg px-3 py-2 transition-colors'
               aria-label='Remove target'
               onClick={() => onRemove()}
             >

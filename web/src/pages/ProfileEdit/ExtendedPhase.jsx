@@ -4,6 +4,7 @@ import { useCallback } from 'preact/hooks';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { Tooltip } from '../../components/Tooltip.jsx';
+import { SegmentedControl } from '../../components/SegmentedControl.jsx';
 import { NumberInput } from '../../components/NumberInput.jsx';
 
 export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvailable }) {
@@ -58,6 +59,22 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
     t => !targets.find(t2 => t2.type === t.type && t2.operator === t.operator),
   );
 
+  // Each pump mode writes a different payload; this carries what the individual
+  // button handlers used to do so SegmentedControl can stay value-based.
+  const selectPumpMode = next => {
+    if (next === mode) return;
+    if (next === 'off') return onFieldChange('pump', 0);
+    if (next === 'power') return onFieldChange('pump', 100);
+    const pressure = Math.max(phase.pump?.pressure || 0, 0);
+    const flow = Math.max(phase.pump?.flow || 0, 0);
+    // -1 means "hold whatever the puck gives", hence the Maintain modes.
+    if (next === 'pressure') return onFieldChange('pump', { target: 'pressure', pressure, flow });
+    if (next === 'flow') return onFieldChange('pump', { target: 'flow', pressure, flow });
+    if (next === 'hold-pressure')
+      return onFieldChange('pump', { target: 'pressure', pressure: -1, flow });
+    if (next === 'hold-flow') return onFieldChange('pump', { target: 'flow', pressure, flow: -1 });
+  };
+
   let rampUnit = 's';
   if (phase.transition?.target === 'volumetric') rampUnit = 'g';
   if (phase.transition?.target === 'pumped') rampUnit = 'ml';
@@ -70,22 +87,27 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
     >
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-type`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-type`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Phase Type
           </label>
-          <select
-            id={`phase-${index}-type`}
-            className='select select-bordered w-full'
-            onChange={e => onFieldChange('phase', e.target.value)}
+          <SegmentedControl
             value={phase.phase}
-            aria-label='Select the type of brew phase'
-          >
-            <option value='preinfusion'>Pre-Infusion</option>
-            <option value='brew'>Brew</option>
-          </select>
+            onChange={next => onFieldChange('phase', next)}
+            ariaLabel='Select the type of brew phase'
+            options={[
+              { value: 'preinfusion', label: 'Pre-Infusion' },
+              { value: 'brew', label: 'Brew' },
+            ]}
+          />
         </div>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-name`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-name`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Phase Name
           </label>
           <div className='flex gap-2'>
@@ -103,7 +125,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
 
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-duration`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-duration`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Duration
           </label>
           <div className='input-group'>
@@ -121,7 +146,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           </div>
         </div>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-temperature`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-temperature`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Temperature (0 = Default)
           </label>
           <div className='input-group'>
@@ -142,132 +170,53 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
       </div>
 
       <div className='form-control'>
-        <fieldset>
-          <legend className='mb-2 block text-sm font-medium'>Valve</legend>
-          <div className='join' role='group' aria-label='Valve state selection'>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${!phase.valve ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('valve', 0)}
-              aria-pressed={!phase.valve}
-              aria-label='Valve closed'
-            >
-              Closed
-            </button>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${phase.valve ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('valve', 1)}
-              aria-pressed={phase.valve}
-              aria-label='Valve open'
-            >
-              Open
-            </button>
-          </div>
-        </fieldset>
+        <SegmentedControl
+          label='Valve'
+          ariaLabel='Valve state selection'
+          value={phase.valve ? 'open' : 'closed'}
+          onChange={next => onFieldChange('valve', next === 'open')}
+          options={[
+            { value: 'closed', label: 'Closed' },
+            { value: 'open', label: 'Open' },
+          ]}
+        />
       </div>
 
       <div className='form-control'>
-        <fieldset>
-          <legend className='mb-2 block text-sm font-medium'>Pump Mode</legend>
-          <div
-            className='join max-sm:join-vertical min-w-[50%]'
-            role='group'
-            aria-label='Pump mode selection'
-          >
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${mode === 'off' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('pump', 0)}
-              aria-pressed={mode === 'off'}
-              aria-label='Pump off'
-            >
-              Off
-            </button>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${mode === 'power' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => mode !== 'power' && onFieldChange('pump', 100)}
-              aria-pressed={mode === 'power'}
-              aria-label='Pump power mode'
-            >
-              Power
-            </button>
-            {pressureAvailable && (
-              <>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'pressure' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'pressure' &&
-                    onFieldChange('pump', {
-                      target: 'pressure',
-                      pressure: Math.max(phase.pump?.pressure || 0, 0),
-                      flow: Math.max(phase.pump?.flow || 0, 0),
-                    })
-                  }
-                  aria-pressed={mode === 'pressure'}
-                  aria-label='Pump pressure mode'
-                >
-                  Pressure
-                </button>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'flow' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'flow' &&
-                    onFieldChange('pump', {
-                      target: 'flow',
-                      pressure: Math.max(phase.pump?.pressure || 0, 0),
-                      flow: Math.max(phase.pump?.flow || 0, 0),
-                    })
-                  }
-                  aria-pressed={mode === 'flow'}
-                  aria-label='Pump flow mode'
-                >
-                  Flow
-                </button>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'hold-pressure' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'hold-pressure' &&
-                    onFieldChange('pump', {
-                      target: 'pressure',
-                      pressure: -1,
-                      flow: Math.max(phase.pump?.flow || 0, 0),
-                    })
-                  }
-                  aria-pressed={mode === 'hold-pressure'}
-                  aria-label='Pump Maintain pressure mode'
-                >
-                  Maintain Pressure
-                </button>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'hold-flow' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'hold-flow' &&
-                    onFieldChange('pump', {
-                      target: 'flow',
-                      pressure: Math.max(phase.pump?.pressure || 0, 0),
-                      flow: -1,
-                    })
-                  }
-                  aria-pressed={mode === 'hold-flow'}
-                  aria-label='Pump Maintain flow mode'
-                >
-                  Maintain Flow
-                </button>
-              </>
-            )}
-          </div>
-        </fieldset>
+        <SegmentedControl
+          label='Pump Mode'
+          ariaLabel='Pump mode selection'
+          value={mode}
+          onChange={selectPumpMode}
+          options={[
+            { value: 'off', label: 'Off', ariaLabel: 'Pump off' },
+            { value: 'power', label: 'Power', ariaLabel: 'Pump power mode' },
+            ...(pressureAvailable
+              ? [
+                  { value: 'pressure', label: 'Pressure', ariaLabel: 'Pump pressure mode' },
+                  { value: 'flow', label: 'Flow', ariaLabel: 'Pump flow mode' },
+                  {
+                    value: 'hold-pressure',
+                    label: 'Maintain Pressure',
+                    ariaLabel: 'Pump maintain pressure mode',
+                  },
+                  {
+                    value: 'hold-flow',
+                    label: 'Maintain Flow',
+                    ariaLabel: 'Pump maintain flow mode',
+                  },
+                ]
+              : []),
+          ]}
+        />
       </div>
 
       {mode === 'power' && (
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-power`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-power`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Pump Power
           </label>
           <div className='input-group'>
@@ -295,7 +244,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
         <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
           {mode !== 'hold-pressure' && (
             <div className='form-control'>
-              <label htmlFor={`phase-${index}-pressure`} className='mb-2 block text-sm font-medium'>
+              <label
+                htmlFor={`phase-${index}-pressure`}
+                className='text-base-content/70 mb-2 block text-sm font-medium'
+              >
                 {mode === 'pressure' ? 'Target' : 'Maximum'} Pressure{' '}
                 {mode === 'flow' && '(0 = Ignore)'}
               </label>
@@ -322,7 +274,10 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           )}
           {mode !== 'hold-flow' && (
             <div className='form-control'>
-              <label htmlFor={`phase-${index}-flow`} className='mb-2 block text-sm font-medium'>
+              <label
+                htmlFor={`phase-${index}-flow`}
+                className='text-base-content/70 mb-2 block text-sm font-medium'
+              >
                 {mode === 'flow' ? 'Target' : 'Maximum'} Flow{' '}
                 {mode === 'pressure' && '(0 = Ignore)'}
               </label>
@@ -352,116 +307,38 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
 
       <div className='grid grid-cols-1 gap-4'>
         <div className='form-control'>
-          <fieldset>
-            <legend className='mb-2 block text-sm font-medium'>Ramp Style</legend>
-            <div
-              className='join max-sm:join-vertical min-w-[50%]'
-              role='group'
-              aria-label='Ramp style selection'
-            >
-              <button
-                type='button'
-                className={`join-item btn btn-sm ${(phase.transition?.type || 'instant') === 'instant' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() =>
-                  onFieldChange('transition', { ...phase.transition, type: 'instant', duration: 0 })
-                }
-                aria-pressed={(phase.transition?.type || 'instant') === 'instant'}
-                aria-label='Instant'
-              >
-                Instant
-              </button>
-              <button
-                type='button'
-                className={`join-item btn btn-sm ${phase.transition?.type === 'linear' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => onFieldChange('transition', { ...phase.transition, type: 'linear' })}
-                aria-pressed={phase.transition?.type === 'linear'}
-                aria-label='Linear'
-              >
-                Linear
-              </button>
-              <button
-                type='button'
-                className={`join-item btn btn-sm ${phase.transition?.type === 'ease-in' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() =>
-                  onFieldChange('transition', { ...phase.transition, type: 'ease-in' })
-                }
-                aria-pressed={phase.transition?.type === 'ease-in'}
-                aria-label='Ease In'
-              >
-                Ease In
-              </button>
-              <button
-                type='button'
-                className={`join-item btn btn-sm ${phase.transition?.type === 'ease-out' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() =>
-                  onFieldChange('transition', { ...phase.transition, type: 'ease-out' })
-                }
-                aria-pressed={phase.transition?.type === 'ease-out'}
-                aria-label='Ease Out'
-              >
-                Ease Out
-              </button>
-              <button
-                type='button'
-                className={`join-item btn btn-sm ${phase.transition?.type === 'ease-in-out' ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() =>
-                  onFieldChange('transition', { ...phase.transition, type: 'ease-in-out' })
-                }
-                aria-pressed={phase.transition?.type === 'ease-in-out'}
-                aria-label='Ease In Out'
-              >
-                Ease In Out
-              </button>
-            </div>
-          </fieldset>
+          <SegmentedControl
+            label='Ramp Style'
+            ariaLabel='Ramp style selection'
+            value={phase.transition?.type || 'instant'}
+            onChange={next => onFieldChange('transition', { ...phase.transition, type: next })}
+            options={[
+              { value: 'instant', label: 'Instant' },
+              { value: 'linear', label: 'Linear' },
+              { value: 'ease-in', label: 'Ease In' },
+              { value: 'ease-out', label: 'Ease Out' },
+              { value: 'ease-in-out', label: 'Ease In Out' },
+            ]}
+          />
         </div>
       </div>
       {phase.transition?.type !== 'instant' && (
         <>
           <div className='grid grid-cols-1 gap-4'>
             <div className='form-control'>
-              <fieldset>
-                <legend className='mb-2 block text-sm font-medium'>Ramp Target</legend>
-                <div
-                  className='join max-sm:join-vertical min-w-[50%]'
-                  role='group'
-                  aria-label='Ramp target selection'
-                >
-                  <button
-                    type='button'
-                    className={`join-item btn btn-sm ${(phase.transition?.target || 'time') === 'time' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() =>
-                      onFieldChange('transition', { ...phase.transition, target: 'time' })
-                    }
-                    aria-pressed={(phase.transition?.target || 'time') === 'time'}
-                    aria-label='Time'
-                  >
-                    Time
-                  </button>
-                  <button
-                    type='button'
-                    className={`join-item btn btn-sm ${phase.transition?.target === 'volumetric' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() =>
-                      onFieldChange('transition', { ...phase.transition, target: 'volumetric' })
-                    }
-                    aria-pressed={phase.transition?.target === 'volumetric'}
-                    aria-label='Weight in phase'
-                  >
-                    Weight in phase
-                  </button>
-                  <button
-                    type='button'
-                    className={`join-item btn btn-sm ${phase.transition?.target === 'pumped' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() =>
-                      onFieldChange('transition', { ...phase.transition, target: 'pumped' })
-                    }
-                    aria-pressed={phase.transition?.target === 'pumped'}
-                    aria-label='Water pumped'
-                  >
-                    Water pumped in phase
-                  </button>
-                </div>
-              </fieldset>
+              <SegmentedControl
+                label='Ramp Target'
+                ariaLabel='Ramp target selection'
+                value={phase.transition?.target || 'time'}
+                onChange={next =>
+                  onFieldChange('transition', { ...phase.transition, target: next })
+                }
+                options={[
+                  { value: 'time', label: 'Time' },
+                  { value: 'volumetric', label: 'Weight in phase' },
+                  { value: 'pumped', label: 'Water pumped in phase', ariaLabel: 'Water pumped' },
+                ]}
+              />
             </div>
           </div>
           <div className='grid grid-cols-1 gap-4'>
@@ -493,46 +370,35 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
               </div>
             </div>
             <div className='form-control'>
-              <fieldset>
-                <legend className='mb-2 block text-sm font-medium'>Start Ramp from</legend>
-                <div className='join' role='group' aria-label='Start Ramp from'>
-                  <button
-                    type='button'
-                    className={`join-item btn btn-sm ${!phase.transition?.adaptive ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() =>
-                      onFieldChange('transition', { ...phase.transition, adaptive: false })
-                    }
-                    aria-pressed={!phase.transition?.adaptive}
-                    aria-label='Start from previous setpoint'
-                  >
-                    Previous target
-                  </button>
-                  <button
-                    type='button'
-                    className={`join-item btn btn-sm ${!!phase.transition?.adaptive ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() =>
-                      onFieldChange('transition', { ...phase.transition, adaptive: true })
-                    }
-                    aria-pressed={!!phase.transition?.adaptive}
-                    aria-label='Linear'
-                  >
-                    Current value
-                  </button>
-                </div>
-              </fieldset>
+              <SegmentedControl
+                label='Start Ramp from'
+                ariaLabel='Start ramp from'
+                value={phase.transition?.adaptive ? 'current' : 'previous'}
+                onChange={next =>
+                  onFieldChange('transition', { ...phase.transition, adaptive: next === 'current' })
+                }
+                options={[
+                  {
+                    value: 'previous',
+                    label: 'Previous target',
+                    ariaLabel: 'Start from previous setpoint',
+                  },
+                  { value: 'current', label: 'Current value' },
+                ]}
+              />
             </div>
           </div>
         </>
       )}
 
-      <div className='mt-2 flex flex-row gap-4'>
-        <h3 className='text-lg font-medium'>Stop when</h3>
+      <div className='mt-4 flex flex-row items-center gap-2'>
+        <h3 className='text-base-content/70 text-sm font-medium'>Stop when</h3>
         <div className='dropdown'>
           <Tooltip content='Add stop condition'>
             <div
               tabIndex='0'
               role='button'
-              className='join-item btn btn-sm btn-outline'
+              className='text-base-content/60 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg px-2 py-1 transition-colors'
               aria-label='Add target'
             >
               <FontAwesomeIcon icon={faPlus} />

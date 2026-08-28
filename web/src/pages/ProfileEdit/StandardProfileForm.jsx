@@ -9,12 +9,25 @@ import { faArrowUp } from '@fortawesome/free-solid-svg-icons/faArrowUp';
 import { faArrowDown } from '@fortawesome/free-solid-svg-icons/faArrowDown';
 import { Tooltip } from '../../components/Tooltip.jsx';
 import { ProfileMainInformation } from './ProfileMainInformation.jsx';
+import { SegmentedControl } from '../../components/SegmentedControl.jsx';
 import { NumberInput } from '../../components/NumberInput.jsx';
 import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './profilePhases.js';
 
 export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
+
+  // Each mode writes a different payload; carried over from the individual
+  // button handlers so SegmentedControl can stay value-based.
+  const selectPumpMode = next => {
+    if (next === mode) return;
+    if (next === 'off') return onFieldChange('pump', 0);
+    if (next === 'power') return onFieldChange('pump', 100);
+    const pressure = phase.pump?.pressure || 0;
+    const flow = phase.pump?.flow || 0;
+    if (next === 'pressure') return onFieldChange('pump', { target: 'pressure', pressure, flow });
+    if (next === 'flow') return onFieldChange('pump', { target: 'flow', pressure, flow });
+  };
 
   const onFieldChange = (field, value) => {
     onChange({
@@ -105,7 +118,7 @@ export function StandardProfileForm(props) {
             <div className='flex flex-row justify-center pt-4'>
               <button
                 type='button'
-                className='btn btn-outline gap-2'
+                className='btn btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 gap-2 border-none'
                 onClick={onPhaseAdd}
                 aria-label='Add new brew phase'
               >
@@ -117,9 +130,12 @@ export function StandardProfileForm(props) {
         </Card>
       </div>
 
-      <div className='pt-4 lg:col-span-10'>
+      <div className='pt-4 pb-8 lg:col-span-10'>
         <div className='flex flex-col gap-2 sm:flex-row'>
-          <a href='/profiles' className='btn btn-outline'>
+          <a
+            href='/profiles'
+            className='btn btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none'
+          >
             Back
           </a>
           <button
@@ -194,7 +210,10 @@ function Phase({
     >
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-type`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-type`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Phase Type
           </label>
           <select
@@ -209,7 +228,10 @@ function Phase({
           </select>
         </div>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-name`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-name`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Phase Name
           </label>
           <div className='flex gap-2'>
@@ -259,7 +281,10 @@ function Phase({
 
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-duration`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-duration`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Duration
           </label>
           <div className='input-group'>
@@ -277,7 +302,10 @@ function Phase({
           </div>
         </div>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-target`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-target`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Volumetric Target
           </label>
           <div className='input-group'>
@@ -298,96 +326,59 @@ function Phase({
       </div>
 
       <div className='form-control'>
-        <fieldset>
-          <legend className='mb-2 block text-sm font-medium'>Valve</legend>
-          <div className='join' role='group' aria-label='Valve state selection'>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${!phase.valve ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('valve', 0)}
-              aria-pressed={!phase.valve}
-              aria-label='Valve closed'
-            >
-              Closed
-            </button>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${phase.valve ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('valve', 1)}
-              aria-pressed={phase.valve}
-              aria-label='Valve open'
-            >
-              Open
-            </button>
-          </div>
-        </fieldset>
+        <SegmentedControl
+          label='Valve'
+          ariaLabel='Valve state selection'
+          value={phase.valve ? 'open' : 'closed'}
+          onChange={next => onFieldChange('valve', next === 'open' ? 1 : 0)}
+          options={[
+            { value: 'closed', label: 'Closed', ariaLabel: 'Valve closed' },
+            { value: 'open', label: 'Open', ariaLabel: 'Valve open' },
+          ]}
+        />
       </div>
 
       <div className='form-control'>
-        <fieldset>
-          <legend className='mb-2 block text-sm font-medium'>Pump Mode</legend>
-          <div className='join' role='group' aria-label='Pump mode selection'>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${mode === 'off' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => onFieldChange('pump', 0)}
-              aria-pressed={mode === 'off'}
-              aria-label='Pump off'
-            >
-              Off
-            </button>
-            <button
-              type='button'
-              className={`join-item btn btn-sm ${mode === 'power' ? 'btn-primary' : 'btn-outline'}`}
-              onClick={() => mode !== 'power' && onFieldChange('pump', 100)}
-              aria-pressed={mode === 'power'}
-              aria-label='Pump power mode'
-            >
-              Power
-            </button>
-            {pressureAvailable && (
-              <>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'pressure' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'pressure' &&
-                    onFieldChange('pump', {
-                      target: 'pressure',
-                      pressure: phase.pump?.pressure || 0,
-                      flow: phase.pump?.flow || 0,
-                    })
-                  }
-                  aria-pressed={mode === 'pressure'}
-                  aria-label='Pump pressure mode (PRO feature)'
-                >
-                  Pressure <sup>PRO</sup>
-                </button>
-                <button
-                  type='button'
-                  className={`join-item btn btn-sm ${mode === 'flow' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() =>
-                    mode !== 'flow' &&
-                    onFieldChange('pump', {
-                      target: 'flow',
-                      pressure: phase.pump?.pressure || 0,
-                      flow: phase.pump?.flow || 0,
-                    })
-                  }
-                  aria-pressed={mode === 'flow'}
-                  aria-label='Pump flow mode (PRO feature)'
-                >
-                  Flow <sup>PRO</sup>
-                </button>
-              </>
-            )}
-          </div>
-        </fieldset>
+        <SegmentedControl
+          label='Pump Mode'
+          ariaLabel='Pump mode selection'
+          value={mode}
+          onChange={selectPumpMode}
+          options={[
+            { value: 'off', label: 'Off', ariaLabel: 'Pump off' },
+            { value: 'power', label: 'Power', ariaLabel: 'Pump power mode' },
+            ...(pressureAvailable
+              ? [
+                  {
+                    value: 'pressure',
+                    label: (
+                      <>
+                        Pressure <sup>PRO</sup>
+                      </>
+                    ),
+                    ariaLabel: 'Pump pressure mode (PRO feature)',
+                  },
+                  {
+                    value: 'flow',
+                    label: (
+                      <>
+                        Flow <sup>PRO</sup>
+                      </>
+                    ),
+                    ariaLabel: 'Pump flow mode (PRO feature)',
+                  },
+                ]
+              : []),
+          ]}
+        />
       </div>
 
       {mode === 'power' && (
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-power`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-power`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             Pump Power
           </label>
           <div className='input-group'>
@@ -411,7 +402,10 @@ function Phase({
       {(mode === 'pressure' || mode === 'flow') && (
         <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
           <div className='form-control'>
-            <label htmlFor={`phase-${index}-pressure`} className='mb-2 block text-sm font-medium'>
+            <label
+              htmlFor={`phase-${index}-pressure`}
+              className='text-base-content/70 mb-2 block text-sm font-medium'
+            >
               Pressure {mode === 'pressure' ? 'Target' : 'Limit'}
             </label>
             <div className='input-group'>
@@ -435,7 +429,10 @@ function Phase({
             </div>
           </div>
           <div className='form-control'>
-            <label htmlFor={`phase-${index}-flow`} className='mb-2 block text-sm font-medium'>
+            <label
+              htmlFor={`phase-${index}-flow`}
+              className='text-base-content/70 mb-2 block text-sm font-medium'
+            >
               Flow {mode === 'flow' ? 'Target' : 'Limit'}
             </label>
             <div className='input-group'>
