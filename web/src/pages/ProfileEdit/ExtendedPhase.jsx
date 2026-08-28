@@ -5,6 +5,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { Tooltip } from '../../components/Tooltip.jsx';
 import { SegmentedControl } from '../../components/SegmentedControl.jsx';
+import { NumberField } from '../../components/NumberField.jsx';
 import { NumberInput } from '../../components/NumberInput.jsx';
 
 export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvailable }) {
@@ -85,7 +86,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
       role='group'
       aria-label={`Phase ${index + 1} configuration`}
     >
-      <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+      <div className='flex flex-wrap items-end gap-4'>
         <div className='form-control'>
           <label
             htmlFor={`phase-${index}-type`}
@@ -103,7 +104,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
             ]}
           />
         </div>
-        <div className='form-control'>
+        <div className='form-control min-w-48 flex-1'>
           <label
             htmlFor={`phase-${index}-name`}
             className='text-base-content/70 mb-2 block text-sm font-medium'
@@ -113,7 +114,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           <div className='flex gap-2'>
             <input
               id={`phase-${index}-name`}
-              className='input input-bordered flex-1'
+              className='input input-bordered w-full flex-1'
               placeholder='Name...'
               value={phase.name}
               onChange={e => onFieldChange('name', e.target.value)}
@@ -123,53 +124,28 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
         </div>
       </div>
 
-      <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
-        <div className='form-control'>
-          <label
-            htmlFor={`phase-${index}-duration`}
-            className='text-base-content/70 mb-2 block text-sm font-medium'
-          >
-            Duration
-          </label>
-          <div className='input-group'>
-            <label htmlFor={`phase-${index}-duration`} className='input w-full'>
-              <NumberInput
-                id={`phase-${index}-duration`}
-                className='grow'
-                min={0}
-                value={phase.duration}
-                onCommit={value => onFieldChange('duration', value)}
-                aria-label='Duration in seconds'
-              />
-              <span aria-label='seconds'>s</span>
-            </label>
-          </div>
-        </div>
-        <div className='form-control'>
-          <label
-            htmlFor={`phase-${index}-temperature`}
-            className='text-base-content/70 mb-2 block text-sm font-medium'
-          >
-            Temperature (0 = Default)
-          </label>
-          <div className='input-group'>
-            <label htmlFor={`phase-${index}-temperature`} className='input w-full'>
-              <NumberInput
-                id={`phase-${index}-temperature`}
-                className='grow'
-                value={phase.temperature || 0}
-                onCommit={value => onFieldChange('temperature', value)}
-                aria-label='Target temperature'
-                min={0}
-                step='0.1'
-              />
-              <span aria-label='celsius'>°C</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className='form-control'>
+      <div className='flex flex-wrap items-end gap-4'>
+        <NumberField
+          id={`phase-${index}-duration`}
+          label='Duration'
+          unit='s'
+          unitLabel='seconds'
+          min={0}
+          value={phase.duration}
+          onCommit={value => onFieldChange('duration', value)}
+          ariaLabel='Duration in seconds'
+        />
+        <NumberField
+          id={`phase-${index}-temperature`}
+          label='Temperature'
+          unit='°C'
+          unitLabel='celsius'
+          min={0}
+          step='0.1'
+          value={phase.temperature || 0}
+          onCommit={value => onFieldChange('temperature', value)}
+          ariaLabel='Target temperature, 0 for the profile default'
+        />
         <SegmentedControl
           label='Valve'
           ariaLabel='Valve state selection'
@@ -212,95 +188,59 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
       </div>
 
       {mode === 'power' && (
-        <div className='form-control'>
-          <label
-            htmlFor={`phase-${index}-power`}
-            className='text-base-content/70 mb-2 block text-sm font-medium'
-          >
-            Pump Power
-          </label>
-          <div className='input-group'>
-            <label htmlFor={`phase-${index}-power`} className='input w-full'>
-              <NumberInput
-                id={`phase-${index}-power`}
-                className='grow'
-                step='1'
-                min={0}
-                max={100}
-                value={pumpPower}
-                onCommit={value => onFieldChange('pump', value)}
-                aria-label='Pump power as percentage'
-              />
-              <span aria-label='percent'>%</span>
-            </label>
-          </div>
-        </div>
+        <NumberField
+          id={`phase-${index}-power`}
+          label='Pump Power'
+          unit='%'
+          unitLabel='percent'
+          step='1'
+          min={0}
+          max={100}
+          value={pumpPower}
+          onCommit={value => onFieldChange('pump', value)}
+          ariaLabel='Pump power as percentage'
+        />
       )}
 
       {(mode === 'pressure' ||
         mode === 'flow' ||
         mode === 'hold-pressure' ||
         mode === 'hold-flow') && (
-        <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+        <div className='flex flex-wrap items-end gap-4'>
           {mode !== 'hold-pressure' && (
-            <div className='form-control'>
-              <label
-                htmlFor={`phase-${index}-pressure`}
-                className='text-base-content/70 mb-2 block text-sm font-medium'
-              >
-                {mode === 'pressure' ? 'Target' : 'Maximum'} Pressure{' '}
-                {mode === 'flow' && '(0 = Ignore)'}
-              </label>
-              <div className='input-group'>
-                <label htmlFor={`phase-${index}-pressure`} className='input w-full'>
-                  <NumberInput
-                    id={`phase-${index}-pressure`}
-                    className='grow'
-                    step='0.01'
-                    min={mode === 'pressure' ? 0.1 : 0}
-                    value={pressure}
-                    onCommit={value =>
-                      onFieldChange('pump', {
-                        ...phase.pump,
-                        pressure: value,
-                      })
-                    }
-                    aria-label='Pressure in bar'
-                  />
-                  <span aria-label='bar'>bar</span>
-                </label>
-              </div>
-            </div>
+            <NumberField
+              id={`phase-${index}-pressure`}
+              label={
+                <>
+                  {mode === 'pressure' ? 'Target' : 'Maximum'} Pressure{' '}
+                  {mode === 'flow' && '(0 = Ignore)'}
+                </>
+              }
+              unit='bar'
+              step='0.01'
+              min={mode === 'pressure' ? 0.1 : 0}
+              value={pressure}
+              onCommit={value => onFieldChange('pump', { ...phase.pump, pressure: value })}
+              ariaLabel='Pressure in bar'
+            />
           )}
           {mode !== 'hold-flow' && (
-            <div className='form-control'>
-              <label
-                htmlFor={`phase-${index}-flow`}
-                className='text-base-content/70 mb-2 block text-sm font-medium'
-              >
-                {mode === 'flow' ? 'Target' : 'Maximum'} Flow{' '}
-                {mode === 'pressure' && '(0 = Ignore)'}
-              </label>
-              <div className='input-group'>
-                <label htmlFor={`phase-${index}-flow`} className='input w-full'>
-                  <NumberInput
-                    id={`phase-${index}-flow`}
-                    className='grow'
-                    step='0.01'
-                    value={flow}
-                    onCommit={value =>
-                      onFieldChange('pump', {
-                        ...phase.pump,
-                        flow: value,
-                      })
-                    }
-                    aria-label='Flow rate in grams per second'
-                    min={mode === 'flow' ? 0.1 : 0}
-                  />
-                  <span aria-label='grams per second'>g/s</span>
-                </label>
-              </div>
-            </div>
+            <NumberField
+              id={`phase-${index}-flow`}
+              label={
+                <>
+                  {mode === 'flow' ? 'Target' : 'Maximum'} Flow{' '}
+                  {mode === 'pressure' && '(0 = Ignore)'}
+                </>
+              }
+              unit='g/s'
+              unitLabel='grams per second'
+              step='0.01'
+              min={mode === 'flow' ? 0.1 : 0}
+              value={flow}
+              onCommit={value => onFieldChange('pump', { ...phase.pump, flow: value })}
+              ariaLabel='Flow rate in grams per second'
+            />
           )}
         </div>
       )}

@@ -47,14 +47,19 @@ export function ExtendedPhaseTarget({ onChange, target, index, onRemove }) {
     TargetTypes[0];
   return (
     <>
-      <div className='grid grid-cols-1 gap-4'>
+      {/* The value is two or three digits, so the field is sized for that rather
+          than spanning the card, and the remove control sits beside it. */}
+      <div className='flex flex-wrap items-end gap-2'>
         <div className='form-control'>
-          <label htmlFor={`phase-${index}-target-value`} className='mb-2 block text-sm font-medium'>
+          <label
+            htmlFor={`phase-${index}-target-value`}
+            className='text-base-content/70 mb-2 block text-sm font-medium'
+          >
             {targetType.label}
           </label>
-          <div className='flex flex-row gap-2'>
-            <div className='input-group flex-grow'>
-              <label htmlFor={`phase-${index}-target-value`} className='input w-full'>
+          <div className='flex flex-row items-center gap-1'>
+            <div className='input-group'>
+              <label htmlFor={`phase-${index}-target-value`} className='input w-32'>
                 {/* The previous code called toFiniteNumber without importing
                     it — editing a target value threw a ReferenceError. */}
                 <NumberInput
