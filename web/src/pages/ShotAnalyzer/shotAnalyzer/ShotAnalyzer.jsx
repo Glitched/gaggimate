@@ -907,7 +907,7 @@ export function ShotAnalyzer() {
     <div className='shot-analyzer-page pb-20'>
       {/* Header */}
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Deep Dive Shot Analyzer</h2>
+        <h2 className='flex-grow text-2xl font-light sm:text-3xl'>Deep Dive Shot Analyzer</h2>
       </div>
 
       <div className='w-full'>

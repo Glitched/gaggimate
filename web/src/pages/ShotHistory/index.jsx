@@ -229,7 +229,7 @@ export function ShotHistory() {
     <>
       <div className='mb-6'>
         <div className='mb-4 flex flex-row items-center gap-2'>
-          <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Shot History</h2>
+          <h2 className='flex-grow text-2xl font-light sm:text-3xl'>Shot History</h2>
           <span className='text-base-content/70 text-sm'>
             {totalFilteredItems} of {history.length} shots{' '}
             {totalPages > 1 && `(Page ${currentPage} of ${totalPages})`}
