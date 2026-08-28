@@ -1774,7 +1774,7 @@
                   "objID": "a4e1f0a8-3f9f-48c3-f7c8-dbf1d0f9d50e",
                   "type": "LVGLContainerWidget",
                   "left": 0,
-                  "top": -19,
+                  "top": -37,
                   "width": 360,
                   "height": 214,
                   "customInputs": [],
@@ -3110,7 +3110,8 @@
                           "flex_flow": "COLUMN",
                           "flex_main_place": "CENTER",
                           "flex_track_place": "CENTER",
-                          "flex_cross_place": "CENTER"
+                          "pad_row": 40,
+                              "flex_cross_place": "CENTER"
                         }
                       }
                     }

@@ -1425,7 +1425,7 @@ void create_screen_brew_screen() {
                     // controlContainer
                     lv_obj_t *obj = lv_obj_create(parent_obj);
                     objects.control_container = obj;
-                    lv_obj_set_pos(obj, 0, -19);
+                    lv_obj_set_pos(obj, 0, -37);
                     lv_obj_set_size(obj, 360, 214);
                     lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1443,6 +1443,7 @@ void create_screen_brew_screen() {
                     lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_track_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_row(obj, 40, LV_PART_MAIN | LV_STATE_DEFAULT);
                     {
                         lv_obj_t *parent_obj = obj;
                         {
