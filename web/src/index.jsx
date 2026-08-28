@@ -7,7 +7,7 @@ if (import.meta.env.DEV) {
 }
 
 import { render } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useState } from 'preact/hooks';
 import { LocationProvider, Router, Route, ErrorBoundary, useLocation } from 'preact-iso';
 import lazy from 'preact-iso/lazy';
 
@@ -37,6 +37,8 @@ const DashboardSettings = lazy(() =>
 );
 
 const apiService = new ApiService();
+import { useHotkey } from './hooks/useHotkey.js';
+
 const DESKTOP_NAV_COLLAPSED_STORAGE_KEY = 'gaggimate.desktopNavCollapsed';
 
 function readInitialDesktopNavCollapsed() {
@@ -86,6 +88,12 @@ export function App() {
     window.addEventListener('open-mobile-nav', handleOpenNav);
     return () => window.removeEventListener('open-mobile-nav', handleOpenNav);
   }, []);
+
+  // "b" toggles the sidebar. Bound here because this is where the state lives;
+  // the hook ignores the key while the user is typing or holding a modifier, so
+  // Ctrl/Cmd+B still belongs to the browser.
+  const toggleNav = useCallback(() => setNavCollapsed(collapsed => !collapsed), []);
+  useHotkey('b', toggleNav);
 
   return (
     <LocationProvider>

@@ -21,6 +21,7 @@ Chart.register(Legend);
 
 import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { useCallback, useEffect, useRef, useState, useContext, useMemo } from 'preact/hooks';
+import { useSearchHotkey } from '../../hooks/useSearchHotkey.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import HistoryCard from './HistoryCard.jsx';
@@ -38,6 +39,8 @@ export function ShotHistory() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // "/" focuses this field, Escape leaves it.
+  const searchRef = useSearchHotkey();
   const [sortBy, setSortBy] = useState('date'); // date, rating, profile, duration, volume
   const [sortOrder, setSortOrder] = useState('desc'); // asc, desc
   const [filterBy, setFilterBy] = useState('all'); // all, rated, unrated
@@ -236,12 +239,16 @@ export function ShotHistory() {
         {/* Controls Row */}
         <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
           {/* Search */}
-          <div className='relative max-w-md flex-grow'>
-            <FontAwesomeIcon
-              icon={faSearch}
-              className='text-base-content/50 absolute top-1/2 left-3 -translate-y-1/2 transform text-sm'
-            />
+          {/* daisyUI 5's .input is a flex *wrapper* (display:inline-flex;
+              position:relative), not a style for the <input> itself. Applied to
+              the input directly it became a positioned element later in DOM
+              order than the icon, so its background painted over the magnifier,
+              and inline-flex centred the placeholder. Same markup as
+              ProfileList now. */}
+          <label className='input max-w-md min-w-0 flex-grow'>
+            <FontAwesomeIcon icon={faSearch} className='text-base-content/50 text-sm' />
             <input
+              ref={searchRef}
               type='text'
               placeholder='Search...'
               value={searchTerm}
@@ -249,12 +256,14 @@ export function ShotHistory() {
                 setSearchTerm(e.target.value);
                 setCurrentPage(1); // Reset to page 1 when searching
               }}
-              className='input input-bordered w-full pr-4 pl-10 text-sm'
+              className='grow text-sm'
             />
-          </div>
+          </label>
 
           {/* Sort */}
-          <div className='flex items-center gap-2'>
+          {/* shrink-0: without it the search field's flex-grow compresses these
+              and the select labels clip mid-word. */}
+          <div className='flex shrink-0 items-center gap-2'>
             <FontAwesomeIcon icon={faSort} className='text-base-content/50' />
             <select
               value={`${sortBy}-${sortOrder}`}
@@ -282,7 +291,7 @@ export function ShotHistory() {
           </div>
 
           {/* Filter */}
-          <div className='flex items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-2'>
             <FontAwesomeIcon icon={faFilter} className='text-base-content/50' />
             <select
               value={filterBy}
