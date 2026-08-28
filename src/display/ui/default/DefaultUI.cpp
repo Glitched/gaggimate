@@ -14,6 +14,8 @@
 #endif
 #include <display/main.h>
 #include <display/ui/utils/effects.h>
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "esp_sntp.h"
@@ -27,6 +29,14 @@ static constexpr uint32_t STARTUP_FADE_MS = 1000; // standby fade-in duration on
 static constexpr int32_t GAUGE_TICK_LONG = 25;      // meter tick length on most screens
 static constexpr int32_t GAUGE_TICK_SHORT = 10;     // shortened tick length on profile / new-menu screens
 static constexpr uint32_t GAUGE_TICK_ANIM_MS = 300; // tick length transition duration
+
+// Profile dial. Presses further than DIAL_INNER_RADIUS from the screen centre belong to the
+// dial (the outer ~90 px, where the gauge dots live); inside it, buttons and swipes work as
+// before. One detent is a full lap divided by the number of favourites, clamped so a short
+// list does not need a quarter turn per step and a long one does not fire on a wobble.
+static constexpr float DIAL_INNER_RADIUS = 150.f;
+static constexpr float DIAL_DETENT_MIN_DEG = 24.f;
+static constexpr float DIAL_DETENT_MAX_DEG = 45.f;
 
 // Standby transition. 200 ms is eight frames at the 25 ms UI tick; 150 read as a hold-then-snap.
 // The enter is not latency-critical so it gets a little longer. Note LVGL charges a new
@@ -306,6 +316,63 @@ void DefaultUI::loop() {
 
     ui_tick();
     lv_task_handler();
+    pollProfileDial(); // after the handler so it sees this tick's pointer state
+}
+
+// --- Profile dial ---------------------------------------------------------------------------
+
+float DefaultUI::profileDialDetent() {
+    std::lock_guard<std::mutex> guard(profilesMutex);
+    const size_t n = favoritedProfileIds.empty() ? 1 : favoritedProfileIds.size();
+    const float perLap = 360.f / static_cast<float>(n);
+    return std::min(DIAL_DETENT_MAX_DEG, std::max(DIAL_DETENT_MIN_DEG, perLap));
+}
+
+void DefaultUI::pollProfileDial() {
+    lv_indev_t *indev = lv_indev_get_next(nullptr);
+    if (indev == nullptr) {
+        return;
+    }
+    const bool down = indev->proc.state == LV_INDEV_STATE_PRESSED && currentScreen == SCREEN_ID_PROFILE_SCREEN;
+    if (!down) {
+        profileDial.pressed = false;
+        profileDial.active = false;
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    const float dx = static_cast<float>(p.x) - lv_disp_get_hor_res(nullptr) / 2.f;
+    const float dy = static_cast<float>(p.y) - lv_disp_get_ver_res(nullptr) / 2.f;
+    const float angle = atan2f(dy, dx) * 180.f / static_cast<float>(M_PI);
+
+    if (!profileDial.pressed) { // first tick of this press: decide whether it is a dial press
+        profileDial.pressed = true;
+        profileDial.active = dx * dx + dy * dy >= DIAL_INNER_RADIUS * DIAL_INNER_RADIUS;
+        profileDial.lastAngle = angle;
+        profileDial.accumulated = 0.f;
+        return;
+    }
+    if (!profileDial.active) {
+        return;
+    }
+    float delta = angle - profileDial.lastAngle;
+    if (delta > 180.f) { // unwrap across the +/-180 seam
+        delta -= 360.f;
+    } else if (delta < -180.f) {
+        delta += 360.f;
+    }
+    profileDial.lastAngle = angle;
+    profileDial.accumulated += delta;
+
+    const float detent = profileDialDetent();
+    while (profileDial.accumulated >= detent) {
+        profileDial.accumulated -= detent;
+        onNextProfile();
+    }
+    while (profileDial.accumulated <= -detent) {
+        profileDial.accumulated += detent;
+        onPreviousProfile();
+    }
 }
 
 void DefaultUI::loopProfiles() {

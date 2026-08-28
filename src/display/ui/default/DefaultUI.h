@@ -39,6 +39,9 @@ class DefaultUI {
     void onProfileSwitch();
     void onNextProfile();
     void onPreviousProfile();
+    // True while a press that began on the profile screen's rim is held: the rim is the
+    // profile dial, so the swipe handler must leave that press alone.
+    bool isProfileDialActive() const { return profileDial.active; }
     void onProfileSelect();
     void setBrightness(int brightness) {
         if (panelDriver) {
@@ -72,6 +75,19 @@ class DefaultUI {
     lv_obj_t *gaugeMeters[4] = {nullptr};
     uint8_t gaugeCount = 0;
     void positionMenuIcon(lv_obj_t *obj, int angle, int radius);
+
+    // Profile dial: dragging around the rim of the profile screen steps through the
+    // favourites like a knob — clockwise is next. Polled from loop() rather than wired to
+    // LVGL press events, because the screen's full-size containers swallow presses and only
+    // gestures bubble up to the screen object.
+    struct ProfileDial {
+        bool pressed = false;   // pointer was down last tick
+        bool active = false;    // this press began on the rim
+        float lastAngle = 0.f;  // degrees, screen convention (y down, clockwise positive)
+        float accumulated = 0.f;
+    } profileDial;
+    void pollProfileDial();
+    float profileDialDetent();
 
     // Standby transition: the wordmark shrinks and fades, the clock/chevron/icons fade with it.
     // Leaving standby waits for the exit to play out; it starts on press so it runs during the

@@ -59,7 +59,10 @@ IDE (CLion/VSCode) it shows up under the `display-sim` environment as the
 - **Scripted touches**: `--tap X,Y@MS` presses the panel at (X, Y) MS after
   boot (repeatable, panel coordinates). Combine with `--screenshot` to capture
   screens behind an interaction, e.g. `--tap 240,240@3000 --screenshot brew.bmp 6000`
-  wakes the standby screen and captures what comes up. `--scale` pretends a
+  wakes the standby screen and captures what comes up. `--drag X0,Y0>X1,Y1@T0~T1` drags in a
+  straight line and `--arc CX,CY,R,A0,A1@T0~T1` along a circle (degrees, 0 = right,
+  clockwise positive, so 270 is the top of the screen) between two times — how swipes and
+  the profile dial are exercised. `--scale` pretends a
   Bluetooth scale is connected (the real plugin is compiled out), so the
   weight/volumetric elements render. A `--screenshot` run keeps
   its window hidden and ignores the real mouse, so a stray click on the desktop

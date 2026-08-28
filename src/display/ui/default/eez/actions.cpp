@@ -299,6 +299,11 @@ void action_on_screen_load(lv_event_t *e) {
 void action_on_screen_swipe(lv_event_t *e) {
     lv_event_code_t event_code = lv_event_get_code(e);
 
+    // A drag around the rim of the profile screen is the profile dial, not a swipe.
+    if (controller.getUI()->isProfileDialActive()) {
+        return;
+    }
+
     if (event_code == LV_EVENT_GESTURE) {
         if (lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) {
             lv_indev_wait_release(lv_indev_get_act());
