@@ -15,6 +15,10 @@
 #include <display/util/PsramWsBuffer.h>
 #include <display/util/mathutils.h>
 #include <display/webassets/web_ui_manifest.h>
+
+// Stands in for a credential the API declines to disclose. The settings form
+// round-trips it unchanged, and the POST handler treats it as "leave alone".
+static constexpr const char *PASSWORD_PLACEHOLDER = "---unchanged---";
 #include <esp32-hal-psram.h>
 #include <esp_core_dump.h>
 #include <esp_err.h>
@@ -824,9 +828,14 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setMdnsName(patch.str("mdnsName"));
             if (patch.has("otaUploadToken"))
                 settings->setOtaUploadToken(patch.str("otaUploadToken"));
-            if (patch.has("wifiPassword") && patch.str("wifiPassword") != "---unchanged---")
+            if (patch.has("wifiPassword") && patch.str("wifiPassword") != PASSWORD_PLACEHOLDER)
                 settings->setWifiPassword(patch.str("wifiPassword"));
-            if (patch.has("apPassword") && patch.str("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
+            // The placeholder check has to come first: it is longer than the
+            // minimum length, so without it saving an unedited form would store
+            // "---unchanged---" as the access point password and lock you out of
+            // the hotspot.
+            if (patch.has("apPassword") && patch.str("apPassword") != PASSWORD_PLACEHOLDER &&
+                patch.str("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
                 settings->setWifiApPassword(patch.str("apPassword"));
             if (patch.has("homekit"))
                 settings->setHomekit(patch.asBool("homekit"));
@@ -977,8 +986,18 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["pumpModelCoeffs"] = settings.getPumpModelCoeffs();
     doc["pumpSlipCoeffs"] = settings.getPumpSlipCoeffs();
     doc["wifiSsid"] = settings.getWifiSsid();
-    doc["wifiPassword"] = apMode ? "---unchanged---" : settings.getWifiPassword();
-    doc["apPassword"] = settings.getWifiApPassword();
+    // Credentials are echoed back only over the device's own access point, where
+    // the caller had to know the AP password to reach us at all. On a home
+    // network this endpoint is unauthenticated and reachable by anything on the
+    // LAN, so both are masked.
+    //
+    // The wifiPassword condition used to be inverted -- masked on the AP, sent
+    // in clear text over the shared network -- and apPassword was never masked.
+    // The AP password is still readable from the device's own screen, which is
+    // the appropriate channel for it.
+    const bool echoCredentials = apMode;
+    doc["wifiPassword"] = echoCredentials ? settings.getWifiPassword() : PASSWORD_PLACEHOLDER;
+    doc["apPassword"] = echoCredentials ? settings.getWifiApPassword() : PASSWORD_PLACEHOLDER;
     doc["mdnsName"] = settings.getMdnsName();
     // Report only whether upload is armed; never echo the secret back.
     doc["otaUploadEnabled"] = settings.getOtaUploadToken().length() > 0;
