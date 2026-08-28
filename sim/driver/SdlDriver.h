@@ -24,6 +24,10 @@ class SdlDriver : public Driver {
     bool shouldQuit() const;
     void screenshot(const char *path); // writes a BMP of the current frame
 
+    // Synthetic touch for scripted runs (`--tap`): sets the pointer state the
+    // LVGL indev reads, exactly as a real mouse event would.
+    void injectPointer(int x, int y, bool pressed);
+
   private:
     static SdlDriver *instance;
     SdlDriver() = default;

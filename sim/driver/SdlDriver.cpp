@@ -109,6 +109,20 @@ void SdlDriver::pumpAndRender() {
             if (e.button.button == SDL_BUTTON_LEFT)
                 s_mousePressed = false;
             break;
+        case SDL_KEYDOWN:
+            // `s` dumps the frame being shown right now. The --screenshot flag can
+            // only capture a fixed time after boot, and macOS will not let a
+            // terminal capture another app's window without screen-recording
+            // permission, so this is how to get honest pixels of a state you
+            // reached interactively.
+            if (e.key.keysym.sym == SDLK_s && e.key.repeat == 0) {
+                static int shotIndex = 0;
+                char path[64];
+                snprintf(path, sizeof(path), "sim_shot_%d.bmp", shotIndex++);
+                screenshot(path);
+                fprintf(stderr, "[sim] screenshot written to %s\n", path);
+            }
+            break;
         default:
             break;
         }
@@ -134,4 +148,10 @@ void SdlDriver::screenshot(const char *path) {
         SDL_FreeSurface(surface);
     }
     SDL_RenderPresent(s_renderer);
+}
+
+void SdlDriver::injectPointer(int x, int y, bool pressed) {
+    s_mouseX = x;
+    s_mouseY = y;
+    s_mousePressed = pressed;
 }

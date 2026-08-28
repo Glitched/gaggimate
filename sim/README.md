@@ -51,21 +51,32 @@ IDE (CLion/VSCode) it shows up under the `display-sim` environment as the
   # convert to PNG on macOS: sips -s format png shot.bmp --out shot.png
   ```
 
+- **Live screenshot**: press `s` in the sim window to write `sim_shot_N.bmp` of
+  exactly what is on screen. Use this for states you reached interactively —
+  `--screenshot` can only capture a fixed time after boot, and macOS blocks a
+  terminal from capturing another app's window without screen-recording
+  permission.
+- **Scripted touches**: `--tap X,Y@MS` presses the panel at (X, Y) MS after
+  boot (repeatable, panel coordinates). Combine with `--screenshot` to capture
+  screens behind an interaction, e.g. `--tap 240,240@3000 --screenshot brew.bmp 6000`
+  wakes the standby screen and captures what comes up.
 - **State** (settings, profiles, shot history) persists under `sim_data/`
-  (git-ignored). Delete it to start fresh.
+  (git-ignored). Delete it to start fresh. The device theme is stored there too
+  (`themeMode`, 0 = dark); set it once via the web UI or
+  `curl -X POST -H 'Content-Type: application/json' -d '{"themeMode":0}' localhost:8080/api/settings`.
 
 ## 3. How it works
 
 Everything simulator-only lives here in `sim/`; the firmware in `src/` is built
 unchanged except for a few small `#ifndef GAGGIMATE_SIM` guards.
 
-| Folder | Role |
-|---|---|
+| Folder          | Role                                                                                                                                                                                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sim/platform/` | Host shims for the Arduino/ESP32 APIs the firmware uses — Arduino core (vendored `String`/`Print`/`Stream`), FreeRTOS, `FS`/`LittleFS`/`SPIFFS`/`SD_MMC`, `Preferences` (NVS), `WiFi`, and the `esp_*` headers. `xTaskCreate*` is a no-op so the sim drives the firmware's loop methods cooperatively on the main thread. |
-| `sim/comms/` | Mock of the `GaggiMateClient` BLE facade + a `MockController` thermal/hydraulic model that reacts to the boiler/pump/relay commands the display sends and emits sensor telemetry (temperature, pressure, flow, scale weight). |
-| `sim/driver/` | `SdlDriver` — an SDL2 window wired into LVGL as the display + mouse-as-touch input, plus a screenshot helper. |
-| `sim/web/` | Host shim of `ESPAsyncWebServer`/`AsyncWebSocket`/`DNSServer` over a tiny non-blocking HTTP/1.1 + WebSocket server (pumped from the main loop, so handlers never race the firmware). OTA / BLE-scale endpoints are stubbed. |
-| `sim/main.cpp` | Entry point: builds the `Controller`, then runs one cooperative loop (controller + UI + web server + SDL) on the main thread. |
+| `sim/comms/`    | Mock of the `GaggiMateClient` BLE facade + a `MockController` thermal/hydraulic model that reacts to the boiler/pump/relay commands the display sends and emits sensor telemetry (temperature, pressure, flow, scale weight).                                                                                             |
+| `sim/driver/`   | `SdlDriver` — an SDL2 window wired into LVGL as the display + mouse-as-touch input, plus a screenshot helper.                                                                                                                                                                                                             |
+| `sim/web/`      | Host shim of `ESPAsyncWebServer`/`AsyncWebSocket`/`DNSServer` over a tiny non-blocking HTTP/1.1 + WebSocket server (pumped from the main loop, so handlers never race the firmware). OTA / BLE-scale endpoints are stubbed.                                                                                               |
+| `sim/main.cpp`  | Entry point: builds the `Controller`, then runs one cooperative loop (controller + UI + web server + SDL) on the main thread.                                                                                                                                                                                             |
 
 The PlatformIO env is `[env:display-sim]` (`platform = native`) in `platformio.ini`.
 
