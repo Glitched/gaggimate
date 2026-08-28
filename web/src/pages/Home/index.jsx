@@ -29,6 +29,11 @@ export function Home() {
 
   return (
     <div className='w-full lg:flex lg:h-full lg:flex-col landscape:max-lg:flex landscape:max-lg:h-full landscape:max-lg:flex-col'>
+      {/* The dashboard is a grid of cards with no visible title, which left the
+          page with no h1 at all -- a screen reader announced no page name and
+          the outline started at whatever the first card used. Visually hidden
+          so the page looks unchanged. */}
+      <h1 className='sr-only'>Dashboard</h1>
       <div className='grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-3 lg:items-stretch landscape:max-lg:min-h-0 landscape:max-lg:flex-1 landscape:max-lg:grid-cols-10'>
         {isOrderFirst ? (
           <>
