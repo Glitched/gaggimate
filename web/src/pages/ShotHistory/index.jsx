@@ -229,7 +229,7 @@ export function ShotHistory() {
     <>
       <div className='mb-6'>
         <div className='mb-4 flex flex-row items-center gap-2'>
-          <h2 className='flex-grow text-2xl font-light sm:text-3xl'>Shot History</h2>
+          <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Shot History</h1>
           <span className='text-base-content/70 text-sm'>
             {totalFilteredItems} of {history.length} shots{' '}
             {totalPages > 1 && `(Page ${currentPage} of ${totalPages})`}
@@ -363,11 +363,13 @@ export function ShotHistory() {
         )}
       </div>
 
-      {/* Pagination Controls */}
+      {/* Pagination Controls. Tints rather than outlines: a row of bordered
+          boxes reads as six competing objects. pb-8 keeps the controls clear of
+          the viewport edge -- the page's p-4 alone left them flush against it. */}
       {totalPages > 1 && (
-        <div className='mt-6 flex items-center justify-center gap-2'>
+        <div className='mt-6 flex items-center justify-center gap-1 pb-8'>
           <button
-            className='btn btn-sm btn-outline'
+            className='btn btn-sm btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none disabled:bg-transparent disabled:opacity-35'
             disabled={currentPage === 1}
             onClick={() => setCurrentPage(currentPage - 1)}
           >
@@ -391,7 +393,12 @@ export function ShotHistory() {
               return (
                 <button
                   key={pageNum}
-                  className={`btn btn-sm ${currentPage === pageNum ? 'btn-primary' : 'btn-outline'}`}
+                  aria-current={currentPage === pageNum ? 'page' : undefined}
+                  className={`btn btn-sm border-none font-medium ${
+                    currentPage === pageNum
+                      ? 'bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary'
+                      : 'btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10'
+                  }`}
                   onClick={() => setCurrentPage(pageNum)}
                 >
                   {pageNum}
@@ -401,7 +408,7 @@ export function ShotHistory() {
           </div>
 
           <button
-            className='btn btn-sm btn-outline'
+            className='btn btn-sm btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none disabled:bg-transparent disabled:opacity-35'
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage(currentPage + 1)}
           >

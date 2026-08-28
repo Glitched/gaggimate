@@ -15,6 +15,7 @@ import { faMinus } from '@fortawesome/free-solid-svg-icons/faMinus';
 import { faMagnifyingGlassChart } from '@fortawesome/free-solid-svg-icons/faMagnifyingGlassChart';
 import { faRobot } from '@fortawesome/free-solid-svg-icons/faRobot';
 import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
+import { faEllipsis } from '@fortawesome/free-solid-svg-icons/faEllipsis';
 import { buildShotText } from '../ShotAnalyzer/services/shotTextExport.js';
 import ShotNotesCard from './ShotNotesCard.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
@@ -111,9 +112,14 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const profileTitle = shot.profile || 'Unknown Profile';
   let formattedDate = 'No timestamp available';
   if (date.getFullYear() > 1970) {
+    const sameYear = date.getFullYear() === new Date().getFullYear();
     formattedDate =
-      date.toLocaleDateString() +
-      ' ' +
+      date.toLocaleDateString([], {
+        month: 'short',
+        day: 'numeric',
+        ...(sameYear ? {} : { year: 'numeric' }),
+      }) +
+      ', ' +
       date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
@@ -166,12 +172,54 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
 
   const canUpload = visualizerService.validateShot(shot);
 
+  // Rendered in two places (inline with the title from sm up, on its own row
+  // below it on a phone), so it lives here rather than being duplicated.
+  // Fixed widths from sm up so the metrics line up as columns down the list --
+  // otherwise the group's width follows its content ("0.2g" vs "64.3g") and
+  // every row starts at a slightly different x. tabular-nums keeps the digits
+  // themselves on a grid. Left unconstrained on phones, where they wrap under
+  // the title and a fixed width would only waste space.
+  const metrics = (
+    <>
+      <div className='flex items-center gap-1 sm:w-20'>
+        <FontAwesomeIcon icon={faClock} className='h-4 w-4 shrink-0' />
+        <span className='tabular-nums'>{(shot.duration / 1000).toFixed(1)}s</span>
+      </div>
+
+      <div className='flex items-center gap-1 sm:w-20'>
+        {shot.volume && shot.volume > 0 ? (
+          <>
+            <FontAwesomeIcon icon={faWeightScale} className='h-4 w-4 shrink-0' />
+            <span className='tabular-nums'>{round2(shot.volume)}g</span>
+          </>
+        ) : null}
+      </div>
+
+      {shot.rating && shot.rating > 0 ? (
+        <div className='flex items-center gap-1 sm:w-24'>
+          <FontAwesomeIcon icon={faStar} className='h-4 w-4 shrink-0 text-yellow-500' />
+          <span className='font-medium tabular-nums'>{shot.rating}/5</span>
+        </div>
+      ) : (
+        <div className='text-base-content/50 flex items-center gap-1 sm:w-24'>
+          <FontAwesomeIcon icon={faStar} className='h-4 w-4 shrink-0' />
+          <span>Not rated</span>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <Card sm={12} className='[&>.card-body]:p-2'>
       <div className='flex flex-col gap-2'>
         <div className='flex flex-row items-start gap-2'>
+          {/* No border: an outlined box against the card's own outline was two
+              competing frames, and it never quite agreed with the card's corner.
+              The radius still matters for the hover fill -- rounded-lg (8px) is
+              the card's --radius-box (16px) less its p-2 body padding, which is
+              what makes a nested corner look concentric. */}
           <button
-            className='border-base-content/20 text-base-content/60 hover:text-base-content hover:bg-base-content/10 hover:border-base-content/40 cursor-pointer rounded-md border p-2 transition-all duration-200'
+            className='text-base-content/60 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg p-2 transition-colors'
             onClick={() => {
               const next = !expanded;
               setExpanded(next);
@@ -184,12 +232,15 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
 
           <div className='min-w-0 flex-grow'>
             {/* Header Row */}
-            <div className='mb-1 flex flex-row items-start justify-between gap-3'>
+            {/* items-start on phones keeps the ⋯ level with the title; from sm
+                up everything centres against the two-line title block so the
+                metrics sit in the middle of the row rather than on its top line. */}
+            <div className='mb-1 flex flex-row items-start justify-between gap-3 sm:items-center'>
               <div className='min-w-0 flex-grow'>
                 <h3 className='text-base-content truncate text-base font-semibold'>
                   {profileTitle}
                 </h3>
-                <p className='text-base-content/70 text-sm'>
+                <p className='text-base-content/70 text-sm whitespace-nowrap'>
                   #{shot.id} • {formattedDate}
                 </p>
                 {expanded &&
@@ -204,6 +255,12 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   )}
               </div>
 
+              {/* From sm up the metrics sit on the title line, which is what
+                  fills the empty middle the stacked layout left across the card. */}
+              <div className='text-base-content/80 hidden shrink-0 flex-row items-center gap-4 text-sm sm:flex'>
+                {metrics}
+              </div>
+
               <div className='flex shrink-0 flex-row items-center gap-2'>
                 {shot.incomplete && (
                   <span className='inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800'>
@@ -211,7 +268,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   </span>
                 )}
 
-                <div className='flex flex-row gap-1'>
+                <div className='hidden flex-row gap-1 sm:flex'>
                   <Tooltip content={shot.loaded ? 'Export' : 'Load first'}>
                     <button
                       disabled={!shot.loaded}
@@ -282,34 +339,76 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                     </button>
                   </Tooltip>
                 </div>
+
+                {/* Five icon buttons took a whole row on a phone and squeezed
+                    the title until it truncated. Behind a menu they cost one
+                    button, and each gets a name instead of a tooltip a touch
+                    device never shows. */}
+                <div className='dropdown dropdown-end sm:hidden'>
+                  <div
+                    tabIndex={0}
+                    role='button'
+                    className='text-base-content/50 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg p-2 transition-colors'
+                    aria-label='More actions for this shot'
+                  >
+                    <FontAwesomeIcon icon={faEllipsis} className='h-4 w-4' />
+                  </div>
+                  <ul
+                    tabIndex={0}
+                    className='dropdown-content menu bg-base-100 rounded-box border-base-300 z-10 mt-1 w-56 border p-2 shadow-lg'
+                  >
+                    <li>
+                      <a href={`/analyzer/internal/${shot.id}`} className='justify-start'>
+                        <FontAwesomeIcon icon={faMagnifyingGlassChart} className='h-4 w-4' />
+                        <span>Open in Analyzer</span>
+                      </a>
+                    </li>
+                    <li className={shot.loaded ? '' : 'menu-disabled'}>
+                      <button onClick={onExport} disabled={!shot.loaded} className='justify-start'>
+                        <FontAwesomeIcon icon={faFileExport} className='h-4 w-4' />
+                        <span>Export</span>
+                      </button>
+                    </li>
+                    <li className={shot.loaded ? '' : 'menu-disabled'}>
+                      <button
+                        onClick={onCopyForLlm}
+                        disabled={!shot.loaded}
+                        className='justify-start'
+                      >
+                        <FontAwesomeIcon
+                          icon={copiedForLlm ? faCheck : faRobot}
+                          className={`h-4 w-4 ${copiedForLlm ? 'text-success' : ''}`}
+                        />
+                        <span>{copiedForLlm ? 'Copied' : 'Copy for LLM'}</span>
+                      </button>
+                    </li>
+                    <li className={canUpload ? '' : 'menu-disabled'}>
+                      <button
+                        onClick={() => setShowUploadModal(true)}
+                        disabled={!canUpload}
+                        className='justify-start'
+                      >
+                        <FontAwesomeIcon icon={faUpload} className='h-4 w-4' />
+                        <span>Upload to Visualizer</span>
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => confirmOrDelete(() => onDelete(shot.id))}
+                        className={`justify-start ${confirmDelete ? 'bg-error text-error-content font-semibold' : 'text-error'}`}
+                      >
+                        <FontAwesomeIcon icon={faTrashCan} className='h-4 w-4' />
+                        <span>{confirmDelete ? 'Tap again to confirm' : 'Delete shot'}</span>
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
 
-            {/* Stats Row */}
-            <div className='text-base-content/80 mb-1 flex flex-row items-center gap-4 text-sm'>
-              <div className='flex items-center gap-1'>
-                <FontAwesomeIcon icon={faClock} className='h-4 w-4' />
-                <span>{(shot.duration / 1000).toFixed(1)}s</span>
-              </div>
-
-              {shot.volume && shot.volume > 0 && (
-                <div className='flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faWeightScale} className='h-4 w-4' />
-                  <span>{round2(shot.volume)}g</span>
-                </div>
-              )}
-
-              {shot.rating && shot.rating > 0 ? (
-                <div className='flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faStar} className='h-4 w-4 text-yellow-500' />
-                  <span className='font-medium'>{shot.rating}/5</span>
-                </div>
-              ) : (
-                <div className='text-base-content/50 flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faStar} className='h-4 w-4' />
-                  <span>Not rated</span>
-                </div>
-              )}
+            {/* Phone-only: from sm up these sit on the title line above. */}
+            <div className='text-base-content/80 mb-1 flex flex-row items-center gap-4 text-sm sm:hidden'>
+              {metrics}
             </div>
 
             {expanded && (
