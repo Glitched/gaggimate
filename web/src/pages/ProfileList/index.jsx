@@ -1012,7 +1012,7 @@ export function ProfileList() {
   return (
     <>
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h1 className='flex-grow text-2xl font-bold sm:text-3xl'>Profiles</h1>
+        <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Profiles</h1>
       </div>
 
       {/* items-center is scoped to sm: -- unscoped it also applied in column
@@ -1020,7 +1020,11 @@ export function ProfileList() {
           page title stayed left-aligned. */}
       <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
         {/* Controls Row */}
-        <div className='flex w-full flex-col items-start gap-3 sm:w-auto sm:flex-row sm:items-center'>
+        {/* Grows to the same max-w-md cap as Shot History's search. sm:w-auto made
+            this shrink-to-fit, so .input's clamp(3rem, 20rem, 100%) resolved its
+            100% against a collapsed parent and the field came out content-sized
+            -- 206px against the other page's 448px. */}
+        <div className='flex w-full min-w-0 flex-col items-start gap-3 sm:max-w-md sm:flex-grow sm:flex-row sm:items-center'>
           {/* Search */}
           <label className='input w-full'>
             <FontAwesomeIcon icon={faSearch} />
