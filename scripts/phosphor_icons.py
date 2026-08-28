@@ -12,9 +12,10 @@ matching src/display/ui/default/eez/images/ui_image_<name>.c with
 scripts/lvgl_img.py. Symbol names are unchanged, so screens.c is untouched.
 
 All icons are alpha masks recolored at runtime, which is why a black-on-
-transparent raster of any monochrome SVG works. Weight is Regular throughout;
-the `scale` column shrinks a glyph inside its box (the +/- buttons are
-deliberately small next to the value they adjust).
+transparent raster of any monochrome SVG works. Weight is Regular unless an
+entry says otherwise; the `scale` column shrinks a glyph inside its box (the
++/- buttons are deliberately small next to the value they adjust, and at 0.67x
+Regular's stroke thins to ~1.7 px, so they take Bold to hold their weight).
 
     scripts/phosphor_icons.py                 # downloads @phosphor-icons/core via npm pack
     scripts/phosphor_icons.py --assets <dir>  # use an extracted package/assets directory
@@ -40,9 +41,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PROJECT = os.path.join(ROOT, "eez-ui", "gaggimate.eez-project")
 IMAGES = os.path.join(ROOT, "src", "display", "ui", "default", "eez", "images")
-WEIGHT = "regular"
+DEFAULT_WEIGHT = "regular"
 
-# bitmap name in the EEZ project -> (phosphor icon, scale of the glyph within its box)
+# bitmap name in the EEZ project -> (phosphor icon, scale of the glyph within its box[, weight])
 ICONS = {
     "angle-down-40x40": ("caret-down", 1.0),
     "angle-left-40x40": ("caret-left", 1.0),
@@ -64,8 +65,8 @@ ICONS = {
     "flowmeter": ("waves", 1.0),
     "tachometer-fast-40x40": ("gauge", 1.0),
     "thermometer-half-40x40": ("thermometer-simple", 1.0),
-    "minus-small-40x40": ("minus", 0.67),
-    "plus-small-40x40": ("plus", 0.67),
+    "minus-small-40x40": ("minus", 0.67, "bold"),
+    "plus-small-40x40": ("plus", 0.67, "bold"),
     "pause-40x40": ("pause", 1.0),
     "play-40x40": ("play", 1.0),
     "power-40x40": ("power", 1.0),
@@ -89,9 +90,9 @@ def fetch_assets(workdir):
     return os.path.join(workdir, "package", "assets")
 
 
-def rasterize(assets, icon, size, scale):
-    fname = "%s.svg" % icon if WEIGHT == "regular" else "%s-%s.svg" % (icon, WEIGHT)
-    with open(os.path.join(assets, WEIGHT, fname)) as f:
+def rasterize(assets, icon, size, scale, weight):
+    fname = "%s.svg" % icon if weight == "regular" else "%s-%s.svg" % (icon, weight)
+    with open(os.path.join(assets, weight, fname)) as f:
         svg = f.read().replace("currentColor", "#000")
     px = max(1, round(size * scale))
     glyph = Image.open(io.BytesIO(resvg_py.svg_to_bytes(svg_string=svg, width=px, height=px))).convert("RGBA")
@@ -117,14 +118,16 @@ def main():
 
     with tempfile.TemporaryDirectory() as tmp:
         assets = args.assets or fetch_assets(tmp)
-        for name, (icon, scale) in ICONS.items():
+        for name, spec in ICONS.items():
+            icon, scale = spec[0], spec[1]
+            weight = spec[2] if len(spec) > 2 else DEFAULT_WEIGHT
             bitmap = by_name[name]
             old_b64 = bitmap["image"]
             size = Image.open(io.BytesIO(base64.b64decode(old_b64.split(",", 1)[1]))).size
             if size[0] != size[1]:
                 sys.exit("%s is %dx%d; this script only handles square icons" % (name, *size))
             png_path = os.path.join(tmp, "%s.png" % name)
-            rasterize(assets, icon, size[0], scale).save(png_path)
+            rasterize(assets, icon, size[0], scale, weight).save(png_path)
             with open(png_path, "rb") as f:
                 new_b64 = "data:image/png;base64," + base64.b64encode(f.read()).decode()
             if text.count(old_b64) != 1:
@@ -137,7 +140,7 @@ def main():
                 sys.exit("expected generated file missing: %s" % c_path)
             with open(c_path, "w") as f:
                 f.write(lvgl_img.convert(png_path, sym))
-            print("%-26s <- %-24s %dpx x%.2f" % (name, icon, size[0], scale))
+            print("%-26s <- %-24s %dpx x%.2f %s" % (name, icon, size[0], scale, weight))
 
     json.loads(text)  # still valid
     with open(PROJECT, "w") as f:
