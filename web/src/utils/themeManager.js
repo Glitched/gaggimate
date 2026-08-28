@@ -1,5 +1,9 @@
 const THEME_STORAGE_KEY = 'gaggimate-daisyui-theme';
 const AVAILABLE_THEMES = ['system', 'light', 'dark', 'exhalation', 'coffee', 'nord'];
+// What you get without ever opening the picker. Kept in step with the theme
+// carrying `default: true` in style.css -- if the CSS default and this disagree,
+// every load flashes one palette before settling on the other.
+const DEFAULT_THEME = 'exhalation';
 
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
@@ -10,10 +14,10 @@ export function getSystemTheme() {
 export function getStoredTheme() {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    return stored && AVAILABLE_THEMES.includes(stored) ? stored : 'system';
+    return stored && AVAILABLE_THEMES.includes(stored) ? stored : DEFAULT_THEME;
   } catch (error) {
     console.warn('Failed to get stored theme:', error);
-    return 'system';
+    return DEFAULT_THEME;
   }
 }
 
