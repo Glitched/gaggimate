@@ -30,12 +30,19 @@ int main(int argc, char **argv) {
     // Optional flags, all usable together:
     //   --screenshot <path> [delayMs]   render for a bit, save a BMP, exit
     //   --tap X,Y@MS                    synthetic touch at (X, Y) MS after boot; repeatable
+    //   --scale                         pretend a Bluetooth scale is connected (BLE scales are
+    //                                   compiled out of the sim), so the weight/volumetric UI shows
     // e.g. `--tap 240,240@3000 --screenshot shot.bmp 8000` wakes the standby screen
     // and captures what comes up. Screen coordinates are the panel's (480x480).
     const char *shotPath = nullptr;
     unsigned long shotDelayMs = 4000;
     std::vector<ScriptedTap> taps;
+    bool fakeScale = false;
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--scale") == 0) {
+            fakeScale = true;
+            continue;
+        }
         if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc) {
             shotPath = argv[++i];
             if (i + 1 < argc)
@@ -56,6 +63,11 @@ int main(int argc, char **argv) {
     SdlDriver::getInstance()->setScripted(shotPath != nullptr);
 
     controller.setup(); // builds the UI, installs the SDL driver, marks screen ready
+    if (fakeScale) {
+        // Same switch the web UI's "volumetric override" uses: isBluetoothScaleHealthy()
+        // reports true, so every scale-dependent screen element appears.
+        controller.setVolumetricOverride(true);
+    }
 
     // The sim has a real network (the WebUI is reachable), so present as Wi-Fi
     // connected: seeding credentials sends setupWifi() down the STA path, and the
