@@ -74,7 +74,14 @@ function DashboardModeDropdown({ editLink, editIcon, editActive, isActive }) {
   return (
     <div className='dropdown dropdown-end h-full'>
       {/* div+tabindex instead of <button>: Safari doesn't focus buttons on click,
-          which daisyUI's focus-driven dropdown relies on. */}
+          which daisyUI's focus-driven dropdown relies on.
+
+          This is the right half of the Dashboard row, so it has to carry the same
+          fill as the left half or the pill looks welded together from two parts.
+          It kept the solid bg-primary the nav rows used before they moved to a
+          tint, which made the pencil the loudest thing in the sidebar. When the
+          row is active but you are not editing, the icon dims: the row is
+          selected, this control is not. */}
       <div
         tabIndex={0}
         role='button'
@@ -82,9 +89,9 @@ function DashboardModeDropdown({ editLink, editIcon, editActive, isActive }) {
         title='Dashboard view'
         className={`flex h-full cursor-pointer items-center justify-center rounded-r-xl px-2.5 ${
           editActive
-            ? 'bg-primary text-primary-content'
+            ? 'bg-primary/15 text-primary'
             : isActive
-              ? 'bg-primary text-primary-content/50 hover:text-primary-content'
+              ? 'bg-primary/15 text-primary/50 hover:text-primary'
               : 'text-base-content/30 hover:bg-base-content/10 hover:text-base-content bg-transparent'
         }`}
       >
