@@ -82,9 +82,16 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (ui) {
-            ui->loop();
-            ui->loopProfiles();
+        // On the device DefaultUI::loop runs in its own task with a 25 ms sleep between
+        // iterations (DefaultUI::loopTask), which caps animations at ~40 fps. Match that
+        // here so a transition gets the same number of frames in the sim as on hardware.
+        {
+            static unsigned long lastUiLoop = 0;
+            if (ui && millis() - lastUiLoop >= 25) {
+                lastUiLoop = millis();
+                ui->loop();
+                ui->loopProfiles();
+            }
         }
         gm_web_pump(); // service the embedded WebUI HTTP/WS server
 

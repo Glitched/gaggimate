@@ -73,6 +73,27 @@ class DefaultUI {
     uint8_t gaugeCount = 0;
     void positionMenuIcon(lv_obj_t *obj, int angle, int radius);
 
+    // Standby transition: the wordmark shrinks and fades, the clock/chevron/icons fade with it.
+    // Leaving standby waits for the exit to play out; it starts on press so it runs during the
+    // dwell of the tap rather than after it.
+    enum class StandbyFade { Resting, ExitRunning, Exited, EnterRunning };
+    StandbyFade standbyFade = StandbyFade::Resting;
+    int32_t standbyFadeValue = 255;     // 255 = resting, 0 = fully exited
+    bool standbyPressArmed = false;     // exit began on a press that has not yet become a wake
+    bool standbyReleasePending = false; // a release happened; decide in loop() whether it woke us
+    uint16_t standbyFadeFrames = 0;
+    unsigned long standbyFadeStart = 0;
+    void attachStandbyPressHandler();
+    static void standbyPressCb(lv_event_t *e);
+    bool wakeAllowed() const;
+    void beginStandbyExit();
+    void cancelStandbyExit();
+    void beginStandbyEnter();
+    void runStandbyFade(int32_t to, uint32_t ms, lv_anim_path_cb_t path);
+    void setStandbyFade(int32_t v);
+    static void standbyFadeAnimCb(void *var, int32_t v);
+    static void standbyFadeReadyCb(lv_anim_t *a);
+
     void updateState();
     void updateSystemStatus();
     void updateProfileInfo();

@@ -28,6 +28,15 @@ static constexpr int32_t GAUGE_TICK_LONG = 25;      // meter tick length on most
 static constexpr int32_t GAUGE_TICK_SHORT = 10;     // shortened tick length on profile / new-menu screens
 static constexpr uint32_t GAUGE_TICK_ANIM_MS = 300; // tick length transition duration
 
+// Standby transition. 150 ms is six frames at the 25 ms UI tick; shorter reads as a stutter.
+// The enter is not latency-critical so it gets a little longer.
+static constexpr uint32_t STANDBY_EXIT_MS = 150;
+static constexpr uint32_t STANDBY_ENTER_MS = 250;
+static constexpr uint32_t STANDBY_CANCEL_MS = 120;     // undo a press that did not become a wake
+static constexpr int32_t STANDBY_LOGO_ZOOM = 210;      // resting wordmark zoom (screens.c)
+static constexpr int32_t STANDBY_LOGO_ZOOM_EXIT = 168; // 80%: where the shrink ends
+static constexpr lv_opa_t STANDBY_CHEVRON_OPA = 153;   // resting chevron opacity (screens.c)
+
 // Profile and the new menu screen show shortened meter ticks.
 static bool isShortTickScreen(ScreensEnum s) {
     return s == SCREEN_ID_PROFILE_SCREEN || s == SCREEN_ID_MENU_SCREEN_NEW || s == SCREEN_ID_INFO_SCREEN;
@@ -270,6 +279,14 @@ void DefaultUI::loop() {
         grindWeightTarget = FloatValue(controller->getSettings().getTargetGrindVolume());
         eez::flow::setGlobalVariable(FLOW_GLOBAL_VARIABLE_GRIND_WEIGHT_TARGET, grindWeightTarget);
 
+        if (standbyReleasePending) {
+            standbyReleasePending = false;
+            // The press started the exit; if the release did not turn into a wake (guards in
+            // action_on_wakeup, or the finger slid off), bring the standby screen back.
+            if (targetScreen == SCREEN_ID_STANDBY_SCREEN && standbyFade != StandbyFade::Resting) {
+                cancelStandbyExit();
+            }
+        }
         handleScreenChange();
         currentScreen = static_cast<ScreensEnum>(eez_flow_get_current_screen());
         effect_mgr.evaluate_all();
@@ -370,6 +387,7 @@ void DefaultUI::onVolumetricDelete() {
 
 void DefaultUI::setupPanel() {
     ui_init();
+    attachStandbyPressHandler(); // screens are created once by ui_init(), so the pointers are stable
     setupState();
     applyTheme();
     ui_tick();
@@ -456,17 +474,149 @@ void DefaultUI::setupState() {
 }
 
 void DefaultUI::handleScreenChange() {
-    if (currentScreen != targetScreen) {
-        if (targetScreen == SCREEN_ID_STANDBY_SCREEN) {
-            standbyEnterTime = ::millis();
-        } else if (currentScreen == SCREEN_ID_STANDBY_SCREEN) {
-            const ::Settings &settings = controller->getSettings();
-            setBrightness(settings.getMainBrightness());
-        }
-        eez_flow_set_screen(targetScreen, LV_SCR_LOAD_ANIM_NONE, 0, 0);
-        animateGaugeTicks(currentScreen, targetScreen);
-        rerender = true;
+    if (currentScreen == targetScreen) {
+        return;
     }
+    if (targetScreen == SCREEN_ID_STANDBY_SCREEN) {
+        standbyEnterTime = ::millis();
+    } else if (currentScreen == SCREEN_ID_STANDBY_SCREEN) {
+        // Hold the switch until the exit transition has played out. A tap started it on
+        // press; programmatic exits (BLE connect, OTA end, ...) start it here.
+        if (standbyFade != StandbyFade::Exited) {
+            if (standbyFade != StandbyFade::ExitRunning) {
+                beginStandbyExit();
+            }
+            return;
+        }
+        standbyPressArmed = false;
+        const ::Settings &settings = controller->getSettings();
+        setBrightness(settings.getMainBrightness());
+    }
+    const ScreensEnum from = currentScreen;
+    eez_flow_set_screen(targetScreen, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+    animateGaugeTicks(from, targetScreen);
+    if (targetScreen == SCREEN_ID_STANDBY_SCREEN && from != SCREEN_ID_STANDBY_SCREEN) {
+        beginStandbyEnter();
+    }
+    rerender = true;
+}
+
+// --- Standby transition ---------------------------------------------------------------------
+
+void DefaultUI::attachStandbyPressHandler() {
+    if (objects.standby_screen != nullptr) {
+        lv_obj_add_event_cb(objects.standby_screen, standbyPressCb, LV_EVENT_ALL, this);
+    }
+}
+
+// Same conditions under which action_on_wakeup() (eez/actions.cpp) will actually leave standby.
+bool DefaultUI::wakeAllowed() const {
+    return !controller->isUpdating() && !controller->isErrorState() && !controller->isAutotuning() &&
+           controller->getClientController()->isConnected();
+}
+
+void DefaultUI::standbyPressCb(lv_event_t *e) {
+    auto *ui = static_cast<DefaultUI *>(lv_event_get_user_data(e));
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+        // The generated handler wakes on CLICKED, i.e. on release. Starting here lets the
+        // 150 ms run while the finger is still down, so the Brew screen is ready by the time
+        // it lifts instead of 150 ms after.
+        if (ui->currentScreen == SCREEN_ID_STANDBY_SCREEN && ui->targetScreen == SCREEN_ID_STANDBY_SCREEN &&
+            ui->wakeAllowed()) {
+            ui->standbyPressArmed = true;
+            ui->beginStandbyExit();
+        }
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+        // LVGL sends RELEASED before CLICKED, so whether this release is a wake is only known
+        // once the indev has finished dispatching. loop() looks at targetScreen afterwards.
+        if (ui->standbyPressArmed) {
+            ui->standbyPressArmed = false;
+            ui->standbyReleasePending = true;
+            ui->rerender = true;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void DefaultUI::setStandbyFade(int32_t v) {
+    standbyFadeValue = v;
+    standbyFadeFrames++;
+    const auto opa = static_cast<lv_opa_t>(v);
+    if (objects.obj1 != nullptr) { // the wordmark
+        lv_obj_set_style_img_opa(objects.obj1, opa, LV_PART_MAIN);
+        const int32_t zoom = STANDBY_LOGO_ZOOM_EXIT + (STANDBY_LOGO_ZOOM - STANDBY_LOGO_ZOOM_EXIT) * v / 255;
+        lv_img_set_zoom(objects.obj1, static_cast<uint16_t>(zoom));
+    }
+    if (objects.touch_icon != nullptr) {
+        lv_obj_set_style_img_opa(objects.touch_icon, static_cast<lv_opa_t>(STANDBY_CHEVRON_OPA * v / 255), LV_PART_MAIN);
+    }
+    for (lv_obj_t *icon : {objects.wifi_icon, objects.bluetooth_icon, objects.update_icon}) {
+        if (icon != nullptr) {
+            lv_obj_set_style_img_opa(icon, opa, LV_PART_MAIN);
+        }
+    }
+    // Per-part opacity, not the object-level `opa` style: that one renders through an
+    // intermediate layer, which is exactly the per-frame cost this is designed to avoid.
+    for (lv_obj_t *label : {objects.time, objects.status}) {
+        if (label != nullptr) {
+            lv_obj_set_style_text_opa(label, opa, LV_PART_MAIN);
+        }
+    }
+}
+
+void DefaultUI::standbyFadeAnimCb(void *var, int32_t v) { static_cast<DefaultUI *>(var)->setStandbyFade(v); }
+
+void DefaultUI::standbyFadeReadyCb(lv_anim_t *a) {
+    auto *ui = static_cast<DefaultUI *>(a->var);
+    if (ui->standbyFade == StandbyFade::ExitRunning) {
+        ui->standbyFade = StandbyFade::Exited;
+    } else if (ui->standbyFade == StandbyFade::EnterRunning) {
+        ui->standbyFade = StandbyFade::Resting;
+    }
+    // How many frames the transition really got is the honest measure of its smoothness on
+    // the device; the sim cannot tell us that.
+    ESP_LOGI("DefaultUI", "standby %s: %u frames in %lu ms", ui->standbyFade == StandbyFade::Exited ? "exit" : "enter",
+             ui->standbyFadeFrames, ::millis() - ui->standbyFadeStart);
+    ui->rerender = true; // handleScreenChange() only runs under rerender; let it see the new state
+}
+
+void DefaultUI::runStandbyFade(int32_t to, uint32_t ms, lv_anim_path_cb_t path) {
+    lv_anim_del(this, standbyFadeAnimCb);
+    standbyFadeFrames = 0;
+    standbyFadeStart = ::millis();
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, this);
+    lv_anim_set_exec_cb(&a, standbyFadeAnimCb);
+    lv_anim_set_values(&a, standbyFadeValue, to);
+    lv_anim_set_time(&a, ms);
+    lv_anim_set_path_cb(&a, path);
+    lv_anim_set_ready_cb(&a, standbyFadeReadyCb);
+    lv_anim_start(&a);
+}
+
+void DefaultUI::beginStandbyExit() {
+    if (standbyFade == StandbyFade::ExitRunning || standbyFade == StandbyFade::Exited) {
+        return;
+    }
+    standbyFade = StandbyFade::ExitRunning;
+    runStandbyFade(0, STANDBY_EXIT_MS, lv_anim_path_ease_in); // accelerate out
+}
+
+void DefaultUI::cancelStandbyExit() {
+    standbyFade = StandbyFade::EnterRunning;
+    runStandbyFade(255, STANDBY_CANCEL_MS, lv_anim_path_ease_out);
+}
+
+void DefaultUI::beginStandbyEnter() {
+    standbyFade = StandbyFade::EnterRunning;
+    setStandbyFade(0);
+    runStandbyFade(255, STANDBY_ENTER_MS, lv_anim_path_ease_out); // decelerate in
 }
 
 // Collect every lv_meter under obj (the dial gauges) so their tick length can be animated together.
