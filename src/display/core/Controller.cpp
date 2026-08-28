@@ -52,8 +52,30 @@ void Controller::setup() {
     // async_tcp task for every request, which under a multi-tab load burst
     // pegged CPU0 for >5s and tripped the task watchdog (reboot). LittleFS
     // lookups are O(path). maxOpenFiles 16 for concurrent asset serving. [GM-90]
-    if (!LittleFS.begin(true, "/littlefs", 16)) {
-        Serial.println(F("An Error has occurred while mounting LittleFS"));
+    //
+    // Mounted with formatOnFail=false. It used to be true, which meant any mount
+    // failure silently reformatted the partition and took every profile and shot
+    // with it -- and because the branch below only runs when the *format* also
+    // fails, a successful wipe printed nothing at all. Users lost their history
+    // with no indication anything had happened.
+    //
+    // An unmountable LittleFS usually still holds readable data; formatting is
+    // the one action that makes it unrecoverable. So refuse to, say so loudly,
+    // and carry on unmounted: the machine still heats and brews, since that runs
+    // off NVS and the controller, and the flash can be dumped for recovery.
+    filesystemMounted = LittleFS.begin(false, "/littlefs", 16);
+    if (!filesystemMounted) {
+        // Retried once: a transient failure here would otherwise strand the
+        // filesystem for the whole session.
+        filesystemMounted = LittleFS.begin(false, "/littlefs", 16);
+    }
+    if (!filesystemMounted) {
+        ESP_LOGE(LOG_TAG, "**********************************************************");
+        ESP_LOGE(LOG_TAG, "LittleFS would not mount. NOT reformatting.");
+        ESP_LOGE(LOG_TAG, "Profiles and shot history are unavailable this session.");
+        ESP_LOGE(LOG_TAG, "The data is likely still on flash -- dump the partition");
+        ESP_LOGE(LOG_TAG, "before reformatting if you want any chance of recovery.");
+        ESP_LOGE(LOG_TAG, "**********************************************************");
     }
 
 #ifndef GAGGIMATE_HEADLESS

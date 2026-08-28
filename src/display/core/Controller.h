@@ -22,6 +22,7 @@ enum class VolumetricMeasurementSource { INACTIVE, FLOW_ESTIMATION, BLUETOOTH };
 
 class Controller {
   public:
+    bool isFilesystemMounted() const { return filesystemMounted; }
     Controller() = default;
 
     void setup();
@@ -226,6 +227,10 @@ class Controller {
     bool processCompleted = false;
     bool steamReady = false;
     bool sdcard = false;
+    // False when LittleFS would not mount. Profiles and shot history are then
+    // unavailable, but we deliberately do not reformat to make them available
+    // again -- see Controller::setup().
+    bool filesystemMounted = false;
     int error = 0;
 
     // Bluetooth scale connection monitoring
