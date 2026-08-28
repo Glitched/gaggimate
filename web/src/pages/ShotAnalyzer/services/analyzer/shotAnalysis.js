@@ -5,10 +5,10 @@ import {
   createDelayTotals,
   getDelayReviewMessage,
   isAnalyzerDebugEnabled,
-} from './delayTracking';
-import { getMetricStats } from './metricStats';
-import { analyzeExecutedPhase } from './phaseAnalysis';
-import { mergeSkippedProfilePhases } from './skippedPhases';
+} from './delayTracking.js';
+import { getMetricStats } from './metricStats.js';
+import { analyzeExecutedPhase } from './phaseAnalysis.js';
+import { mergeSkippedProfilePhases } from './skippedPhases.js';
 import {
   buildRecordedExitReasonByPhase,
   getBrewCompletionLabel,

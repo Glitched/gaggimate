@@ -1,7 +1,7 @@
 /** Inserts missing profile phases without discarding or reordering executed shot phases. */
 
-import { createEmptyPhaseStats } from './metricStats';
-import { formatStopReason, isTargetHit, isWeightTarget } from './targetMatching';
+import { createEmptyPhaseStats } from './metricStats.js';
+import { formatStopReason, isTargetHit, isWeightTarget } from './targetMatching.js';
 
 function normalizePhaseLookupName(name) {
   return (name || '').trim().toLowerCase();

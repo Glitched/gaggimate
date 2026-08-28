@@ -55,44 +55,14 @@ async function fetchNotes(id) {
   }
 }
 
-/** Profiles are only reachable over the WebSocket, so this is best-effort. */
+/** Profile enables planned-vs-actual phase lines; best-effort via the REST API. */
 async function fetchProfile(profileId) {
   if (!profileId) return null;
-  const wsUrl = `${BASE.replace(/^http/, 'ws')}/ws`;
-  return new Promise(resolve => {
-    let settled = false;
-    const done = value => {
-      if (settled) return;
-      settled = true;
-      try {
-        ws.close();
-      } catch {
-        /* already closing */
-      }
-      resolve(value);
-    };
-    const ws = new WebSocket(wsUrl);
-    const rid = `scrape-${Date.now()}`;
-    const timer = setTimeout(() => done(null), 8000);
-    ws.addEventListener('open', () =>
-      ws.send(JSON.stringify({ tp: 'req:profiles:load', id: profileId, rid })),
-    );
-    ws.addEventListener('message', ev => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.tp === 'res:profiles:load' && msg.rid === rid) {
-          clearTimeout(timer);
-          done(msg.profile || null);
-        }
-      } catch {
-        /* not our message */
-      }
-    });
-    ws.addEventListener('error', () => {
-      clearTimeout(timer);
-      done(null);
-    });
-  });
+  try {
+    return await get(`/api/profiles/${encodeURIComponent(profileId)}`, 'json');
+  } catch {
+    return null;
+  }
 }
 
 async function scrape(id) {

@@ -8,8 +8,8 @@ import {
   addDelayHit,
   analyzerDebug,
   createPhaseDelayTracker,
-} from './delayTracking';
-import { getMetricStats } from './metricStats';
+} from './delayTracking.js';
+import { getMetricStats } from './metricStats.js';
 import {
   buildTargetCalcValues,
   findManualTargetMatch,
@@ -17,14 +17,14 @@ import {
   findTargetMatchWithDirection,
   formatStopReason,
   predictTargetValuesAtStep,
-} from './targetMatching';
+} from './targetMatching.js';
 import {
   getLastNonExtendedIndex,
   getPhaseEndSample,
   getPhaseWeightRate,
   getSampleInstantWeightRate,
   isPositiveFiniteRate,
-} from './weightRate';
+} from './weightRate.js';
 import {
   getBrewModeLabel,
   getPhaseExitReasonMeta,
