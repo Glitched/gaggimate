@@ -51,6 +51,10 @@ int main(int argc, char **argv) {
         }
     }
 
+    // A --screenshot run is unattended: render to a hidden window and ignore the
+    // real mouse so nothing but --tap can touch the screen.
+    SdlDriver::getInstance()->setScripted(shotPath != nullptr);
+
     controller.setup(); // builds the UI, installs the SDL driver, marks screen ready
 
     // The sim has a real network (the WebUI is reachable), so present as Wi-Fi

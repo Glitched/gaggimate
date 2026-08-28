@@ -28,9 +28,11 @@ static constexpr int32_t GAUGE_TICK_LONG = 25;      // meter tick length on most
 static constexpr int32_t GAUGE_TICK_SHORT = 10;     // shortened tick length on profile / new-menu screens
 static constexpr uint32_t GAUGE_TICK_ANIM_MS = 300; // tick length transition duration
 
-// Standby transition. 150 ms is six frames at the 25 ms UI tick; shorter reads as a stutter.
-// The enter is not latency-critical so it gets a little longer.
-static constexpr uint32_t STANDBY_EXIT_MS = 150;
+// Standby transition. 200 ms is eight frames at the 25 ms UI tick; 150 read as a hold-then-snap.
+// The enter is not latency-critical so it gets a little longer. Note LVGL charges a new
+// animation for the whole tick interval it was created in, so with a 25 ms loop an N ms
+// animation usually renders in N-25 ms: expect 7 frames here, occasionally 8.
+static constexpr uint32_t STANDBY_EXIT_MS = 200;
 static constexpr uint32_t STANDBY_ENTER_MS = 250;
 static constexpr uint32_t STANDBY_CANCEL_MS = 120;     // undo a press that did not become a wake
 static constexpr int32_t STANDBY_LOGO_ZOOM = 210;      // resting wordmark zoom (screens.c)

@@ -59,7 +59,9 @@ IDE (CLion/VSCode) it shows up under the `display-sim` environment as the
 - **Scripted touches**: `--tap X,Y@MS` presses the panel at (X, Y) MS after
   boot (repeatable, panel coordinates). Combine with `--screenshot` to capture
   screens behind an interaction, e.g. `--tap 240,240@3000 --screenshot brew.bmp 6000`
-  wakes the standby screen and captures what comes up.
+  wakes the standby screen and captures what comes up. A `--screenshot` run keeps
+  its window hidden and ignores the real mouse, so a stray click on the desktop
+  cannot become a tap in the capture.
 - **State** (settings, profiles, shot history) persists under `sim_data/`
   (git-ignored). Delete it to start fresh. The device theme is stored there too
   (`themeMode`, 0 = dark); set it once via the web UI or
