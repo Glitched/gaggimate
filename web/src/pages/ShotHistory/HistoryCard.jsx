@@ -92,9 +92,11 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
 
   // Compact text export (YAML frontmatter + CSV) sized for pasting into an LLM.
   // ~6% the tokens of the JSON export with no samples dropped; see shotTextExport.js.
-  const onCopyForLlm = useCallback(async () => {
+  // Builds the export. May fetch the shot and its profile, so it can take a
+  // moment -- which is the whole problem below.
+  const buildLlmText = useCallback(async () => {
     const loaded = await ensureLoaded();
-    if (!loaded) return;
+    if (!loaded) return null;
     let profileData = null;
     if (loaded.profileId && apiService) {
       try {
@@ -106,17 +108,53 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
       }
     }
     const text = buildShotText(loaded, profileData, { notes: shotNotes });
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
+    return text ? { text, id: loaded.id } : null;
+  }, [ensureLoaded, shotNotes, apiService]);
+
+  const onCopyForLlm = useCallback(async () => {
+    const markCopied = () => {
       setCopiedForLlm(true);
       clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = setTimeout(() => setCopiedForLlm(false), 2000);
-    } catch (error) {
-      console.error('Clipboard write failed, falling back to download:', error);
-      downloadText(text, 'shot-' + loaded.id + '.md');
+    };
+
+    // navigator.clipboard.writeText() needs transient user activation, and the
+    // activation from this click does not survive fetching the shot and its
+    // profile first. Awaiting the text and then writing therefore fails with
+    // NotAllowedError on a shot that is not already loaded, and we silently fell
+    // back to downloading a file.
+    //
+    // ClipboardItem accepts a Promise, so the write is *started* inside the
+    // click -- while activation is still live -- and the browser waits on the
+    // payload itself. Not every engine supports that, hence the ladder below.
+    const pending = buildLlmText();
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': pending.then(
+              result => new Blob([result?.text ?? ''], { type: 'text/plain' }),
+            ),
+          }),
+        ]);
+        if (await pending) markCopied();
+        return;
+      } catch (error) {
+        console.warn('Async clipboard write unavailable, trying writeText:', error);
+      }
     }
-  }, [ensureLoaded, shotNotes, apiService]);
+
+    const result = await pending;
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.text);
+      markCopied();
+    } catch (error) {
+      // Last resort: hand it over as a file rather than losing the export.
+      console.error('Clipboard write failed, falling back to download:', error);
+      downloadText(result.text, 'shot-' + result.id + '.md');
+    }
+  }, [buildLlmText]);
 
   const handleNotesLoaded = useCallback(notes => {
     setShotNotes(notes);
