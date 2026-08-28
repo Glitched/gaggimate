@@ -1076,7 +1076,7 @@ void create_screen_standby_screen() {
         {
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.obj1 = obj;
-            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_pos(obj, 0, -14);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_img_set_src(obj, &img_logo);
             lv_img_set_zoom(obj, 210);
@@ -1089,10 +1089,10 @@ void create_screen_standby_screen() {
             // touchIcon
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.touch_icon = obj;
-            lv_obj_set_pos(obj, 0, 150);
+            lv_obj_set_pos(obj, 0, 210);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_img_set_src(obj, &img_tap_60x60);
-            lv_img_set_zoom(obj, 210);
+            lv_img_set_src(obj, &img_angle_up_40x40);
+            lv_obj_set_style_img_opa(obj, 153, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_img_recolor(obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
                                          LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);

@@ -917,7 +917,7 @@
               "objID": "909d1487-0c33-4a9d-cb19-b613ceeb7d2a",
               "type": "LVGLImageWidget",
               "left": 0,
-              "top": 0,
+              "top": -14,
               "width": 480,
               "height": 96,
               "customInputs": [],
@@ -975,9 +975,9 @@
               "objID": "d6256ec7-e928-410c-d3c4-b375efdbb29d",
               "type": "LVGLImageWidget",
               "left": 0,
-              "top": 150,
-              "width": 60,
-              "height": 60,
+              "top": 210,
+              "width": 40,
+              "height": 40,
               "customInputs": [],
               "customOutputs": [],
               "style": {
@@ -1012,7 +1012,8 @@
                 "definition": {
                   "MAIN": {
                     "DEFAULT": {
-                      "img_recolor": "NiceWhite",
+                      "img_opa": 153,
+     "img_recolor": "NiceWhite",
                       "img_recolor_opa": 255,
                       "align": "CENTER"
                     }
@@ -1021,11 +1022,11 @@
               },
               "group": "",
               "groupIndex": 0,
-              "image": "tap-60x60",
+              "image": "angle-up-40x40",
               "setPivot": false,
               "pivotX": 0,
               "pivotY": 0,
-              "zoom": 210,
+              "zoom": 256,
               "angle": 0,
               "innerAlign": "CENTER",
               "sizeMode": "VIRTUAL"
