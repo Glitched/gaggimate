@@ -656,3 +656,21 @@ html[data-theme='coffee'] {
     @slot;
   }
 }
+
+/* daisyUI fills alerts with the semantic colour at full strength and puts dark
+   text on top. Against a near-black page that reads as a bright slab -- the
+   calibration tab had two of them shouting over the fields they were meant to
+   annotate.
+ *
+ * Tint the background and keep the text at normal reading contrast instead,
+ * which is how selection and emphasis are marked everywhere else in this UI.
+ * The border carries the colour identity, so a warning still reads as a warning
+ * without taking over the page.
+ *
+ * alert-error is deliberately left alone: something has actually gone wrong
+ * there, and it has earned the right to shout. */
+.alert-warning {
+  background-color: color-mix(in oklab, var(--color-warning) 14%, transparent);
+  border-color: color-mix(in oklab, var(--color-warning) 32%, transparent);
+  color: var(--color-base-content);
+}

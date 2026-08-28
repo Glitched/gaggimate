@@ -671,11 +671,15 @@ export function DateBasisWarning({
         background: 'color-mix(in srgb, var(--analyzer-warning-orange) 9%, transparent)',
       }}
     >
+      {/* Was text-[11px] semibold: small enough to strain at, and weighted like
+          a warning label rather than the sentence it actually is. The prefix
+          keeps its orange so it still reads as a label without the extra
+          weight doing the work. */}
       <div
-        className='min-w-[14rem] flex-1 text-[11px] leading-relaxed'
+        className='min-w-[14rem] flex-1 text-sm leading-relaxed'
         style={WARNING_ORANGE_TEXT_MUTED_STYLE}
       >
-        <span className='font-semibold' style={WARNING_ORANGE_TEXT_STYLE}>
+        <span className='font-medium' style={WARNING_ORANGE_TEXT_STYLE}>
           Date Basis:
         </span>{' '}
         <span className='text-base-content/80'>
