@@ -188,6 +188,7 @@ void WebUIPlugin::loop() {
         ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", now - uploadLastChunk);
         Update.abort();
         uploadInProgress = false;
+        pluginManager->trigger("ota:update:end");
         pluginManager->trigger("ota:upload:failed");
     }
     // Skip the (blocking, TLS) update check while a process is active: a brew/steam/grind
@@ -1396,6 +1397,13 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         uploadTotal = 0;
         uploadLastPct = -1;
         uploadLastChunk = millis();
+        // ota:upload:* has no listeners; ota:update:* has five, including the
+        // one that hands the shared radio to Wi-Fi for a display update and the
+        // one that puts an update screen on the panel. Streaming megabytes over
+        // Wi-Fi without them left BLE fighting for the antenna, which is how a
+        // controller link gets dropped mid-upload. component=display is what
+        // tells Controller to leave BLE relaxed rather than preferring it.
+        pluginManager->trigger("ota:update:start", "component", "display");
         pluginManager->trigger("ota:upload:start");
         ESP_LOGI("WebUIPlugin", "%s upload started", toFilesystem ? "Filesystem" : "Firmware");
     }
@@ -1406,6 +1414,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         ESP_LOGE("WebUIPlugin", "Update.write failed: %s", Update.errorString());
         Update.abort();
         uploadInProgress = false;
+        pluginManager->trigger("ota:update:end");
         return;
     }
     uploadTotal += len;
@@ -1424,6 +1433,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         if (!Update.end(true)) {
             ESP_LOGE("WebUIPlugin", "Update.end failed: %s", Update.errorString());
             uploadInProgress = false;
+            pluginManager->trigger("ota:update:end");
             return;
         }
         ESP_LOGI("WebUIPlugin", "Firmware upload complete: %u bytes", static_cast<unsigned>(uploadTotal));
@@ -1446,6 +1456,7 @@ void WebUIPlugin::handleFirmwareUploadResult(AsyncWebServerRequest *request) {
         String body;
         serializeJson(doc, body);
         request->send(400, "application/json", body);
+        pluginManager->trigger("ota:update:end");
         pluginManager->trigger("ota:upload:failed");
         return;
     }
@@ -1454,6 +1465,7 @@ void WebUIPlugin::handleFirmwareUploadResult(AsyncWebServerRequest *request) {
     response->addHeader("Connection", "close");
     request->send(response);
     updateOTAProgress(PHASE_FINISHED, 100);
+    pluginManager->trigger("ota:update:end");
     pluginManager->trigger("ota:upload:finished");
     ESP_LOGI("WebUIPlugin", "Restarting into newly uploaded firmware");
     restartPending = millis() + 1000; // let the response flush before rebooting
