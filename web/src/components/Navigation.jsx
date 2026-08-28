@@ -132,10 +132,14 @@ function MenuItem({
   const editLinkEnabled = editLink && editIcon && !collapsed;
   // Rounding lives on the children — the row wrapper can't use overflow-hidden
   // or it would clip the dashboard-mode dropdown.
+  // px-3 (12px), not px-2: rounded-xl is a 12px radius, so with 8px padding the
+  // icon sat inside the corner's sweep and the filled active row looked cramped.
+  // 12px also puts the icon centre at 20px, matching the footer's 32px circular
+  // buttons in their px-1 container -- those two columns were 4px apart before.
   const commonClasses = `btn btn-md border-none h-12 ${editLinkEnabled ? 'rounded-l-xl rounded-r-none' : 'rounded-xl'}`;
   const baseClassName = collapsed
     ? 'btn-square min-h-0 min-w-0 bg-transparent px-0 text-base-content hover:bg-base-content/10 hover:text-base-content'
-    : 'justify-start gap-3 text-base-content hover:text-base-content hover:bg-base-content/10 bg-transparent border-none px-2';
+    : 'justify-start gap-3 text-base-content hover:text-base-content hover:bg-base-content/10 bg-transparent border-none px-3';
   // The old active style did three things at once: inverted text polarity
   // (dark-on-light inside a light-on-dark panel), became the lightest object on
   // the panel, and carried ~3.5x the chroma of anything around it. Any one of
@@ -143,7 +147,7 @@ function MenuItem({
   // text keeps the polarity of every other row.
   const activeClassName = collapsed
     ? 'btn-square min-h-0 min-w-0 bg-primary/15 px-0 text-primary hover:bg-primary/20 hover:text-primary'
-    : 'justify-start gap-3 bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary px-2 font-semibold';
+    : 'justify-start gap-3 bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary px-3 font-semibold';
   const className = `${commonClasses} ${isActive ? activeClassName : baseClassName}`;
 
   return (
@@ -216,7 +220,7 @@ export function Navigation({ collapsed = false, onToggleCollapsed }) {
           {/* No compact mark exists yet, so when collapsed the header is omitted
               rather than filling the rail with a placeholder. */}
           {!collapsed && (
-            <div className='mb-3 flex h-12 shrink-0 items-center px-2'>
+            <div className='mb-3 flex h-12 shrink-0 items-center px-3'>
               {/* Sized by height; the wordmark is ~5:1 so width follows. px-2
                   matches the nav buttons so the lockup aligns with their icons. */}
               <Wordmark className='text-base-content h-7 w-auto' />
@@ -290,7 +294,7 @@ export function Navigation({ collapsed = false, onToggleCollapsed }) {
               className={
                 collapsed
                   ? 'btn btn-square btn-md text-base-content hover:bg-base-content/10 hover:text-base-content h-12 min-h-0 w-12 min-w-0 rounded-xl border-none bg-transparent px-0'
-                  : 'btn btn-md text-base-content hover:text-base-content hover:bg-base-content/10 h-12 w-full justify-start gap-3 border-none bg-transparent px-2'
+                  : 'btn btn-md text-base-content hover:text-base-content hover:bg-base-content/10 h-12 w-full justify-start gap-3 border-none bg-transparent px-3'
               }
               aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
               title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
