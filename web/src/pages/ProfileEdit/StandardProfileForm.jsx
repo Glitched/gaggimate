@@ -17,18 +17,6 @@ export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
 
-  // Each mode writes a different payload; carried over from the individual
-  // button handlers so SegmentedControl can stay value-based.
-  const selectPumpMode = next => {
-    if (next === mode) return;
-    if (next === 'off') return onFieldChange('pump', 0);
-    if (next === 'power') return onFieldChange('pump', 100);
-    const pressure = phase.pump?.pressure || 0;
-    const flow = phase.pump?.flow || 0;
-    if (next === 'pressure') return onFieldChange('pump', { target: 'pressure', pressure, flow });
-    if (next === 'flow') return onFieldChange('pump', { target: 'flow', pressure, flow });
-  };
-
   const onFieldChange = (field, value) => {
     onChange({
       ...data,
@@ -201,6 +189,16 @@ function Phase({
   const pressure = !isNumber(pump) ? pump.pressure : 0;
   const flow = !isNumber(pump) ? pump.flow : 0;
   const mode = isNumber(pump) ? (pump === 0 ? 'off' : 'power') : pump.target;
+
+  // Each mode writes a different payload; carried over from the individual
+  // button handlers so SegmentedControl can stay value-based.
+  const selectPumpMode = next => {
+    if (next === mode) return;
+    if (next === 'off') return onFieldChange('pump', 0);
+    if (next === 'power') return onFieldChange('pump', 100);
+    if (next === 'pressure') return onFieldChange('pump', { target: 'pressure', pressure, flow });
+    if (next === 'flow') return onFieldChange('pump', { target: 'flow', pressure, flow });
+  };
 
   return (
     <div
