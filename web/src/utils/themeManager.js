@@ -1,5 +1,5 @@
 const THEME_STORAGE_KEY = 'gaggimate-daisyui-theme';
-const AVAILABLE_THEMES = ['system', 'light', 'dark', 'coffee', 'nord'];
+const AVAILABLE_THEMES = ['system', 'light', 'dark', 'exhalation', 'coffee', 'nord'];
 
 const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 

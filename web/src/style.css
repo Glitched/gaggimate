@@ -79,6 +79,55 @@
   --noise: 0;
 }
 
+/* Exhalation -- after the cover of the Ted Chiang collection: a near-black field
+   with points of pale light, and the title set in a luminous ice blue.
+
+   The point of difference from `dark` is chroma, not lightness. That theme puts
+   every surface at C 0.034-0.039, which is what makes it read blue rather than
+   dark -- the tint is in the walls, not the highlights. Here the surfaces sit at
+   C 0.006-0.008: enough to feel cool rather than flatly neutral, not enough to
+   colour the room. The colour lives in the accents, the way the cover is black
+   paper with light on it. */
+@plugin "daisyui/theme" {
+  name: 'exhalation';
+  default: false;
+  prefersdark: false;
+  color-scheme: 'dark';
+  /* base-300 is the page, base-100 the panels that sit on it. */
+  --color-base-300: oklch(9.5% 0.006 240);
+  --color-base-200: oklch(13% 0.007 240);
+  --color-base-100: oklch(16.5% 0.008 240);
+  --color-base-content: oklch(90% 0.008 240);
+  /* The title on the cover: pale, luminous, barely saturated. */
+  --color-primary: oklch(82% 0.055 225);
+  --color-primary-content: oklch(16% 0.02 225);
+  --color-secondary: oklch(66% 0.06 250);
+  --color-secondary-content: oklch(14% 0.02 250);
+  --color-accent: oklch(78% 0.07 195);
+  --color-accent-content: oklch(15% 0.02 195);
+  --color-neutral: oklch(24% 0.008 240);
+  --color-neutral-content: oklch(88% 0.006 240);
+  /* Functional colours keep their hue so they stay readable at a glance, but
+     their chroma is pulled toward the rest of the palette so a warning does not
+     look like it belongs to a different application. */
+  --color-info: oklch(72% 0.09 235);
+  --color-info-content: oklch(14% 0.02 235);
+  --color-success: oklch(76% 0.09 165);
+  --color-success-content: oklch(14% 0.02 165);
+  --color-warning: oklch(80% 0.1 80);
+  --color-warning-content: oklch(16% 0.02 80);
+  --color-error: oklch(70% 0.12 20);
+  --color-error-content: oklch(14% 0.025 20);
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 1rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
 /* https://daisyui.com/theme-generator/#theme=eJx9lOuOnDAMhV8lQqrUSotF7knfhgHTQcuQUcKo21Z992aS6ZJZYH9if8c-diz-VHN7wep71blhQKxeqrr2bT_eQh1wwm5xPiapx0uZGkac-hhvQH7InNxbyYfxN5aFGmDyKbdWWhMn53tMba9vKdDjdTnfofQ1uzHg46tzk_N16M6Yhuhb_5qYHD-1AWvaNDHjXqfu_JWJL6SBhnHCmQXdmG8faVbSNNP0kOYFTVWiqT2kOzcvOC_vCs2Ay-zIMqItUGZL0Yy3xbdT0QFktkRlbKKAKbrDb_oYDrxhSdjwPeE4D251ZUHYBCtOqBEg5dMo4dZ1GMLKC9AsV9eMUE6BUlUKfrZ-Hucfqx0DVN55KojRd3FJo_fpUh7FNXBqEswMibWN3jjfzEslGGvyotgnI2yFAqzIDxK9HY-yFWpQPB-LOZppz6b4r5I7s139eGn9r3UXFKxVeRecKAZaPpkLGDv0pYKL2EHmDpZQGy_MilLSxj0UjgQD9Th6LQhjArixO5b2FsdtPhomPrO2vU0V3yovoZHHFrc6A5K9P1VhtcehvU0RHNop4Et19TigD-nPkGN__wFALWAe */
 @plugin "daisyui/theme" {
   name: 'coffee';
