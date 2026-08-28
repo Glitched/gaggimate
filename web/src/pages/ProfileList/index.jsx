@@ -19,9 +19,9 @@ import {
 import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 import { ExtendedProfileChart } from '../../components/ExtendedProfileChart.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
-import { ProfileAddCard } from './ProfileAddCard.jsx';
 import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useSearchHotkey } from '../../hooks/useSearchHotkey.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import Card from '../../components/Card.jsx';
@@ -43,6 +43,8 @@ import { Tooltip } from '../../components/Tooltip.jsx';
 import { faTemperatureFull } from '@fortawesome/free-solid-svg-icons/faTemperatureFull';
 import { faClock } from '@fortawesome/free-solid-svg-icons/faClock';
 import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanced';
+import { faEllipsis } from '@fortawesome/free-solid-svg-icons/faEllipsis';
+import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faSearch } from '@fortawesome/free-solid-svg-icons/faSearch';
 // Deep imports keep the ~2000-icon pack index out of the bundle (matches every
 // other icon import in the codebase).
@@ -596,6 +598,8 @@ export function ProfileList() {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // "/" focuses this field, Escape leaves it.
+  const searchRef = useSearchHotkey();
   const [activeTab, setActiveTab] = useState('extraction');
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef(null);
@@ -1011,13 +1015,17 @@ export function ProfileList() {
         <h1 className='flex-grow text-2xl font-bold sm:text-3xl'>Profiles</h1>
       </div>
 
-      <div className='mb-4 flex flex-col items-center gap-2 sm:flex-row'>
+      {/* items-center is scoped to sm: -- unscoped it also applied in column
+          mode, centring the search box and action row on phones while the
+          page title stayed left-aligned. */}
+      <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
         {/* Controls Row */}
-        <div className='flex flex-col items-start gap-3 sm:flex-row sm:items-center'>
+        <div className='flex w-full flex-col items-start gap-3 sm:w-auto sm:flex-row sm:items-center'>
           {/* Search */}
           <label className='input w-full'>
             <FontAwesomeIcon icon={faSearch} />
             <input
+              ref={searchRef}
               type='text'
               placeholder='Search...'
               value={searchTerm}
@@ -1028,44 +1036,96 @@ export function ProfileList() {
             />
           </label>
         </div>
-        <div className='flex flex-grow items-center justify-end gap-2'>
-          <Tooltip content='Export all profiles'>
-            <button
-              id='export-profiles'
-              onClick={onExport}
+        {/* justify-between on phones so the primary action shares the left edge
+            with the title and search, with the overflow menu at the far edge;
+            from sm up the whole cluster sits right of the search field. */}
+        <div className='flex flex-grow items-center justify-between gap-2 sm:justify-end'>
+          {/* Utilities are inline from sm up and behind a ⋯ menu on phones:
+              export/import/delete-all are infrequent and one is destructive, so
+              they don't earn permanent width on a narrow screen. */}
+          {/* Creation is the primary action on this page, so it sits with the
+              other collection-level actions rather than taking a full-bleed row
+              of its own. Kept as a link so middle-click / open-in-new-tab work. */}
+          <a href='/profiles/new' className='btn btn-primary btn-sm' aria-label='Add new profile'>
+            <FontAwesomeIcon icon={faPlus} />
+            <span>New profile</span>
+          </a>
+          <div className='hidden items-center gap-2 sm:flex'>
+            <Tooltip content='Export all profiles'>
+              <button
+                id='export-profiles'
+                onClick={onExport}
+                className='btn btn-ghost btn-sm'
+                aria-label='Export all profiles'
+              >
+                <FontAwesomeIcon icon={faFileExport} />
+              </button>
+            </Tooltip>
+            <Tooltip content='Import profiles'>
+              <label
+                htmlFor='profileImport'
+                className='btn btn-ghost btn-sm cursor-pointer'
+                aria-label='Import profiles'
+              >
+                <FontAwesomeIcon icon={faFileImport} />
+              </label>
+            </Tooltip>
+            <input
+              onChange={onUpload}
+              className='hidden'
+              id='profileImport'
+              type='file'
+              accept='.json,application/json,.tcl'
+              aria-label='Select a JSON file containing profile data to import'
+            />
+            <ConfirmButton
+              onAction={onClear}
+              icon={faTrashCan}
+              tooltip='Delete all profiles'
+              confirmTooltip='Confirm deletion'
+            />
+          </div>
+
+          <div className='dropdown dropdown-end sm:hidden'>
+            <div
+              tabIndex={0}
+              role='button'
               className='btn btn-ghost btn-sm'
-              aria-label='Export all profiles'
+              aria-label='More profile actions'
             >
-              <FontAwesomeIcon icon={faFileExport} />
-            </button>
-          </Tooltip>
-          <Tooltip content='Import profiles'>
-            <label
-              htmlFor='profileImport'
-              className='btn btn-ghost btn-sm cursor-pointer'
-              aria-label='Import profiles'
+              <FontAwesomeIcon icon={faEllipsis} />
+            </div>
+            <ul
+              tabIndex={0}
+              className='dropdown-content menu bg-base-100 rounded-box border-base-300 z-10 mt-1 w-56 border p-2 shadow-lg'
             >
-              <FontAwesomeIcon icon={faFileImport} />
-            </label>
-          </Tooltip>
-          <input
-            onChange={onUpload}
-            className='hidden'
-            id='profileImport'
-            type='file'
-            accept='.json,application/json,.tcl'
-            aria-label='Select a JSON file containing profile data to import'
-          />
-          <ConfirmButton
-            onAction={onClear}
-            icon={faTrashCan}
-            tooltip='Delete all profiles'
-            confirmTooltip='Confirm deletion'
-          />
+              <li>
+                <button onClick={onExport} className='justify-start'>
+                  <FontAwesomeIcon icon={faFileExport} />
+                  <span>Export all profiles</span>
+                </button>
+              </li>
+              <li>
+                <label htmlFor='profileImport' className='cursor-pointer justify-start'>
+                  <FontAwesomeIcon icon={faFileImport} />
+                  <span>Import profiles</span>
+                </label>
+              </li>
+              <li>
+                {/* label= so the two-step confirm is legible here; the icon-only
+                    form relies on a tooltip, which a touch device never shows. */}
+                <ConfirmButton
+                  onAction={onClear}
+                  icon={faTrashCan}
+                  tooltip='Delete all profiles'
+                  confirmTooltip='Confirm deletion'
+                  label='Delete all profiles'
+                  className='w-full justify-start'
+                />
+              </li>
+            </ul>
+          </div>
         </div>
-      </div>
-      <div className='mb-4' aria-label='Add profile'>
-        <ProfileAddCard />
       </div>
       {hasUtilityProfiles && (
         <div role='tablist' className='tabs tabs-border mb-4'>
