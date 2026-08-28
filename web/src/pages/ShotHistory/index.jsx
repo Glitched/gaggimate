@@ -317,9 +317,13 @@ export function ShotHistory() {
             onDelete={id => onDelete(id)}
             onNotesChanged={onNotesChanged}
             onLoad={async id => {
-              // Fetch binary only if not loaded
+              // Returns the loaded shot so a caller can act on it immediately.
+              // setHistory only schedules a re-render, so a handler that awaited
+              // this and then read its own `shot` prop would still see the
+              // unloaded one.
               const target = history.find(h => h.id === id);
-              if (!target || target.loaded) return;
+              if (!target) return null;
+              if (target.loaded) return target;
               try {
                 // Pad ID to 6 digits with zeros to match backend filename format
                 const paddedId = id.padStart(6, '0');
@@ -331,23 +335,20 @@ export function ShotHistory() {
                 const parsed = parseBinaryShot(buf, id);
                 parsed.incomplete = (target?.incomplete ?? false) || parsed.incomplete;
                 if (target?.notes) parsed.notes = target.notes;
-                setHistory(prev =>
-                  prev.map(h =>
-                    h.id === id
-                      ? {
-                          ...h,
-                          ...parsed,
-                          // Preserve index metadata over shot file data
-                          volume: h.volume ?? parsed.volume, // Use index volume if available, fallback to shot volume
-                          rating: h.rating ?? parsed.rating, // Use index rating if available
-                          incomplete: h.incomplete ?? parsed.incomplete,
-                          loaded: true,
-                        }
-                      : h,
-                  ),
-                );
+                // Index metadata wins over what the shot file says.
+                const merge = h => ({
+                  ...h,
+                  ...parsed,
+                  volume: h.volume ?? parsed.volume,
+                  rating: h.rating ?? parsed.rating,
+                  incomplete: h.incomplete ?? parsed.incomplete,
+                  loaded: true,
+                });
+                setHistory(prev => prev.map(h => (h.id === id ? merge(h) : h)));
+                return merge(target);
               } catch (e) {
                 if (e.name !== 'AbortError') console.error('Failed loading shot', e);
+                return null;
               }
             }}
           />

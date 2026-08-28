@@ -37,15 +37,35 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const { armed: confirmDelete, armOrRun: confirmOrDelete } = useConfirmAction(4000);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [copiedForLlm, setCopiedForLlm] = useState(false);
+  // True while an action is fetching the shot it needs.
+  const [loading, setLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const copiedTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
 
   const date = new Date(shot.timestamp * 1000);
 
-  const onExport = useCallback(() => {
-    if (!shot.loaded) return; // Only export loaded data
-    const exportData = { ...shot, notes: shotNotes };
+  // Clicking an action used to be refused until you had expanded the row to
+  // load the shot -- the button sat disabled behind a "Load first" tooltip,
+  // making you run an errand before the thing you asked for. Now the action
+  // does the errand itself: expand, fetch if needed, then carry on with the
+  // freshly loaded shot (which the parent hands back, since our own `shot` prop
+  // is still the unloaded one until the re-render lands).
+  const ensureLoaded = useCallback(async () => {
+    if (shot.loaded) return shot;
+    setExpanded(true);
+    setLoading(true);
+    try {
+      return (await onLoad?.(shot.id)) || null;
+    } finally {
+      setLoading(false);
+    }
+  }, [shot, onLoad]);
+
+  const onExport = useCallback(async () => {
+    const loaded = await ensureLoaded();
+    if (!loaded) return;
+    const exportData = { ...loaded, notes: shotNotes };
     if (Array.isArray(exportData.samples)) {
       exportData.samples = exportData.samples.map(s => ({
         t: s.t,
@@ -67,24 +87,25 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     }
     exportData.volume = round2(exportData.volume);
     // duration left as integer ms
-    downloadJson(exportData, 'shot-' + shot.id + '.json');
-  }, [shot, shotNotes]);
+    downloadJson(exportData, 'shot-' + loaded.id + '.json');
+  }, [ensureLoaded, shotNotes]);
 
   // Compact text export (YAML frontmatter + CSV) sized for pasting into an LLM.
   // ~6% the tokens of the JSON export with no samples dropped; see shotTextExport.js.
   const onCopyForLlm = useCallback(async () => {
-    if (!shot.loaded) return;
+    const loaded = await ensureLoaded();
+    if (!loaded) return;
     let profileData = null;
-    if (shot.profileId && apiService) {
+    if (loaded.profileId && apiService) {
       try {
-        const res = await apiService.request({ tp: 'req:profiles:load', id: shot.profileId });
+        const res = await apiService.request({ tp: 'req:profiles:load', id: loaded.profileId });
         if (res.profile) profileData = res.profile;
       } catch (error) {
         // Planned-vs-actual is then omitted; the rest of the export is unaffected.
         console.warn('Failed to fetch profile for LLM export:', error);
       }
     }
-    const text = buildShotText(shot, profileData, { notes: shotNotes });
+    const text = buildShotText(loaded, profileData, { notes: shotNotes });
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -93,9 +114,9 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
       copiedTimerRef.current = setTimeout(() => setCopiedForLlm(false), 2000);
     } catch (error) {
       console.error('Clipboard write failed, falling back to download:', error);
-      downloadText(text, 'shot-' + shot.id + '.md');
+      downloadText(text, 'shot-' + loaded.id + '.md');
     }
-  }, [shot, shotNotes, apiService]);
+  }, [ensureLoaded, shotNotes, apiService]);
 
   const handleNotesLoaded = useCallback(notes => {
     setShotNotes(notes);
@@ -170,7 +191,18 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     [shot, shotNotes, apiService],
   );
 
-  const canUpload = visualizerService.validateShot(shot);
+  // validateShot needs the samples, which only exist once the shot is fetched,
+  // so this is always false beforehand -- gating the button on it made this the
+  // same errand as the other actions. Load first, then judge.
+  const onUploadClick = useCallback(async () => {
+    const loaded = await ensureLoaded();
+    if (!loaded) return;
+    if (!visualizerService.validateShot(loaded)) {
+      showToast('This shot has no data to upload', { type: 'error' });
+      return;
+    }
+    setShowUploadModal(true);
+  }, [ensureLoaded]);
 
   // Rendered in two places (inline with the title from sm up, on its own row
   // below it on a phone), so it lives here rather than being duplicated.
@@ -269,9 +301,9 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                 )}
 
                 <div className='hidden flex-row gap-1 sm:flex'>
-                  <Tooltip content={shot.loaded ? 'Export' : 'Load first'}>
+                  <Tooltip content='Export'>
                     <button
-                      disabled={!shot.loaded}
+                      disabled={loading}
                       onClick={onExport}
                       className='text-base-content/50 hover:text-info hover:bg-info/10 cursor-pointer rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40'
                       aria-label='Export shot data'
@@ -281,9 +313,9 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   </Tooltip>
 
                   {/* Copy for LLM */}
-                  <Tooltip content={shot.loaded ? 'Copy for LLM' : 'Load first'}>
+                  <Tooltip content='Copy for LLM'>
                     <button
-                      disabled={!shot.loaded}
+                      disabled={loading}
                       onClick={onCopyForLlm}
                       className='text-base-content/50 hover:text-success hover:bg-success/10 cursor-pointer rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40'
                       aria-label='Copy shot summary for an LLM'
@@ -306,21 +338,11 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                     </a>
                   </Tooltip>
 
-                  <Tooltip
-                    content={
-                      canUpload
-                        ? 'Upload to Visualizer.coffee'
-                        : 'Load shot data first by expanding the shot'
-                    }
-                  >
+                  <Tooltip content='Upload to Visualizer.coffee'>
                     <button
-                      onClick={() => setShowUploadModal(true)}
-                      disabled={!canUpload}
-                      className={`group inline-block cursor-pointer items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold ${
-                        canUpload
-                          ? 'text-success hover:bg-success/10 active:border-success/20'
-                          : 'cursor-not-allowed text-gray-400'
-                      }`}
+                      onClick={onUploadClick}
+                      disabled={loading}
+                      className='text-success/70 hover:text-success hover:bg-success/10 cursor-pointer rounded-md px-2.5 py-2 text-sm transition-colors disabled:opacity-40'
                       aria-label='Upload to visualizer.coffee'
                     >
                       <FontAwesomeIcon icon={faUpload} />
@@ -363,18 +385,14 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                         <span>Open in Analyzer</span>
                       </a>
                     </li>
-                    <li className={shot.loaded ? '' : 'menu-disabled'}>
-                      <button onClick={onExport} disabled={!shot.loaded} className='justify-start'>
+                    <li>
+                      <button onClick={onExport} disabled={loading} className='justify-start'>
                         <FontAwesomeIcon icon={faFileExport} className='h-4 w-4' />
                         <span>Export</span>
                       </button>
                     </li>
-                    <li className={shot.loaded ? '' : 'menu-disabled'}>
-                      <button
-                        onClick={onCopyForLlm}
-                        disabled={!shot.loaded}
-                        className='justify-start'
-                      >
+                    <li>
+                      <button onClick={onCopyForLlm} disabled={loading} className='justify-start'>
                         <FontAwesomeIcon
                           icon={copiedForLlm ? faCheck : faRobot}
                           className={`h-4 w-4 ${copiedForLlm ? 'text-success' : ''}`}
@@ -382,12 +400,8 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                         <span>{copiedForLlm ? 'Copied' : 'Copy for LLM'}</span>
                       </button>
                     </li>
-                    <li className={canUpload ? '' : 'menu-disabled'}>
-                      <button
-                        onClick={() => setShowUploadModal(true)}
-                        disabled={!canUpload}
-                        className='justify-start'
-                      >
+                    <li>
+                      <button onClick={onUploadClick} disabled={loading} className='justify-start'>
                         <FontAwesomeIcon icon={faUpload} className='h-4 w-4' />
                         <span>Upload to Visualizer</span>
                       </button>
