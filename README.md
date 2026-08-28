@@ -57,6 +57,8 @@ Additional documentation for the WebSocket API can be found in [docs/websocket-a
 - **`npm run scrape`** — pulls shots off a running machine over HTTP and formats them through
   the same parsers and analyzer the web UI uses, so output cannot drift from what the UI shows.
 - **`CLAUDE.md`** — build commands and architecture notes for working in this repository.
+- **Device UI icons** — the on-device icon set is [Phosphor Icons](https://phosphoricons.com)
+  (Regular weight), regenerated from the mapping in `scripts/phosphor_icons.py`.
 
 See the git history for the complete record of modifications.
 
@@ -73,6 +75,9 @@ under that same license, and has been changed from the original as described in
 Non-commercial use only. "GaggiMate" and "Gaggia" are marks of their respective owners; they
 are not licensed under CC BY-NC-SA and are used here solely to identify the upstream project
 and the hardware this software runs on.
+
+The on-device icons are [Phosphor Icons](https://phosphoricons.com) by Helena Zhang and Tobias
+Fried, used under the [MIT License](https://github.com/phosphor-icons/core/blob/main/LICENSE).
 
 Upstream community and hardware kits: [gaggimate.eu](https://gaggimate.eu/) ·
 [upstream Discord](https://discord.gg/APw7rgPGPf) — please don't raise issues about this fork there.
