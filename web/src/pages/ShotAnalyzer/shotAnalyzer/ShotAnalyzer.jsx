@@ -982,6 +982,7 @@ export function ShotAnalyzer() {
             compareCollectionWithAccents={compareCollectionWithAccents}
             compareTargetDisplayMode={compareTargetDisplayMode}
             currentShot={currentShot}
+            currentProfile={currentProfile}
             handleSwapCompareSlots={handleSwapCompareSlots}
             isCompareActive={isCompareActive}
             mobileSubpageNavigation={mobileSubpageNavigation}
