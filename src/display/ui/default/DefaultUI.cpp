@@ -38,16 +38,16 @@ static constexpr float DIAL_INNER_RADIUS = 150.f;
 static constexpr float DIAL_DETENT_MIN_DEG = 24.f;
 static constexpr float DIAL_DETENT_MAX_DEG = 45.f;
 
-// Standby transition. 200 ms is eight frames at the 25 ms UI tick; 150 read as a hold-then-snap.
-// The enter is not latency-critical so it gets a little longer. Note LVGL charges a new
-// animation for the whole tick interval it was created in, so with a 25 ms loop an N ms
-// animation usually renders in N-25 ms: expect 7 frames here, occasionally 8.
+// Standby transition: opacity only. The first version also shrank the wordmark, which
+// forced LVGL's software resampler on every frame; on the ESP32-S3 that measured 4 frames
+// in 205 ms (~50 ms a frame, each blocking the UI task) against 7 in the sim. The wordmark
+// bitmap is now pre-scaled to its on-screen size (394x79, zoom 256), so both the animation
+// and every ordinary standby redraw are plain alpha blits. Note LVGL charges a new animation
+// for the whole tick interval it was created in, so an N ms animation renders in ~N-25 ms.
 static constexpr uint32_t STANDBY_EXIT_MS = 200;
-static constexpr uint32_t STANDBY_ENTER_MS = 250;
-static constexpr uint32_t STANDBY_CANCEL_MS = 120;     // undo a press that did not become a wake
-static constexpr int32_t STANDBY_LOGO_ZOOM = 210;      // resting wordmark zoom (screens.c)
-static constexpr int32_t STANDBY_LOGO_ZOOM_EXIT = 168; // 80%: where the shrink ends
-static constexpr lv_opa_t STANDBY_CHEVRON_OPA = 153;   // resting chevron opacity (screens.c)
+static constexpr uint32_t STANDBY_ENTER_MS = 120;    // not latency-critical, but still pure delay
+static constexpr uint32_t STANDBY_CANCEL_MS = 120;   // undo a press that did not become a wake
+static constexpr lv_opa_t STANDBY_CHEVRON_OPA = 153; // resting chevron opacity (screens.c)
 
 // Profile and the new menu screen show shortened meter ticks.
 static bool isShortTickScreen(ScreensEnum s) {
@@ -618,8 +618,6 @@ void DefaultUI::setStandbyFade(int32_t v) {
     const auto opa = static_cast<lv_opa_t>(v);
     if (objects.obj1 != nullptr) { // the wordmark
         lv_obj_set_style_img_opa(objects.obj1, opa, LV_PART_MAIN);
-        const int32_t zoom = STANDBY_LOGO_ZOOM_EXIT + (STANDBY_LOGO_ZOOM - STANDBY_LOGO_ZOOM_EXIT) * v / 255;
-        lv_img_set_zoom(objects.obj1, static_cast<uint16_t>(zoom));
     }
     if (objects.touch_icon != nullptr) {
         lv_obj_set_style_img_opa(objects.touch_icon, static_cast<lv_opa_t>(STANDBY_CHEVRON_OPA * v / 255), LV_PART_MAIN);
