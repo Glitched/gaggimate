@@ -48,7 +48,10 @@ void SdlDriver::init() {
     }
     s_window = SDL_CreateWindow("GaggiMate Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, DISP_W, DISP_H,
                                 s_scripted ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
-    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // Scripted runs render to a hidden window, so there is nothing to sync to: a vsync'd
+    // present on a hidden window waits for a vblank the compositor may never deliver (it
+    // does not while the display is asleep), which hung two unattended runs.
+    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | (s_scripted ? 0 : SDL_RENDERER_PRESENTVSYNC));
     s_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, DISP_W, DISP_H);
 
     // Build the round-display mask: the device panel is a 480px circle, so paint
@@ -134,6 +137,8 @@ void SdlDriver::pumpAndRender() {
             break;
         }
     }
+    if (s_scripted)
+        return; // nothing is watching; screenshot() composes the frame itself when asked
     SDL_SetRenderDrawColor(s_renderer, BEZEL_R, BEZEL_G, BEZEL_B, 0xFF);
     SDL_RenderClear(s_renderer);
     SDL_RenderCopy(s_renderer, s_texture, nullptr, nullptr);
@@ -154,7 +159,8 @@ void SdlDriver::screenshot(const char *path) {
         SDL_SaveBMP(surface, path);
         SDL_FreeSurface(surface);
     }
-    SDL_RenderPresent(s_renderer);
+    if (!s_scripted)
+        SDL_RenderPresent(s_renderer);
 }
 
 void SdlDriver::injectPointer(int x, int y, bool pressed) {
