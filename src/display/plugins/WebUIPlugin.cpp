@@ -186,6 +186,7 @@ void WebUIPlugin::loop() {
     // display is power-cycled. Reclaim it once the stream has clearly stopped.
     if (uploadInProgress && now - uploadLastChunk > UPLOAD_STALL_TIMEOUT) {
         ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", now - uploadLastChunk);
+        uploadError = "no data for " + String(now - uploadLastChunk) + " ms after " + String(uploadTotal) + " bytes";
         Update.abort();
         uploadInProgress = false;
         pluginManager->trigger("ota:update:end");
@@ -1374,8 +1375,11 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         }
         if (uploadInProgress || Update.isRunning()) {
             ESP_LOGW("WebUIPlugin", "Rejected firmware upload: another update is already running");
+            uploadError = "another update is already running";
             return;
         }
+        uploadError = "";
+        uploadTotal = 0;
         // ?target=fs writes the LittleFS image instead of the app. That is how a
         // filesystem backup is restored without a cable -- profiles and shot
         // history live there, and there is no other write path for .slog files.
@@ -1390,11 +1394,11 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         // so a stray file cannot be half-written; that check does not apply to
         // U_SPIFFS, which has no header to validate.
         if (!Update.begin(UPDATE_SIZE_UNKNOWN, uploadCommand)) {
+            uploadError = String("Update.begin: ") + Update.errorString();
             ESP_LOGE("WebUIPlugin", "Update.begin failed: %s", Update.errorString());
             return;
         }
         uploadInProgress = true;
-        uploadTotal = 0;
         uploadLastPct = -1;
         uploadLastChunk = millis();
         // ota:upload:* has no listeners; ota:update:* has five, including the
@@ -1411,6 +1415,8 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         return;
     }
     if (len && Update.write(data, len) != len) {
+        // Capture before abort(): abort() overwrites the reason with "Aborted".
+        uploadError = String("Update.write: ") + Update.errorString() + " at " + String(uploadTotal) + " bytes";
         ESP_LOGE("WebUIPlugin", "Update.write failed: %s", Update.errorString());
         Update.abort();
         uploadInProgress = false;
@@ -1431,6 +1437,7 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
     }
     if (final) {
         if (!Update.end(true)) {
+            uploadError = String("Update.end: ") + Update.errorString() + " after " + String(uploadTotal) + " bytes";
             ESP_LOGE("WebUIPlugin", "Update.end failed: %s", Update.errorString());
             uploadInProgress = false;
             pluginManager->trigger("ota:update:end");
@@ -1448,11 +1455,14 @@ void WebUIPlugin::handleFirmwareUploadResult(AsyncWebServerRequest *request) {
     const bool ok = uploadInProgress && !Update.hasError() && Update.isFinished();
     uploadInProgress = false;
     if (!ok) {
-        const char *reason = Update.errorString();
-        ESP_LOGE("WebUIPlugin", "Firmware upload failed: %s", reason);
+        // uploadError names the real cause; the Updater's own string is only a fallback,
+        // and reads "Aborted" whenever abort() has run.
+        const String reason = uploadError.isEmpty() ? String(Update.errorString()) : uploadError;
+        ESP_LOGE("WebUIPlugin", "Firmware upload failed: %s", reason.c_str());
         Update.abort();
         JsonDocument doc(&psramAllocator);
         doc["error"] = reason;
+        doc["received"] = static_cast<uint32_t>(uploadTotal);
         String body;
         serializeJson(doc, body);
         request->send(400, "application/json", body);

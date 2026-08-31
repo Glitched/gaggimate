@@ -86,6 +86,10 @@ class WebUIPlugin : public Plugin {
     int uploadLastPct = -1;
     unsigned long uploadLastChunk = 0;
     int uploadCommand = U_FLASH; // U_FLASH (app) or U_SPIFFS (LittleFS image)
+    // Why the current/last upload failed, captured at the point of failure. Update.abort()
+    // replaces the Updater's error with a bare "Aborted", so anything that aborts must
+    // record the real reason first or the client learns nothing.
+    String uploadError;
 
     GitHubOTA *ota = nullptr;
     AsyncWebServer server;
