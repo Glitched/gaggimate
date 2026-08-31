@@ -247,7 +247,8 @@ paths:
                 properties:
                   error:
                     type: string
-                    description: Where and why it failed, e.g. `Update.write: Not Enough Space at 1048576 bytes`,
+                    description: |
+                      Where and why it failed, e.g. `Update.write: Not Enough Space at 1048576 bytes`,
                       `no data for 30012 ms after 2097152 bytes`, `another update is already running`.
                   received:
                     type: integer
