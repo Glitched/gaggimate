@@ -38,6 +38,8 @@ static constexpr float DIAL_INNER_RADIUS = 150.f;
 static constexpr float DIAL_DETENT_MIN_DEG = 24.f;
 static constexpr float DIAL_DETENT_MAX_DEG = 45.f;
 
+static constexpr uint32_t UI_LOOP_PERIOD_MS = 25; // DefaultUI::loopTask cadence (the sim mirrors it)
+
 // Standby transition: opacity only. The first version also shrank the wordmark, which
 // forced LVGL's software resampler on every frame; on the ESP32-S3 that measured 4 frames
 // in 205 ms (~50 ms a frame, each blocking the UI task) against 7 in the sim. The wordmark
@@ -1005,9 +1007,14 @@ void DefaultUI::applyTheme() {
 
 void DefaultUI::loopTask(void *arg) {
     auto *ui = static_cast<DefaultUI *>(arg);
+    TickType_t lastWake = xTaskGetTickCount();
     while (true) {
         ui->loop();
-        vTaskDelay(25 / portTICK_PERIOD_MS);
+        // Sleep only the remainder of the period. A fixed 25 ms vTaskDelay after loop() made
+        // the frame period 25 ms plus the render time -- ~43 ms on the panel while animating
+        // (measured 5 frames in 215 ms over serial) -- and uneven. With the period fixed, the UI
+        // runs at a steady 40 Hz whenever a frame fits, and simply back-to-back when it does not.
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(UI_LOOP_PERIOD_MS));
     }
 }
 
