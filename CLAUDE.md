@@ -198,6 +198,34 @@ JSON schemas for profiles, shot history, and notes are in `schema/`.
   password. Don't widen what this endpoint discloses.
 - License: CC BY-NC-SA 4.0.
 
+## Device performance
+
+The sim shows motion faithfully but says nothing about frame time; the panel is
+the only honest source. `DefaultUI` logs `standby exit: N frames in M ms` over
+serial at 115200 after each transition — 7 frames for a 200 ms exit means the UI
+is running at its 40 Hz cadence, 3–5 means something is stalling it. Things that
+have stalled it:
+
+- **A fixed sleep after each frame.** `DefaultUI::loopTask` used to `vTaskDelay(25)`
+  _after_ `loop()`, so the frame period was 25 ms plus render time (~43 ms on the
+  panel, and uneven). It now uses `vTaskDelayUntil` with a 25 ms period; the sim
+  mirrors that cadence in `sim/main.cpp`. Don't reintroduce a trailing sleep.
+- **Runtime image zoom.** `lv_img_set_zoom` != 256 sends every redraw through the
+  software resampler. Pre-scale bitmaps to their on-screen size instead (the
+  wordmark is rasterized at 394×79 for exactly this reason) and animate opacity,
+  never zoom.
+- **WebSocket client churn.** `DEFAULT_MAX_WS_CLIENTS=3` plus `ws.cleanupClients()`
+  in `loop()` evicts the oldest client whenever a fourth connects; the evicted tab
+  reconnects, evicts another, and each reconnect re-requests the profile list
+  (~2 s of flash reads, which stall both cores' caches). Four browser tabs made
+  the whole UI stutter. If the machine feels laggy, count `WebSocket client
+connected` lines on serial before blaming the UI code — ~30 in 45 s means tabs.
+  Closing tabs fixed it; evicting newcomers instead was rejected as worse UX.
+
+`scripts/lvgl_img.py` and `scripts/phosphor_icons.py` regenerate bitmaps without
+EEZ Studio; the sim's `--tap`, `--drag`, `--arc`, `--scale` and the `s` hotkey are
+how screens and gestures are exercised headlessly (see `sim/README.md`).
+
 ## Debugging
 
 Core dumps: download from the device web UI (System & Updates → Download Core Dump) or the `/api/core-dump` endpoint, then:
