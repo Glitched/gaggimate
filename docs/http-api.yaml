@@ -191,12 +191,190 @@ paths:
       responses:
         "200": { content: { application/json: {} } }
 
+    put:
+      summary: Save the notes for a shot
+      description: Equivalent of `req:history:notes:save`; also updates the index's rating and,
+        when `doseOut` is given, its recorded volume.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: Notes object (see `schema/`). }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
   /api/core-dump:
     get:
       summary: Download the last crash core dump, if any
       responses:
         "200": { content: { application/octet-stream: {} } }
 
+  /api/mode:
+    post:
+      summary: Switch machine mode
+      description: |
+        Equivalent of `req:change-mode`: stops and clears any running process, then selects the
+        mode. Accepts the number or the name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  oneOf:
+                    - { type: integer, minimum: 0, maximum: 4 }
+                    - { type: string, enum: [standby, brew, steam, water, grind] }
+      responses:
+        "200": { content: { application/json: { schema: { type: object, properties: { mode: { type: integer } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/process/{action}:
+    post:
+      summary: Start, stop or clear the current process
+      description: |
+        `activate` starts the process for the current mode (brew, steam, water); `deactivate`
+        stops it and clears its state; `clear` only clears. Equivalents of `req:process:*`.
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate, clear] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/grind/{action}:
+    post:
+      summary: Start or stop grinding
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+  /api/flush:
+    post:
+      summary: Run the flush routine
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+  /api/autotune:
+    post:
+      summary: Start a PID autotune
+      description: Equivalent of `req:autotune-start`. The result arrives as `evt:autotune-result`
+        on the WebSocket. `wattage` 0 skips the feed-forward derivation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [time, samples]
+              properties:
+                time: { type: integer, minimum: 1, description: Test duration (s). }
+                samples: { type: integer, minimum: 1 }
+                wattage: { type: integer, minimum: 0, description: Heater wattage; 680 is the WebUI default. }
+      responses:
+        "202": { description: Autotune started. }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/targets/{target}/{direction}:
+    post:
+      summary: Step a target up or down
+      description: |
+        One step, as the on-screen +/- buttons: temperature by 1 °C; brew by 1 s of duration or
+        1 g of volumetric target, whichever the selected profile uses; grind by 0.5 g or 1 s
+        likewise. Equivalents of `req:raise-*` / `req:lower-*`.
+      parameters:
+        - { name: target, in: path, required: true, schema: { type: string, enum: [temperature, brew, grind] } }
+        - { name: direction, in: path, required: true, schema: { type: string, enum: [raise, lower] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/targets/{target}:
+    put:
+      summary: Set a target to an absolute value
+      description: |
+        `temperature` (°C, clamped to 0–160) or `grind` (g, > 0). `brew` has no absolute form:
+        its target belongs to the selected profile; edit the profile or step it.
+      parameters:
+        - { name: target, in: path, required: true, schema: { type: string, enum: [temperature, grind] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [value], properties: { value: { type: number } } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                description: "Echoes the value as applied, e.g. {\"temperature\": 93}."
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/ota:
+    get:
+      summary: Versions, update availability, storage and memory
+      description: The payload of the WebSocket `res:ota-settings` message, without the socket.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  displayVersion: { type: string }
+                  controllerVersion: { type: string }
+                  latestVersion: { type: string }
+                  channel: { type: string, enum: [latest, nightly] }
+                  displayUpdateAvailable: { type: boolean }
+                  controllerUpdateAvailable: { type: boolean }
+                  updating: { type: boolean }
+                  heapFree: { type: integer, description: Free internal RAM (bytes). }
+                  heapLargest: { type: integer }
+                  spiffsFree: { type: integer, description: Free LittleFS bytes. }
+    post:
+      summary: Re-check for updates, optionally switching channel
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { channel: { type: string, enum: [latest, nightly] } } }
+      responses:
+        "202": { description: Check scheduled; results show up in `GET /api/ota` and on the socket. }
+  /api/ota/start:
+    post:
+      summary: Install the available update
+      description: Equivalent of `req:ota-start`. Progress arrives as `evt:ota-progress`; the display
+        reboots when its own image finishes.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { component: { type: string, enum: [display, controller] } } }
+      responses:
+        "202": { description: Update started. }
+  /api/history/rebuild:
+    post:
+      summary: Rebuild the shot index from the .slog files
+      responses:
+        "202": { description: Rebuild started; progress arrives as `evt:history-rebuild-progress`. }
+  /api/history/{id}:
+    delete:
+      summary: Delete a shot (its .slog and notes) and mark it deleted in the index
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]+$" } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/profiles/reorder:
+    post:
+      summary: Set the display order of profiles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, items: { type: string }, description: Profile ids in display order. }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
   /api/ota/upload:
     post:
       summary: Push a firmware (or LittleFS) image over the network
@@ -255,6 +433,17 @@ paths:
                     description: Bytes written before the failure.
         "401": { description: Missing or wrong token. }
 components:
+  responses:
+    Ok:
+      description: Done.
+      content:
+        application/json:
+          schema: { type: object, properties: { ok: { type: boolean, const: true } } }
+    Error:
+      description: Refused; `error` says why.
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: string } } }
   schemas:
     Profile:
       type: object

@@ -52,6 +52,11 @@ class WebUIPlugin : public Plugin {
     void serveWebAsset(AsyncWebServerRequest *request);
     void handleSettings(AsyncWebServerRequest *request) const;
     void handleProfilesRest(AsyncWebServerRequest *request) const;
+    // HTTP equivalents of the req:* WebSocket commands (docs/http-api.yaml).
+    void handleMachineRest(AsyncWebServerRequest *request);
+    void handleOtaRest(AsyncWebServerRequest *request);
+    void handleHistoryRest(AsyncWebServerRequest *request);
+    void buildOTAStatus(JsonDocument &doc) const;
     void handleBLEScaleList(AsyncWebServerRequest *request);
     void handleBLEScaleScan(AsyncWebServerRequest *request);
     void handleBLEScaleConnect(AsyncWebServerRequest *request);

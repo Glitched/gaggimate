@@ -470,6 +470,26 @@ void WebUIPlugin::setupServer() {
         request->send(response);
     });
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+    // HTTP equivalents of the req:* WebSocket commands, so scripts and agents can
+    // drive the machine with curl (docs/http-api.yaml). Plain-string routes match
+    // the path and its subpaths; JSON bodies stream into _tempObject as for
+    // /api/settings. Registered after /api/ota/upload, which must keep POST
+    // /api/ota/upload. /api/history is registered per method so GETs never reach
+    // it: the sim's server shim tries routes before static files, and a catch-all
+    // here would shadow serveStatic("/api/history/") there.
+    const auto jsonBody = [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+        bufferJsonBody(request, data, len, index, total, 16 * 1024);
+    };
+    for (const char *route : {"/api/mode", "/api/process", "/api/grind", "/api/flush", "/api/autotune", "/api/targets"}) {
+        server.on(
+            route, HTTP_ANY, [this](AsyncWebServerRequest *request) { handleMachineRest(request); }, nullptr, jsonBody);
+    }
+    server.on(
+        "/api/ota", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleOtaRest(request); }, nullptr, jsonBody);
+    server.on("/api/history/rebuild", HTTP_POST, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); });
+    server.on("/api/history", HTTP_DELETE, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); });
+    server.on(
+        "/api/history", HTTP_PUT, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); }, nullptr, jsonBody);
 #ifndef GAGGIMATE_SIM
     // Direct firmware upload. The body handler streams straight into the
     // inactive OTA partition; the request handler runs once the body is done.
@@ -1157,6 +1177,24 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
         return sendError(405, "Method not allowed");
     }
 
+    if (rest == "reorder") { // POST /api/profiles/reorder {"ids": [...]} ("order" also accepted, as the socket)
+        if (request->method() != HTTP_POST) {
+            return sendError(405, "Method not allowed");
+        }
+        JsonArrayConst ids = bodyDoc["ids"].is<JsonArrayConst>() ? bodyDoc["ids"].as<JsonArrayConst>()
+                                                                  : bodyDoc["order"].as<JsonArrayConst>();
+        if (ids.isNull()) {
+            return sendError(400, "Body must be {\"ids\": [profile ids in display order]}");
+        }
+        std::vector<String> order;
+        for (JsonVariantConst v : ids) {
+            order.emplace_back(v.as<String>());
+        }
+        controller->getSettings().setProfileOrder(order);
+        sendOk();
+        return;
+    }
+
     if (action.isEmpty()) { // Item: /api/profiles/{id}
         if (request->method() == HTTP_GET) {
             Profile profile;
@@ -1220,7 +1258,258 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
         sendOk();
         return;
     }
-    sendError(404, "Unknown action; expected select, favorite or unfavorite");
+    sendError(404, "Unknown action; expected select, favorite, unfavorite or reorder");
+}
+
+// --- REST command surface -------------------------------------------------------------------
+// Each route does exactly what the matching req:* WebSocket handler does, so the two doors
+// cannot drift. Responses: 200 {"ok":true} or a small JSON object; 4xx {"error": "..."}.
+
+namespace {
+
+bool takeJsonBody(AsyncWebServerRequest *request, JsonDocument &doc) {
+    auto *body = static_cast<char *>(request->_tempObject);
+    request->_tempObject = nullptr;
+    if (body == nullptr) {
+        return false;
+    }
+    const DeserializationError err = deserializeJson(doc, static_cast<const char *>(body));
+    free(body);
+    return !err;
+}
+
+void replyJson(AsyncWebServerRequest *request, int code, const JsonDocument &doc) {
+    String body;
+    serializeJson(doc, body);
+    request->send(code, "application/json", body);
+}
+
+void replyOk(AsyncWebServerRequest *request) { request->send(200, "application/json", R"({"ok":true})"); }
+
+void replyError(AsyncWebServerRequest *request, int code, const char *message) {
+    JsonDocument doc(&psramAllocator);
+    doc["error"] = message;
+    replyJson(request, code, doc);
+}
+
+// Accepts the numeric mode or its name; returns -1 when neither.
+int parseMode(JsonVariantConst v) {
+    if (v.is<int>()) {
+        const int m = v.as<int>();
+        return (m >= MODE_STANDBY && m <= MODE_GRIND) ? m : -1;
+    }
+    if (v.is<const char *>()) {
+        const String name = v.as<String>();
+        static const char *const names[] = {"standby", "brew", "steam", "water", "grind"};
+        for (int m = 0; m < 5; m++) {
+            if (name.equalsIgnoreCase(names[m])) {
+                return m;
+            }
+        }
+    }
+    return -1;
+}
+
+} // namespace
+
+void WebUIPlugin::handleMachineRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    JsonDocument body(&psramAllocator);
+    takeJsonBody(request, body); // optional for most routes
+
+    if (url == "/api/mode") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"mode\": 0-4 | \"standby\"|\"brew\"|\"steam\"|\"water\"|\"grind\"}");
+        }
+        const int mode = parseMode(body["mode"]);
+        if (mode < 0) {
+            return replyError(request, 400, "mode must be 0-4 or one of standby, brew, steam, water, grind");
+        }
+        controller->deactivate();
+        controller->clear();
+        controller->setMode(mode);
+        JsonDocument doc(&psramAllocator);
+        doc["mode"] = mode;
+        return replyJson(request, 200, doc);
+    }
+    if (url.startsWith("/api/process") || url.startsWith("/api/grind") || url == "/api/flush") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "Method not allowed");
+        }
+        if (url == "/api/process/activate") {
+            controller->activate();
+        } else if (url == "/api/process/deactivate") {
+            controller->deactivate();
+            controller->clear();
+        } else if (url == "/api/process/clear") {
+            controller->clear();
+        } else if (url == "/api/grind/activate") {
+            controller->activateGrind();
+        } else if (url == "/api/grind/deactivate") {
+            controller->deactivateGrind();
+        } else if (url == "/api/flush") {
+            controller->onFlush();
+        } else {
+            return replyError(request, 404, "Unknown action");
+        }
+        return replyOk(request);
+    }
+    if (url == "/api/autotune") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"time\": s, \"samples\": n, \"wattage\": W}");
+        }
+        const int testTime = body["time"] | 0;
+        const int samples = body["samples"] | 0;
+        const int wattage = body["wattage"] | 0; // 0 = skip combinedKff derivation, as on the socket path
+        if (testTime <= 0 || samples <= 0) {
+            return replyError(request, 400, "time and samples must be positive");
+        }
+        controller->autotune(testTime, samples, wattage);
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "started";
+        return replyJson(request, 202, doc);
+    }
+    if (url.startsWith("/api/targets/")) {
+        // /api/targets/{temperature|brew|grind}/{raise|lower}  POST, one step
+        // /api/targets/{temperature|grind}                     PUT {"value": n}, absolute
+        // brew has no absolute form: its target is the selected profile's duration or
+        // volumetric target, which raiseBrewTarget()/lowerBrewTarget() step.
+        const String rest = url.substring(String("/api/targets/").length());
+        String which = rest, dir;
+        const int slash = rest.indexOf('/');
+        if (slash >= 0) {
+            which = rest.substring(0, slash);
+            dir = rest.substring(slash + 1);
+        }
+        if (method == HTTP_POST && (dir == "raise" || dir == "lower")) {
+            const bool up = dir == "raise";
+            if (which == "temperature") {
+                up ? controller->raiseTemp() : controller->lowerTemp();
+            } else if (which == "brew") {
+                up ? controller->raiseBrewTarget() : controller->lowerBrewTarget();
+            } else if (which == "grind") {
+                up ? controller->raiseGrindTarget() : controller->lowerGrindTarget();
+            } else {
+                return replyError(request, 404, "Unknown target; expected temperature, brew or grind");
+            }
+            return replyOk(request);
+        }
+        if (method == HTTP_PUT && dir.isEmpty()) {
+            if (!body["value"].is<float>()) {
+                return replyError(request, 400, "Body must be {\"value\": number}");
+            }
+            const float value = body["value"].as<float>();
+            JsonDocument doc(&psramAllocator);
+            if (which == "temperature") {
+                const float t = constrain(value, static_cast<float>(MIN_TEMP), static_cast<float>(MAX_TEMP));
+                controller->setTargetTemp(t);
+                doc["temperature"] = t;
+            } else if (which == "grind") {
+                if (value <= 0) {
+                    return replyError(request, 400, "grind target must be positive");
+                }
+                controller->getSettings().setTargetGrindVolume(value);
+                doc["grind"] = value;
+            } else {
+                return replyError(request, 404, "Absolute value supported for temperature and grind only");
+            }
+            return replyJson(request, 200, doc);
+        }
+        return replyError(request, 405, "POST .../raise|lower or PUT {\"value\": n}");
+    }
+    replyError(request, 404, "Unknown route");
+}
+
+void WebUIPlugin::handleOtaRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    if (url == "/api/ota") {
+        if (method == HTTP_GET) {
+            JsonDocument doc(&psramAllocator);
+            buildOTAStatus(doc);
+            return replyJson(request, 200, doc);
+        }
+        if (method == HTTP_POST) {
+            // As req:ota-settings with update=true: optionally switch channel, then re-check.
+            JsonDocument body(&psramAllocator);
+            takeJsonBody(request, body);
+            if (body["channel"].is<const char *>()) {
+                const String channel = body["channel"].as<String>() == "latest" ? "latest" : "nightly";
+                controller->getSettings().setOTAChannel(channel);
+                ota->setReleaseUrl(RELEASE_URL + (channel == "latest" ? "latest" : "tag/nightly"));
+            }
+            lastUpdateCheck = 0; // loop() performs the (blocking, TLS) check
+            JsonDocument doc(&psramAllocator);
+            doc["status"] = "checking";
+            doc["channel"] = controller->getSettings().getOTAChannel();
+            return replyJson(request, 202, doc);
+        }
+        return replyError(request, 405, "GET for status, POST {\"channel\": \"latest\"|\"nightly\"} to re-check");
+    }
+    if (url == "/api/ota/start") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"component\": \"display\"|\"controller\"}");
+        }
+        JsonDocument body(&psramAllocator);
+        takeJsonBody(request, body);
+        const String component = body["component"].is<const char *>() ? body["component"].as<String>()
+                                                                        : body["cp"].as<String>();
+        updateComponent = component;
+        updating = true;
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "started";
+        doc["component"] = component;
+        return replyJson(request, 202, doc);
+    }
+    replyError(request, 404, "Unknown route");
+}
+
+void WebUIPlugin::handleHistoryRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    if (url == "/api/history/rebuild") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "Method not allowed");
+        }
+        ShotHistory.startAsyncRebuild(); // progress arrives as evt:history-rebuild-progress
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "rebuilding";
+        return replyJson(request, 202, doc);
+    }
+    // DELETE /api/history/{id}      PUT /api/history/{id}.json (notes)
+    String id = url.substring(String("/api/history/").length());
+    const bool notes = id.endsWith(".json");
+    if (notes) {
+        id = id.substring(0, id.length() - 5);
+    }
+    if (id.isEmpty()) {
+        return replyError(request, 404, "Unknown route");
+    }
+    for (size_t i = 0; i < id.length(); i++) {
+        if (!isdigit(static_cast<unsigned char>(id[i]))) {
+            return replyError(request, 400, "Shot id must be numeric");
+        }
+    }
+    JsonDocument req(&psramAllocator);
+    JsonDocument resp(&psramAllocator);
+    req["id"] = id;
+    if (method == HTTP_DELETE && !notes) {
+        req["tp"] = "req:history:delete";
+        ShotHistory.handleRequest(req, resp);
+        return replyOk(request);
+    }
+    if (method == HTTP_PUT && notes) {
+        JsonDocument body(&psramAllocator);
+        if (!takeJsonBody(request, body) || !body.is<JsonObject>()) {
+            return replyError(request, 400, "Body must be a JSON notes object");
+        }
+        req["tp"] = "req:history:notes:save";
+        req["notes"] = body;
+        ShotHistory.handleRequest(req, resp);
+        return replyOk(request);
+    }
+    replyError(request, 405, "DELETE /api/history/{id} or PUT /api/history/{id}.json");
 }
 
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
@@ -1285,14 +1574,8 @@ void WebUIPlugin::handleBLEScaleInfo(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-void WebUIPlugin::updateOTAStatus(const String &version) {
-    if (ws.getClients().empty()) {
-        return;
-    }
+void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
     Settings const &settings = controller->getSettings();
-    JsonDocument doc(&psramAllocator);
-    doc["latestVersion"] = ota->getCurrentVersion();
-    doc["tp"] = "res:ota-settings";
     doc["displayUpdateAvailable"] = ota->isUpdateAvailable(false);
     doc["controllerUpdateAvailable"] = ota->isUpdateAvailable(true);
     doc["displayVersion"] = BUILD_GIT_VERSION;
@@ -1338,6 +1621,15 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
             doc["sdUsedPct"] = static_cast<uint8_t>((used * 100) / total);
         }
     }
+}
+
+void WebUIPlugin::updateOTAStatus(const String &version) {
+    if (ws.getClients().empty()) {
+        return;
+    }
+    JsonDocument doc(&psramAllocator);
+    doc["tp"] = "res:ota-settings";
+    buildOTAStatus(doc);
     broadcastJson(doc);
 }
 
