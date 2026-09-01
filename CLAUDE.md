@@ -70,7 +70,7 @@ pio run -e display-sim -t run                                  # build + launch
 
 WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA upload, watchdogs).
 
-Flags: `--scale` pretends a Bluetooth scale is connected (the weight row and volumetric UI only render with one); `--tap X,Y@MS`, `--drag X0,Y0>X1,Y1@T0~T1` and `--arc CX,CY,R,A0,A1@T0~T1` inject touches, so screens behind an interaction can be captured headlessly; pressing `s` in the window writes `sim_shot_N.bmp` of the live frame. A `--screenshot` run uses a hidden window and ignores the real mouse, and runs the UI loop at the device's 25 ms cadence, so frame counts match hardware. Arc angles are screen-convention: 0 = right, clockwise positive, **270 = top**.
+Flags: `--scale` pretends a Bluetooth scale is connected (the weight row and volumetric UI only render with one); `--tap X,Y@MS`, `--drag X0,Y0>X1,Y1@T0~T1` and `--arc CX,CY,R,A0,A1@T0~T1` inject touches, so screens behind an interaction can be captured headlessly; pressing `s` in the window writes `sim_shot_N.bmp` of the live frame. The sim runs the UI loop at the device's 25 ms cadence, so frame counts match hardware; a `--screenshot` run additionally uses a hidden window and ignores the real mouse. Arc angles are screen-convention: 0 = right, clockwise positive, **270 = top**.
 
 Copy real profiles into `sim_data/littlefs/p/` and shots into `sim_data/littlefs/h/`
 before reviewing UI work — empty states hide most layout problems. Favourites and
