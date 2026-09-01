@@ -189,9 +189,10 @@ function FirmwareUploadSection({ uploadEnabled }) {
       setProgress(null);
       setError('Connection lost during upload.');
     };
-    const body = new FormData();
-    body.append('firmware', file);
-    xhr.send(body);
+    // The file goes as the raw body. Multipart went through the device's
+    // byte-at-a-time form parser and took minutes for a firmware image.
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.send(file);
   }, [file, token]);
 
   return (

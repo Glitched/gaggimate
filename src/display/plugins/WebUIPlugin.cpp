@@ -494,9 +494,13 @@ void WebUIPlugin::setupServer() {
     // Direct firmware upload. The body handler streams straight into the
     // inactive OTA partition; the request handler runs once the body is done.
     server.on(
-        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); },
-        [this](AsyncWebServerRequest *request, const String &, size_t index, uint8_t *data, size_t len, bool final) {
-            handleFirmwareUpload(request, index, data, len, final);
+        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); }, nullptr,
+        // Raw body (Content-Type: application/octet-stream), not multipart: the
+        // server's form-data parser walks the body one byte at a time and topped
+        // out at ~26 KB/s, three minutes for an image. The body callback hands
+        // over whole TCP segments, and Content-Length sizes the Updater up front.
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            handleFirmwareUpload(request, index, data, len, total);
         });
 #endif
     // The web UI is embedded in firmware flash and served from the memory-mapped blob (see serveWebAsset). It is no
@@ -1659,7 +1663,8 @@ bool WebUIPlugin::isUploadAuthorized(AsyncWebServerRequest *request) const {
 }
 
 void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len,
-                                       bool final) {
+                                       size_t total) {
+    const bool final = index + len >= total;
     if (index == 0) {
         if (!isUploadAuthorized(request)) {
             ESP_LOGW("WebUIPlugin", "Rejected firmware upload: bad or missing token");
@@ -1681,11 +1686,12 @@ void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t in
         // still hold a copy of.
         const bool toFilesystem = request->hasArg("target") && request->arg("target") == "fs";
         uploadCommand = toFilesystem ? U_SPIFFS : U_FLASH;
-        // UPDATE_SIZE_UNKNOWN sizes to the partition. For U_FLASH the Updater
-        // also aborts on the first chunk if the ESP image magic byte is wrong,
-        // so a stray file cannot be half-written; that check does not apply to
+        // Content-Length sizes the update, so an image too big for the partition
+        // is refused before a byte is written. For U_FLASH the Updater also
+        // aborts on the first chunk if the ESP image magic byte is wrong, so a
+        // stray file cannot be half-written; that check does not apply to
         // U_SPIFFS, which has no header to validate.
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN, uploadCommand)) {
+        if (!Update.begin(total > 0 ? total : UPDATE_SIZE_UNKNOWN, uploadCommand)) {
             uploadError = String("Update.begin: ") + Update.errorString();
             ESP_LOGE("WebUIPlugin", "Update.begin failed: %s", Update.errorString());
             return;

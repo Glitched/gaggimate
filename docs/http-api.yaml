@@ -379,14 +379,18 @@ paths:
     post:
       summary: Push a firmware (or LittleFS) image over the network
       description: |
-        Multipart upload of an ESP32 app image (or, with `target=fs`, a LittleFS
-        image) written to the inactive OTA slot; on success the display reboots
-        into it. Requires the upload token configured in settings
+        The image is the raw request body (`Content-Type: application/octet-stream`,
+        `Content-Length` required), written to the inactive OTA slot; on success
+        the display reboots into it. With `target=fs` it is a LittleFS image
+        instead. Requires the upload token configured in settings
         (`otaUploadToken`), sent as the `X-OTA-Token` header or `token` query
         parameter. The filesystem target is single-banked: a failed write leaves
         it corrupt, so only push an image you still hold a copy of.
         Uploads that stop delivering data for 30 s are aborted server-side so a
         dead connection cannot hold the OTA slot until a power-cycle.
+
+            curl -H "X-OTA-Token: $TOKEN" -H "Content-Type: application/octet-stream" \
+                 --data-binary @.pio/build/display/firmware.bin http://gaggimate.local/api/ota/upload
       parameters:
         - name: X-OTA-Token
           in: header
@@ -400,12 +404,10 @@ paths:
           description: "`fs` writes the LittleFS partition instead of the app."
           schema: { type: string, enum: [fs] }
       requestBody:
+        required: true
         content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                firmware: { type: string, format: binary }
+          application/octet-stream:
+            schema: { type: string, format: binary }
       responses:
         "200":
           description: Image verified; the display restarts about a second later.

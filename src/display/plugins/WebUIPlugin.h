@@ -77,7 +77,7 @@ class WebUIPlugin : public Plugin {
     // Requires a non-empty otaUploadToken setting -- fails closed when unset.
 #ifndef GAGGIMATE_SIM
     bool isUploadAuthorized(AsyncWebServerRequest *request) const;
-    void handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len, bool final);
+    void handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len, size_t total);
     void handleFirmwareUploadResult(AsyncWebServerRequest *request);
 #endif
 
