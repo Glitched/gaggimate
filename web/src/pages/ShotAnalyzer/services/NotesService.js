@@ -5,7 +5,7 @@
  * Notes JSON format is identical across all backends:
  *   { id, rating, beanType, doseIn, doseOut, ratio, grindSetting, balanceTaste, notes }
  *
- * - GaggiMate shots: Uses the same API as ShotHistory (req:history:notes:get/save)
+ * - GaggiMate shots: Uses the same API as ShotHistory (GET/PUT /api/history/{id}.json)
  * - Browser shots: Dedicated 'notes' store in IndexedDB (same JSON format as API)
  * - Temp shots: In-memory only, no persistence
  */

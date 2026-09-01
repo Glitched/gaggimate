@@ -38,13 +38,6 @@ class WebUIPlugin : public Plugin {
     void stop();
 
     // Websocket handlers
-    void handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data,
-                             size_t len);
-    void handleOTASettings(uint32_t clientId, JsonDocument &request);
-    void handleOTAStart(uint32_t clientId, JsonDocument &request);
-    void handleAutotuneStart(uint32_t clientId, JsonDocument &request);
-    void handleProfileRequest(uint32_t clientId, JsonDocument &request);
-    void handleFlushStart(uint32_t clientId, JsonDocument &request);
 
     // HTTP handlers
     // Serves the web UI from the firmware-embedded, memory-mapped flash blob

@@ -75,18 +75,18 @@ check "delete -> 200" '200' "$code"
 code=$(curl -s -o /dev/null -w "%{http_code}" $B/$DELID)
 check "deleted profile 404s" '404' "$code"
 
-echo "--- 9. WS save path also refuses invalid profiles now"
+echo "--- 9. The socket is push-only: a req:* frame gets no response"
 node - <<'NODE'
 const ws = new WebSocket('ws://localhost:8080/ws');
 ws.addEventListener('open', () => ws.send(JSON.stringify({ tp: 'req:profiles:save', rid: 't1', profile: { label: 'broken only' } })));
 ws.addEventListener('message', e => {
   const m = JSON.parse(e.data);
-  if (m.tp === 'res:profiles:save' && m.rid === 't1') {
-    console.log(m.error && !m.profile ? 'PASS: WS invalid save rejected with error' : 'FAIL: WS invalid save was accepted');
-    ws.close(); process.exit(0);
+  if (typeof m.tp === 'string' && m.tp.startsWith('res:')) {
+    console.log('FAIL: socket answered a request (' + m.tp + '); commands belong on HTTP');
+    ws.close(); process.exit(1);
   }
 });
-setTimeout(() => { console.log('FAIL: WS save test timeout'); process.exit(1); }, 8000);
+setTimeout(() => { console.log('PASS: no res:* within 3 s -- socket ignores requests'); process.exit(0); }, 3000);
 NODE
 [ $? -eq 0 ] && pass=$((pass+1)) || fail=$((fail+1))
 

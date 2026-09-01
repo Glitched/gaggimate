@@ -1,6 +1,5 @@
 import { createContext } from 'preact';
 import { signal } from '@preact/signals';
-import uuidv4 from '../utils/uuid.js';
 
 // The firmware pushes evt:status every 500ms, so a quiet connection is a dead
 // one. Half-open sockets (phone sleep, Wi-Fi drop without FIN, device brownout)
@@ -9,11 +8,13 @@ import uuidv4 from '../utils/uuid.js';
 const LIVENESS_TIMEOUT_MS = 10000;
 const LIVENESS_CHECK_INTERVAL_MS = 2500;
 
+// Receives the device's pushes (evt:*) over the WebSocket and keeps the
+// `machine` signal current. Commands and queries do not travel this way: see
+// services/api.js for the HTTP client.
 export default class ApiService {
   socket = null;
   listeners = {};
   listenerIdCounter = 0;
-  pendingRequests = new Map();
   reconnectAttempts = 0;
   maxReconnectDelay = 30000; // Maximum delay of 30 seconds
   baseReconnectDelay = 1000; // Start with 1 second delay
@@ -114,13 +115,6 @@ export default class ApiService {
       ...machine.value,
       connected: false,
     };
-    // Fail in-flight requests now instead of letting them run out their full
-    // timeout, so pages can surface the disconnect immediately.
-    const pending = [...this.pendingRequests.values()];
-    this.pendingRequests.clear();
-    for (const fail of pending) {
-      fail(new Error('WebSocket connection lost'));
-    }
     this._scheduleReconnect();
   }
 
@@ -167,62 +161,6 @@ export default class ApiService {
     for (const listener of listeners) {
       listener(message);
     }
-  }
-
-  send(event) {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify(event));
-    } else {
-      throw new Error('WebSocket is not connected');
-    }
-  }
-
-  async request(data = {}) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket is not connected');
-    }
-
-    const returnType = `res:${data.tp.substring(4)}`;
-    const rid = uuidv4();
-    const message = { ...data, rid };
-    return new Promise((resolve, reject) => {
-      let timeoutId;
-
-      const cleanup = () => {
-        clearTimeout(timeoutId);
-        this.off(returnType, listenerId);
-        this.pendingRequests.delete(rid);
-      };
-
-      // Create a listener for the response with matching rid
-      const listenerId = this.on(returnType, response => {
-        if (response.rid === rid) {
-          cleanup();
-          resolve(response);
-        }
-      });
-
-      // Registered so _onClose can fail this request the moment the socket
-      // drops instead of waiting out the timeout below.
-      this.pendingRequests.set(rid, error => {
-        cleanup();
-        reject(error);
-      });
-
-      try {
-        this.send(message);
-      } catch (error) {
-        cleanup();
-        reject(error);
-        return;
-      }
-
-      // Timeout: reject if no matching response arrives within 30 seconds
-      timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error(`Request ${data.tp} timed out`));
-      }, 30000); // 30 second timeout
-    });
   }
 
   on(type, listener) {

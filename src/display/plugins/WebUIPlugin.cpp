@@ -30,12 +30,6 @@ static constexpr const char *PASSWORD_PLACEHOLDER = "---unchanged---";
 #include <vector>
 #include <version.h>
 
-// Incoming WebSocket payloads (profile uploads reserve up to 64 KB) are
-// reassembled here. Back the character storage with PSRAM so these large,
-// transient buffers don't spike the scarce internal SRAM. The map nodes
-// themselves stay on the default heap (tiny: an id + a string handle).
-using PsramString = std::basic_string<char, std::char_traits<char>, PsramStlAllocator<char>>;
-static std::unordered_map<uint32_t, PsramString> rxBuffers;
 static WebUIPlugin *g_webUIPlugin = nullptr;
 
 // Serialize a JsonDocument straight into a PSRAM-backed WebSocket message
@@ -509,6 +503,9 @@ void WebUIPlugin::setupServer() {
     server.onNotFound([this](AsyncWebServerRequest *request) { serveWebAsset(request); });
     ws.onEvent(
         [this](AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+            (void)arg;
+            (void)data;
+            (void)len;
             if (type == WS_EVT_CONNECT) {
                 // Close (and let the browser reconnect) a client whose send
                 // queue backs up, instead of keeping it open. With it kept open
@@ -522,10 +519,9 @@ void WebUIPlugin::setupServer() {
                 ESP_LOGI("WebUIPlugin", "WebSocket client connected (%d open connections)", server->getClients().size());
             } else if (type == WS_EVT_DISCONNECT) {
                 ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%d open connections)", server->getClients().size());
-                rxBuffers.erase(client->id());
-            } else if (type == WS_EVT_DATA) {
-                handleWebSocketData(server, client, type, arg, data, len);
             }
+            // The socket is push-only: every command and query is an HTTP route
+            // (docs/http-api.yaml). Inbound frames are ignored.
         });
     server.addHandler(&ws);
 }
@@ -562,219 +558,6 @@ void WebUIPlugin::stop() {
     }
     serverRunning = false;
     ESP_LOGI("WebUIPlugin", "WebUIPlugin stopped (wifi disconnected)");
-}
-
-void WebUIPlugin::handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg,
-                                      uint8_t *data, size_t len) {
-
-    auto *info = static_cast<AwsFrameInfo *>(arg);
-    const uint32_t cid = client->id();
-
-    if (info->index == 0) {
-        auto &buf = rxBuffers[cid];
-        buf.clear();
-        if (info->len <= 64 * 1024) {
-            buf.reserve(info->len);
-        }
-    }
-
-    auto &buf = rxBuffers[cid];
-    buf.append(reinterpret_cast<const char *>(data), len);
-    const bool isFinal = info->final && (info->index + len) == info->len;
-
-    // If this is the final frame of the message, process and clear
-    if (isFinal) {
-        if (info->opcode == WS_TEXT) {
-            ESP_LOGV("WebUIPlugin", "Received request: %.*s", (int)buf.size(), buf.c_str());
-            JsonDocument doc(&psramAllocator);
-            DeserializationError err = deserializeJson(doc, buf.c_str());
-            if (!err) {
-                String msgType = doc["tp"].as<String>();
-                if (msgType.startsWith("req:profiles:")) {
-                    handleProfileRequest(client->id(), doc);
-                } else if (msgType == "req:ota-settings") {
-                    handleOTASettings(client->id(), doc);
-                } else if (msgType == "req:ota-start") {
-                    handleOTAStart(client->id(), doc);
-                } else if (msgType == "req:autotune-start") {
-                    handleAutotuneStart(client->id(), doc);
-                } else if (msgType == "req:process:activate") {
-                    controller->activate();
-                } else if (msgType == "req:process:deactivate") {
-                    controller->deactivate();
-                    controller->clear();
-                } else if (msgType == "req:process:clear") {
-                    controller->clear();
-                } else if (msgType == "req:grind:activate") {
-                    controller->activateGrind();
-                } else if (msgType == "req:grind:deactivate") {
-                    controller->deactivateGrind();
-                } else if (msgType == "req:change-grind-target") {
-                    if (doc["target"].is<uint8_t>()) {
-                        auto target = doc["target"].as<uint8_t>();
-                        controller->getSettings().setVolumetricTarget(target);
-                    }
-                } else if (msgType == "req:raise-temp") {
-                    controller->raiseTemp();
-                } else if (msgType == "req:lower-temp") {
-                    controller->lowerTemp();
-                } else if (msgType == "req:raise-grind-target") {
-                    controller->raiseGrindTarget();
-                } else if (msgType == "req:lower-grind-target") {
-                    controller->lowerGrindTarget();
-                } else if (msgType == "req:raise-brew-target") {
-                    controller->raiseBrewTarget();
-                } else if (msgType == "req:lower-brew-target") {
-                    controller->lowerBrewTarget();
-                } else if (msgType == "req:change-mode") {
-                    if (doc["mode"].is<uint8_t>()) {
-                        auto mode = doc["mode"].as<uint8_t>();
-                        controller->deactivate();
-                        controller->clear();
-                        controller->setMode(mode);
-                    }
-                } else if (msgType == "req:change-brew-target") {
-                    if (doc["target"].is<uint8_t>()) {
-                        auto target = doc["target"].as<uint8_t>();
-                        controller->getSettings().setVolumetricTarget(target);
-                    }
-                } else if (msgType == "req:history:rebuild") {
-                    // Handle rebuild asynchronously - send immediate ack, progress comes via events
-                    JsonDocument resp(&psramAllocator);
-                    resp["tp"] = "res:history:rebuild";
-                    if (doc["rid"].is<const char *>()) {
-                        resp["rid"] = doc["rid"];
-                    }
-                    resp["msg"] = "Rebuild started";
-                    client->text(toWsBuffer(resp));
-                    ShotHistory.startAsyncRebuild();
-                } else if (msgType.startsWith("req:history")) {
-                    JsonDocument resp(&psramAllocator);
-                    ShotHistory.handleRequest(doc, resp);
-                    client->text(toWsBuffer(resp));
-                } else if (msgType == "req:flush:start") {
-                    handleFlushStart(client->id(), doc);
-                }
-            }
-        }
-        // Done with this message
-        rxBuffers.erase(cid);
-    }
-}
-
-void WebUIPlugin::handleOTASettings(uint32_t clientId, JsonDocument &request) {
-    if (request["update"].as<bool>()) {
-        if (!request["channel"].isNull()) {
-            controller->getSettings().setOTAChannel(request["channel"].as<String>() == "latest" ? "latest" : "nightly");
-            ota->setReleaseUrl(RELEASE_URL + (controller->getSettings().getOTAChannel() == "latest" ? "latest" : "tag/nightly"));
-            lastUpdateCheck = 0;
-        }
-    }
-    updateOTAStatus("Checking...");
-}
-
-void WebUIPlugin::handleOTAStart(uint32_t clientId, JsonDocument &request) {
-    updating = true;
-    if (request["cp"].is<String>()) {
-        updateComponent = request["cp"].as<String>();
-    } else {
-        updateComponent = "";
-    }
-}
-
-void WebUIPlugin::handleAutotuneStart(uint32_t clientId, JsonDocument &request) {
-    int testTime = request["time"].as<int>();
-    int samples = request["samples"].as<int>();
-    // Heater wattage drives combinedKff = TUNER_OUTPUT_SPAN / wattage on the
-    // controller. 0 = "skip combinedKff derivation" — happens when older Web
-    // UI builds omit the field. WebUI form default is 680 W (Gaggia Classic
-    // Pro 2019 / E24, 230 V boiler).
-    int heaterWattage = request["wattage"] | 0;
-    controller->autotune(testTime, samples, heaterWattage);
-}
-
-void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request) {
-    // Allocate the response node pool from PSRAM — list responses can be tens
-    // of KB and would otherwise fragment the ~300 KB internal heap.
-    JsonDocument response(&psramAllocator);
-    auto type = request["tp"].as<String>();
-    ESP_LOGI("WebUIPlugin", "Handling request: %s", type.c_str());
-    response["tp"] = String("res:") + type.substring(4);
-    response["rid"] = request["rid"].as<String>();
-
-    if (type == "req:profiles:list") {
-        auto arr = response["profiles"].to<JsonArray>();
-        for (auto const &id : profileManager->listProfiles()) {
-            Profile profile{};
-            // Skip entries whose JSON couldn't be opened or failed validation
-            // (parseProfile returns false for missing label/type/phases). Without
-            // this, corrupt or partial profile files surface as blank cards in
-            // the UI — the user reported "blank Simple cards" originating here.
-            if (!profileManager->loadProfile(id, profile)) {
-                ESP_LOGW("WebUIPlugin", "Skipping unreadable profile %s in list response", id.c_str());
-                continue;
-            }
-            auto p = arr.add<JsonObject>();
-            if (request["minimal"].as<bool>()) {
-                p["id"] = profile.id;
-                p["label"] = profile.label;
-            } else {
-                writeProfile(p, profile);
-            }
-        }
-    } else if (type == "req:profiles:load") {
-        auto id = request["id"].as<String>();
-        Profile profile;
-        if (profileManager->loadProfile(id, profile)) {
-            auto obj = response["profile"].to<JsonObject>();
-            writeProfile(obj, profile);
-        } else {
-            response["error"] = F("Profile not found");
-        }
-    } else if (type == "req:profiles:save") {
-        auto obj = request["profile"].as<JsonObject>();
-        Profile profile;
-        // A rejected parse used to be saved anyway, silently writing a
-        // half-parsed profile to flash. Refuse it instead.
-        if (!parseProfile(obj, profile)) {
-            response["error"] = PROFILE_VALIDATION_ERROR;
-        } else if (!profileManager->saveProfile(profile)) {
-            response["error"] = F("Save failed");
-        } else {
-            auto respObj = response["profile"].to<JsonObject>();
-            writeProfile(respObj, profile);
-        }
-    } else if (type == "req:profiles:delete") {
-        auto id = request["id"].as<String>();
-        if (!profileManager->deleteProfile(id)) {
-            response["error"] = F("Delete failed");
-        }
-    } else if (type == "req:profiles:select") {
-        auto id = request["id"].as<String>();
-        profileManager->selectProfile(id);
-    } else if (type == "req:profiles:favorite") {
-        auto id = request["id"].as<String>();
-        profileManager->addFavoritedProfile(id);
-    } else if (type == "req:profiles:unfavorite") {
-        auto id = request["id"].as<String>();
-        profileManager->removeFavoritedProfile(id);
-    } else if (type == "req:profiles:reorder") {
-        // Expect an array of profile IDs in desired order
-        if (request["order"].is<JsonArray>()) {
-            std::vector<String> order;
-            for (JsonVariant v : request["order"].as<JsonArray>()) {
-                if (v.is<String>()) {
-                    String id = v.as<String>();
-                    if (!id.isEmpty() && std::find(order.begin(), order.end(), id) == order.end()) {
-                        order.emplace_back(std::move(id));
-                    }
-                }
-            }
-            controller->getSettings().setProfileOrder(order);
-        }
-    }
-
-    ws.text(clientId, toWsBuffer(response));
 }
 
 namespace {
@@ -1645,7 +1428,7 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
         return;
     }
     JsonDocument doc(&psramAllocator);
-    doc["tp"] = "res:ota-settings";
+    doc["tp"] = "evt:ota-status";
     buildOTAStatus(doc);
     broadcastJson(doc);
 }
@@ -1824,16 +1607,6 @@ void WebUIPlugin::sendAutotuneFailed() {
     JsonDocument doc(&psramAllocator);
     doc["tp"] = "evt:autotune-failed";
     broadcastJson(doc);
-}
-
-void WebUIPlugin::handleFlushStart(uint32_t clientId, JsonDocument &request) {
-    controller->onFlush();
-
-    JsonDocument response(&psramAllocator);
-    response["tp"] = "res:flush:start";
-    response["rid"] = request["rid"];
-    response["success"] = true;
-    ws.text(clientId, toWsBuffer(response));
 }
 
 void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {

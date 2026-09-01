@@ -359,14 +359,14 @@ export function SystemTab() {
   }, [formData]);
 
   useEffect(() => {
-    const listenerId = apiService.on('res:ota-settings', msg => {
+    const listenerId = apiService.on('evt:ota-status', msg => {
       setFormData(msg);
       setChannel(current => current ?? msg.channel);
       setIsLoading(false);
       setSubmitting(false);
     });
     return () => {
-      apiService.off('res:ota-settings', listenerId);
+      apiService.off('evt:ota-status', listenerId);
     };
   }, [apiService]);
 
@@ -399,7 +399,7 @@ export function SystemTab() {
   }, [apiService]);
 
   // Load the OTA/system status over HTTP; retried on each reconnect only while
-  // the first load has not landed. Later refreshes arrive as res:ota-settings
+  // the first load has not landed. Later refreshes arrive as evt:ota-status
   // broadcasts (the device re-sends after a check or a channel change).
   useEffect(() => {
     if (!connected.value || !isLoading) return;
@@ -424,7 +424,7 @@ export function SystemTab() {
       e.preventDefault();
       try {
         setSubmitting(true);
-        await otaApi.check(channel); // the refreshed status arrives as res:ota-settings
+        await otaApi.check(channel); // the refreshed status arrives as evt:ota-status
       } catch (error) {
         setSubmitting(false);
         console.error('Failed to save update channel:', error);

@@ -112,7 +112,7 @@ export const machineApi = {
 
 export const otaApi = {
   status: () => http.get('/api/ota'),
-  /** Re-check for updates, optionally switching channel first. Result arrives as res:ota-settings on the socket. */
+  /** Re-check for updates, optionally switching channel first. Result arrives as evt:ota-status on the socket. */
   check: channel => http.post('/api/ota', channel ? { channel } : {}),
   start: component => http.post('/api/ota/start', { component }),
 };

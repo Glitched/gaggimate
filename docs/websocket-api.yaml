@@ -1,57 +1,50 @@
-asyncapi: '2.6.0'
+asyncapi: 2.6.0
 info:
   title: GaggiMate WebSocket API
-  version: '1.0.0'
-  description: |
-    This document describes the WebSocket interface exposed by the
+  version: 2.0.0
+  description: "This document describes the WebSocket interface exposed by the
+
     GaggiMate display firmware. Clients connect to `/ws` using the
+
     `ws://` or `wss://` protocol. Messages are JSON objects containing
+
     a `tp` field that specifies the type of message.
+
+
+    Since 2026-08-31 the socket carries events only. Every former req:*/res:* pair is an HTTP route; see
+    docs/http-api.yaml.
+
+    "
 servers:
   production:
-    url: '{protocol}://{host}/ws'
+    url: "{protocol}://{host}/ws"
     protocol: ws
     description: WebSocket server
     variables:
       protocol:
-        enum: [ws, wss]
+        enum:
+          - ws
+          - wss
         default: ws
       host:
         default: localhost
 channels:
-  '/ws':
-    description: All messages share the same WebSocket channel.
+  /ws:
+    description:
+      "Push-only: the device publishes evt:* messages; inbound frames are ignored. Commands
+      and queries are HTTP routes (docs/http-api.yaml)."
     subscribe:
-      description: Messages sent from the server to the client.
+      description: Messages sent from the device to the client.
       message:
         oneOf:
-          - $ref: '#/components/messages/StatusEvent'
-          - $ref: '#/components/messages/OtaSettingsResponse'
-          - $ref: '#/components/messages/OtaProgressEvent'
-          - $ref: '#/components/messages/AutotuneResultEvent'
-          - $ref: '#/components/messages/ProfilesListResponse'
-          - $ref: '#/components/messages/ProfilesLoadResponse'
-          - $ref: '#/components/messages/ProfilesSaveResponse'
-          - $ref: '#/components/messages/ProfilesDeleteResponse'
-          - $ref: '#/components/messages/ProfilesSelectResponse'
-          - $ref: '#/components/messages/ProfilesFavoriteResponse'
-          - $ref: '#/components/messages/ProfilesUnfavoriteResponse'
-          - $ref: '#/components/messages/ProfilesReorderResponse'
-    publish:
-      description: Messages sent from the client to the server.
-      message:
-        oneOf:
-          - $ref: '#/components/messages/OtaSettingsRequest'
-          - $ref: '#/components/messages/OtaStartRequest'
-          - $ref: '#/components/messages/AutotuneStartRequest'
-          - $ref: '#/components/messages/ProfilesListRequest'
-          - $ref: '#/components/messages/ProfilesLoadRequest'
-          - $ref: '#/components/messages/ProfilesSaveRequest'
-          - $ref: '#/components/messages/ProfilesDeleteRequest'
-          - $ref: '#/components/messages/ProfilesSelectRequest'
-          - $ref: '#/components/messages/ProfilesFavoriteRequest'
-          - $ref: '#/components/messages/ProfilesUnfavoriteRequest'
-          - $ref: '#/components/messages/ProfilesReorderRequest'
+          - $ref: "#/components/messages/StatusEvent"
+          - $ref: "#/components/messages/OtaStatusEvent"
+          - $ref: "#/components/messages/OtaProgressEvent"
+          - $ref: "#/components/messages/AutotuneResultEvent"
+          - $ref: "#/components/messages/HistoryRebuildProgressEvent"
+          - $ref: "#/components/messages/HistoryShotSavedEvent"
+          - $ref: "#/components/messages/ShotFinishedStatsEvent"
+          - $ref: "#/components/messages/AutotuneFailedEvent"
 components:
   schemas:
     StatusPayload:
@@ -59,7 +52,8 @@ components:
       properties:
         tp:
           type: string
-          enum: ['evt:status']
+          enum:
+            - evt:status
         ct:
           type: number
           description: Current temperature
@@ -87,13 +81,15 @@ components:
         cd:
           type: boolean
           description: Indicates dimming capability
-      required: [tp]
+      required:
+        - tp
     OtaSettingsPayload:
       type: object
       properties:
         tp:
           type: string
-          enum: ['res:ota-settings']
+          enum:
+            - evt:ota-status
         latestVersion:
           type: string
         displayVersion:
@@ -110,274 +106,87 @@ components:
           type: string
         updating:
           type: boolean
-      required: [tp]
+      required:
+        - tp
     OtaProgressPayload:
       type: object
       properties:
         tp:
           type: string
-          enum: ['evt:ota-progress']
+          enum:
+            - evt:ota-progress
         phase:
           type: integer
         progress:
           type: integer
-      required: [tp, phase, progress]
+      required:
+        - tp
+        - phase
+        - progress
     AutotuneResultPayload:
       type: object
       properties:
         tp:
           type: string
-          enum: ['evt:autotune-result']
+          enum:
+            - evt:autotune-result
         pid:
           type: string
-      required: [tp, pid]
-    ProfilePayload:
-      $ref: '../schema/profile.json'
+      required:
+        - tp
+        - pid
   messages:
     StatusEvent:
       payload:
-        $ref: '#/components/schemas/StatusPayload'
-    OtaSettingsResponse:
+        $ref: "#/components/schemas/StatusPayload"
+    OtaStatusEvent:
       payload:
-        $ref: '#/components/schemas/OtaSettingsPayload'
+        $ref: "#/components/schemas/OtaSettingsPayload"
+      name: evt:ota-status
+      summary: Versions, update availability, storage and memory (also GET /api/ota)
     OtaProgressEvent:
       payload:
-        $ref: '#/components/schemas/OtaProgressPayload'
+        $ref: "#/components/schemas/OtaProgressPayload"
     AutotuneResultEvent:
       payload:
-        $ref: '#/components/schemas/AutotuneResultPayload'
-    ProfilesListResponse:
+        $ref: "#/components/schemas/AutotuneResultPayload"
+    HistoryRebuildProgressEvent:
+      name: evt:history-rebuild-progress
+      summary: Progress of POST /api/history/rebuild
       payload:
         type: object
         properties:
           tp:
             type: string
-            enum: ['res:profiles:list']
-          rid:
-            type: string
-          profiles:
-            type: array
-            items:
-              $ref: '#/components/schemas/ProfilePayload'
-          error:
-            type: string
-        required: [tp]
-    ProfilesLoadResponse:
+            enum:
+              - evt:history-rebuild-progress
+    HistoryShotSavedEvent:
+      name: evt:history-shot-saved
+      summary: A shot was written to history
       payload:
         type: object
         properties:
           tp:
             type: string
-            enum: ['res:profiles:load']
-          rid:
-            type: string
-          profile:
-            $ref: '#/components/schemas/ProfilePayload'
-          error:
-            type: string
-        required: [tp]
-    ProfilesSaveResponse:
+            enum:
+              - evt:history-shot-saved
+    ShotFinishedStatsEvent:
+      name: evt:shot-finished-stats
+      summary: Summary statistics of the shot that just ended
       payload:
         type: object
         properties:
           tp:
             type: string
-            enum: ['res:profiles:save']
-          rid:
-            type: string
-          profile:
-            $ref: '#/components/schemas/ProfilePayload'
-          error:
-            type: string
-        required: [tp]
-    ProfilesDeleteResponse:
+            enum:
+              - evt:shot-finished-stats
+    AutotuneFailedEvent:
+      name: evt:autotune-failed
+      summary: Autotune aborted
       payload:
         type: object
         properties:
           tp:
             type: string
-            enum: ['res:profiles:delete']
-          rid:
-            type: string
-          error:
-            type: string
-        required: [tp]
-    ProfilesSelectResponse:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['res:profiles:select']
-          rid:
-            type: string
-          error:
-            type: string
-        required: [tp]
-    ProfilesFavoriteResponse:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['res:profiles:favorite']
-          rid:
-            type: string
-          error:
-            type: string
-        required: [tp]
-    ProfilesUnfavoriteResponse:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['res:profiles:unfavorite']
-          rid:
-            type: string
-          error:
-            type: string
-        required: [tp]
-    OtaSettingsRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:ota-settings']
-          update:
-            type: boolean
-          channel:
-            type: string
-        required: [tp]
-    OtaStartRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:ota-start']
-          cp:
-            type: string
-        required: [tp]
-    AutotuneStartRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:autotune-start']
-          time:
-            type: integer
-          samples:
-            type: integer
-        required: [tp]
-    ProfilesListRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:list']
-          rid:
-            type: string
-        required: [tp]
-    ProfilesLoadRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:load']
-          rid:
-            type: string
-          id:
-            type: string
-        required: [tp, id]
-    ProfilesSaveRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:save']
-          rid:
-            type: string
-          profile:
-            $ref: '#/components/schemas/ProfilePayload'
-        required: [tp, profile]
-    ProfilesDeleteRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:delete']
-          rid:
-            type: string
-          id:
-            type: string
-        required: [tp, id]
-    ProfilesSelectRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:select']
-          rid:
-            type: string
-          id:
-            type: string
-        required: [tp, id]
-    ProfilesFavoriteRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:favorite']
-          rid:
-            type: string
-          id:
-            type: string
-        required: [tp, id]
-    ProfilesUnfavoriteRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:unfavorite']
-          rid:
-            type: string
-          id:
-            type: string
-        required: [tp, id]
-    ProfilesReorderRequest:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['req:profiles:reorder']
-          rid:
-            type: string
-          order:
-            type: array
-            items:
-              type: string
-            description: Full ordered list of profile IDs.
-        required: [tp, order]
-
-    ProfilesReorderResponse:
-      payload:
-        type: object
-        properties:
-          tp:
-            type: string
-            enum: ['res:profiles:reorder']
-          rid:
-            type: string
-          # No error field; success implied
-        required: [tp]
+            enum:
+              - evt:autotune-failed

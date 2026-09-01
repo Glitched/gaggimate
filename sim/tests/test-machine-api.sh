@@ -47,9 +47,8 @@ check "brew absolute -> 404"     404 "$(code -X PUT $J -d '{"value":36}' $B/targ
 check "grind absolute 18"        200 "$(code -X PUT $J -d '{"value":18}' $B/targets/grind)"
 check "grind zero -> 400"        400 "$(code -X PUT $J -d '{"value":0}' $B/targets/grind)"
 check "unknown target -> 404"    404 "$(code -X POST $B/targets/pressure/raise)"
-check "volumetric mode on"       200 "$(code -X PUT $J -d '{"volumetric":true}' $B/targets/mode)"
-check "settings show volumetric" True "$(body $B/settings | jget "['volumetricTarget']")"
-check "volumetric mode off"      200 "$(code -X PUT $J -d '{"volumetric":false}' $B/targets/mode)"
+check "volumetric mode on"       True "$(body -X PUT $J -d '{"volumetric":true}' $B/targets/mode | jget "['volumetric']")"
+check "volumetric mode off"      False "$(body -X PUT $J -d '{"volumetric":false}' $B/targets/mode | jget "['volumetric']")"
 check "mode needs a boolean"     400 "$(code -X PUT $J -d '{"volumetric":"yes"}' $B/targets/mode)"
 
 echo "--- ota"
