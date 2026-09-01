@@ -73,6 +73,13 @@ check "reorder -> 200"           200 "$(code -X POST $J -d "{\"ids\":$IDS}" $B/p
 FIRST=$(echo "$IDS" | python3 -c "import sys,json; print(json.load(sys.stdin)[0])")
 check "list follows new order"   "$FIRST" "$(body "$B/profiles?minimal=1" | jget "['profiles'][0]['id']")"
 check "reorder without ids -> 400" 400 "$(code -X POST $J -d '{}' $B/profiles/reorder)"
+echo "--- profile list cache invalidates on favourite changes"
+FAVID=$(body "$B/profiles?minimal=1" | python3 -c "import sys,json; print([p['id'] for p in json.load(sys.stdin)['profiles'] if p['favorite']][0])")
+curl -s -o /dev/null -X POST $B/profiles/$FAVID/unfavorite
+check "unfavourite shows in cached list" False "$(body "$B/profiles?minimal=1" | python3 -c "import sys,json; print([p['favorite'] for p in json.load(sys.stdin)['profiles'] if p['id']=='$FAVID'][0])")"
+curl -s -o /dev/null -X POST $B/profiles/$FAVID/favorite
+check "re-favourite shows in cached list" True "$(body "$B/profiles?minimal=1" | python3 -c "import sys,json; print([p['favorite'] for p in json.load(sys.stdin)['profiles'] if p['id']=='$FAVID'][0])")"
+check "GET /api/ota reports psram" yes "$(body $B/ota | jget "['psramFree']" | grep -q . && echo yes)"
 ORIG=$(echo "$IDS" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)[::-1]))")
 curl -s -o /dev/null -X POST $J -d "{\"ids\":$ORIG}" $B/profiles/reorder
 

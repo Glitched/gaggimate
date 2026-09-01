@@ -71,6 +71,7 @@ bool ProfileManager::isValidProfileId(const String &uuid) {
 }
 
 void ProfileManager::migrate(const std::vector<String> &existingProfiles) {
+    bumpRevision();
     // Reuse an already-loaded Default if present so we don't accumulate one per
     // boot when a transient SD read fails. Without this guard, every
     // intermittent loadSelectedProfile() failure (e.g. SD pull-up jitter)
@@ -199,6 +200,7 @@ bool ProfileManager::loadProfile(const String &uuid, Profile &outProfile) {
 }
 
 bool ProfileManager::saveProfile(Profile &profile) {
+    bumpRevision();
     if (!ensureDirectory())
         return false;
     bool isNew = false;
@@ -238,6 +240,7 @@ bool ProfileManager::saveProfile(Profile &profile) {
 }
 
 bool ProfileManager::deleteProfile(const String &uuid) {
+    bumpRevision();
     if (!isValidProfileId(uuid))
         return false;
     removeFavoritedProfile(uuid);
@@ -252,6 +255,7 @@ bool ProfileManager::profileExists(const String &uuid) {
 }
 
 void ProfileManager::selectProfile(const String &uuid) {
+    bumpRevision();
     ESP_LOGI("ProfileManager", "Selecting profile %s", uuid.c_str());
     _settings.setSelectedProfile(uuid);
     selectedProfile = Profile{};
@@ -298,11 +302,13 @@ std::vector<String> ProfileManager::getFavoritedProfiles(bool validate) {
 }
 
 void ProfileManager::removeFavoritedProfile(String id) {
+    bumpRevision();
     _settings.removeFavoritedProfile(id);
     _plugin_manager->trigger("profiles:profile:unfavorite", "id", id);
 }
 
 void ProfileManager::addFavoritedProfile(String id) {
+    bumpRevision();
     _settings.addFavoritedProfile(id);
     _plugin_manager->trigger("profiles:profile:favorite", "id", id);
 }

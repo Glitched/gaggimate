@@ -13,6 +13,8 @@ check "list returns profiles array" "yes" "$([ "$n" -ge 0 ] && echo yes)"
 rmin=$(curl -s "$B?minimal=1")
 haslabel=$(echo "$rmin" | python3 -c "import sys,json; p=json.load(sys.stdin)['profiles']; print('phases' in p[0] if p else False)")
 check "minimal list omits phases" "False" "$haslabel"
+hasfav=$(echo "$rmin" | python3 -c "import sys,json; p=json.load(sys.stdin)['profiles']; print('favorite' in p[0] and 'selected' in p[0] if p else False)")
+check "minimal list carries favorite + selected" "True" "$hasfav"
 
 echo "--- 2. Create via POST returns 201 with generated id"
 code_body=$(curl -s -w "\n%{http_code}" -X POST -H 'Content-Type: application/json' -d "$VALID" $B)

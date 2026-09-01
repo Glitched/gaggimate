@@ -423,7 +423,6 @@ void WebUIPlugin::setupServer() {
     if (controller->isSDCard()) {
         fs = &SD_MMC;
     }
-    server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/history/index.bin", HTTP_GET, [this, fs](AsyncWebServerRequest *request) {
         // Serve the binary index file directly
         if (fs->exists("/h/index.bin")) {
@@ -463,6 +462,10 @@ void WebUIPlugin::setupServer() {
         free(entries);
         request->send(response);
     });
+    // After the explicit index.bin / recent.bin routes: the static handler probes for a
+    // "<file>.gz" first, so registered ahead of them it cost every history load a flash stat
+    // for /h/index.bin.gz and an error-level log line.
+    server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
 #ifndef GAGGIMATE_SIM
     // Direct firmware upload. The body handler streams straight into the
@@ -870,14 +873,58 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
 }
 
 // REST profile API: JSON in/out, full-document writes with save-echo.
-//   GET    /api/profiles            list (add ?minimal=1 for id+label only)
+//   GET    /api/profiles            list (?minimal=1: id, label, favorite, selected)
 //   POST   /api/profiles            create (409 if the body's id already exists)
 //   GET    /api/profiles/{id}       load
 //   PUT    /api/profiles/{id}       replace (the path id wins over the body's)
 //   DELETE /api/profiles/{id}       delete
 //   POST   /api/profiles/{id}/select | /favorite | /unfavorite
 // Invalid profile documents are refused with 422 — never partially stored.
-void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
+std::shared_ptr<const WebUIPlugin::PsramString> WebUIPlugin::profileListJson(bool minimal) {
+    const uint32_t revision = profileManager->getRevision();
+    if (profileListCache.revision != revision) {
+        profileListCache.full.reset();
+        profileListCache.minimal.reset();
+        profileListCache.revision = revision;
+    }
+    auto &slot = minimal ? profileListCache.minimal : profileListCache.full;
+    if (!slot) {
+        JsonDocument doc(&psramAllocator);
+        auto arr = doc["profiles"].to<JsonArray>();
+        for (auto const &profileId : profileManager->listProfiles()) {
+            Profile profile{};
+            if (!profileManager->loadProfile(profileId, profile)) {
+                continue; // skip unreadable entries
+            }
+            auto p = arr.add<JsonObject>();
+            if (minimal) { // enough for pickers and the favourites card without the phases
+                p["id"] = profile.id;
+                p["label"] = profile.label;
+                p["favorite"] = profile.favorite;
+                p["selected"] = profile.selected;
+            } else {
+                writeProfile(p, profile);
+            }
+        }
+        auto out = std::make_shared<PsramString>();
+        struct PsramWriter {
+            PsramString &s;
+            size_t write(uint8_t c) {
+                s.push_back(static_cast<char>(c));
+                return 1;
+            }
+            size_t write(const uint8_t *buf, size_t n) {
+                s.append(reinterpret_cast<const char *>(buf), n);
+                return n;
+            }
+        } writer{*out};
+        serializeJson(doc, writer);
+        slot = std::move(out);
+    }
+    return slot;
+}
+
+void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) {
     // Split "/api/profiles[/{id}[/{action}]]" into id + action.
     String rest = request->url().substring(String("/api/profiles").length());
     if (rest.startsWith("/"))
@@ -924,23 +971,16 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
 
     if (id.isEmpty()) { // Collection: /api/profiles
         if (request->method() == HTTP_GET) {
-            JsonDocument doc(&psramAllocator);
-            auto arr = doc["profiles"].to<JsonArray>();
-            const bool minimal = request->hasArg("minimal");
-            for (auto const &profileId : profileManager->listProfiles()) {
-                Profile profile{};
-                if (!profileManager->loadProfile(profileId, profile)) {
-                    continue; // Same policy as the WS list: skip unreadable entries.
-                }
-                auto p = arr.add<JsonObject>();
-                if (minimal) {
-                    p["id"] = profile.id;
-                    p["label"] = profile.label;
-                } else {
-                    writeProfile(p, profile);
-                }
-            }
-            sendJson(200, doc);
+            // Served from the PSRAM cache in chunks: no 10 KB String in internal RAM per request.
+            auto json = profileListJson(request->hasArg("minimal"));
+            AsyncWebServerResponse *response =
+                request->beginResponse("application/json", json->size(), [json](uint8_t *out, size_t maxLen, size_t index) -> size_t {
+                    const size_t remaining = index < json->size() ? json->size() - index : 0;
+                    const size_t n = remaining < maxLen ? remaining : maxLen;
+                    memcpy(out, json->data() + index, n);
+                    return n;
+                });
+            request->send(response);
             return;
         }
         if (request->method() == HTTP_POST) {
@@ -978,6 +1018,7 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
             order.emplace_back(v.as<String>());
         }
         controller->getSettings().setProfileOrder(order);
+        profileManager->bumpRevision(); // the order is part of the list
         sendOk();
         return;
     }
@@ -1404,6 +1445,9 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
         doc["heapFree"] = static_cast<uint32_t>(free);
         doc["heapLargest"] = static_cast<uint32_t>(largest);
         doc["heapTotal"] = static_cast<uint32_t>(total);
+        // PSRAM is the other budget: JSON work, the LVGL buffers and response caches live there.
+        doc["psramFree"] = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        doc["psramLargest"] = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
     }
     doc["controllerTaskHealth"] = controller->isTaskHealthy();
 #ifndef GAGGIMATE_HEADLESS

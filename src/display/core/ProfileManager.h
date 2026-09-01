@@ -16,6 +16,10 @@ class ProfileManager {
     ProfileManager(fs::FS *fs, String dir, Settings &settings, PluginManager *plugin_manager);
 
     void setup();
+    // Bumped on every mutation (save, delete, select, favourite, reorder). Response caches
+    // key on it, so a stale list can never be served and nothing needs a cache API.
+    uint32_t getRevision() const { return revision; }
+    void bumpRevision() { revision++; }
     std::vector<String> listProfiles();
     bool loadProfile(const String &uuid, Profile &outProfile);
     bool saveProfile(Profile &profile);
@@ -35,6 +39,7 @@ class ProfileManager {
     Settings &_settings;
     fs::FS *_fs;
     String _dir;
+    uint32_t revision = 1;
     bool ensureDirectory() const;
     String profilePath(const String &uuid) const;
 

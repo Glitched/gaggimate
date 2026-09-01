@@ -50,7 +50,7 @@ export const http = {
 };
 
 export const profilesApi = {
-  /** Array of profiles; `minimal` returns id + label only. */
+  /** Array of profiles; `minimal` returns id, label, favorite and selected only (no phases). */
   list: ({ minimal = false } = {}) =>
     http.get(`/api/profiles${minimal ? '?minimal=1' : ''}`).then(d => d?.profiles ?? []),
   load: id => http.get(`/api/profiles/${enc(id)}`),

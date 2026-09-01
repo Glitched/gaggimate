@@ -3,6 +3,9 @@
 
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 
+#include <display/util/PsramStlAllocator.h>
+#include <memory>
+#include <string>
 #include <Update.h> // U_FLASH / U_SPIFFS
 #include <DNSServer.h>
 
@@ -44,7 +47,17 @@ class WebUIPlugin : public Plugin {
     // (catch-all for any path not claimed by an explicit route). [GM-106]
     void serveWebAsset(AsyncWebServerRequest *request);
     void handleSettings(AsyncWebServerRequest *request) const;
-    void handleProfilesRest(AsyncWebServerRequest *request) const;
+    void handleProfilesRest(AsyncWebServerRequest *request);
+    // GET /api/profiles bodies, serialised once per ProfileManager revision and kept in PSRAM.
+    // Listing reads and parses every profile file from flash (~2 s for ten, stalling both cores'
+    // caches); with the cache a list is a memcpy. shared_ptr so an in-flight chunked response
+    // survives an invalidation.
+    using PsramString = std::basic_string<char, std::char_traits<char>, PsramStlAllocator<char>>;
+    struct ProfileListCache {
+        uint32_t revision = 0;
+        std::shared_ptr<const PsramString> full, minimal;
+    } profileListCache;
+    std::shared_ptr<const PsramString> profileListJson(bool minimal);
     // HTTP equivalents of the req:* WebSocket commands (docs/http-api.yaml).
     void handleMachineRest(AsyncWebServerRequest *request);
     void handleOtaRest(AsyncWebServerRequest *request);

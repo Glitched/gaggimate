@@ -75,7 +75,7 @@ export function FavoriteProfilesCard({ selectedProfileId, inCard = false, compac
     let cancelled = false;
     setLoading(true);
     profilesApi
-      .list()
+      .list({ minimal: true }) // id, label, favorite, selected -- ~0.5 KB instead of the full 10 KB
       .then(profiles => {
         if (cancelled) return;
         setFavorites(profiles.filter(p => p.favorite).slice(0, 3));

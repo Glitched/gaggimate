@@ -76,7 +76,7 @@ paths:
           in: query
           required: false
           schema: { type: integer }
-          description: When present, each entry carries only `id` and `label`.
+          description: Any value returns id, label, favorite and selected per profile (no phases). Both forms are served from a per-revision cache in PSRAM.
       responses:
         "200":
           content:
