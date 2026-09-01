@@ -59,6 +59,10 @@ Additional documentation for the WebSocket API can be found in [docs/websocket-a
 - **`CLAUDE.md`** — build commands and architecture notes for working in this repository.
 - **Device UI icons** — the on-device icon set is [Phosphor Icons](https://phosphoricons.com)
   (Regular weight), regenerated from the mapping in `scripts/phosphor_icons.py`.
+- **HTTP API for everything** — every command and query (`POST /api/mode`, `/api/process/...`,
+  `/api/targets/...`, `/api/ota`, profile and shot-history CRUD) is a plain HTTP route documented
+  in `docs/http-api.yaml`; the WebSocket carries only the device's `evt:*` pushes. Firmware
+  images upload as a raw body to `/api/ota/upload`.
 
 See the git history for the complete record of modifications.
 
