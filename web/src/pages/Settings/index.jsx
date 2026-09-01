@@ -59,6 +59,7 @@ import { faCrosshairs } from '@fortawesome/free-solid-svg-icons/faCrosshairs';
 import { faPuzzlePiece } from '@fortawesome/free-solid-svg-icons/faPuzzlePiece';
 import { faBluetoothB } from '@fortawesome/free-brands-svg-icons/faBluetoothB';
 import { faRotate } from '@fortawesome/free-solid-svg-icons/faRotate';
+import { profilesApi } from '../../services/api.js';
 
 // Module-level computed so reading connection state during render only
 // re-renders this page when the boolean flips — the machine signal itself is
@@ -136,7 +137,13 @@ const SETTINGS_BOOLEAN_KEYS = [
 
 // Form-model keys that are folded into combined firmware keys (buttonBehavior,
 // pid) or exist only client-side — never sent as-is.
-const SETTINGS_CLIENT_ONLY_KEYS = new Set(['button0', 'button1', 'button2', 'kf', 'standbyDisplayEnabled']);
+const SETTINGS_CLIENT_ONLY_KEYS = new Set([
+  'button0',
+  'button1',
+  'button2',
+  'kf',
+  'standbyDisplayEnabled',
+]);
 
 // Maps the form model onto the firmware's settings keys, with real booleans.
 function buildSettingsPayload(formData, autowakeupSchedules) {
@@ -246,8 +253,7 @@ export function Settings() {
     const loadProfiles = async () => {
       if (connected.value) {
         try {
-          const response = await apiService.request({ tp: 'req:profiles:list', minimal: true });
-          setProfiles(response.profiles);
+          setProfiles(await profilesApi.list({ minimal: true }));
         } catch (error) {
           console.error('Failed to load profiles:', error);
         }

@@ -307,6 +307,19 @@ paths:
                 description: "Echoes the value as applied, e.g. {\"temperature\": 93}."
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/targets/mode:
+    put:
+      summary: Choose time-based or volumetric targets
+      description: Equivalent of `req:change-brew-target` / `req:change-grind-target` (whose
+        `target` field is this boolean). Volumetric needs a connected scale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [volumetric], properties: { volumetric: { type: boolean } } }
+      responses:
+        "200": { content: { application/json: { schema: { type: object, properties: { volumetric: { type: boolean } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
   /api/ota:
     get:
       summary: Versions, update availability, storage and memory

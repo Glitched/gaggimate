@@ -11,6 +11,7 @@
  */
 
 import { indexedDBService } from './IndexedDBService';
+import { historyApi } from '../../../services/api.js';
 
 const DEFAULT_NOTES = {
   rating: 0,
@@ -87,14 +88,9 @@ class NotesService {
   }
 
   async loadGaggiMateNotes(shotId, defaults) {
-    if (!this.apiService) return defaults;
-
     try {
-      const response = await this.apiService.request({
-        tp: 'req:history:notes:get',
-        id: shotId,
-      });
-      return response.notes ? { ...defaults, ...parseNotesPayload(response.notes) } : defaults;
+      const stored = await historyApi.notes(shotId);
+      return Object.keys(stored).length ? { ...defaults, ...parseNotesPayload(stored) } : defaults;
     } catch (e) {
       console.error('Failed to load notes from API:', e);
       return defaults;
@@ -129,12 +125,7 @@ class NotesService {
     const notesWithId = { ...notes, id: String(shotId) };
 
     if (source === 'gaggimate') {
-      if (!this.apiService) throw new Error('ApiService not available');
-      await this.apiService.request({
-        tp: 'req:history:notes:save',
-        id: shotId,
-        notes: notesWithId,
-      });
+      await historyApi.saveNotes(shotId, notesWithId);
       return;
     }
 

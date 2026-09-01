@@ -31,6 +31,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSearch } from '@fortawesome/free-solid-svg-icons/faSearch';
 import { faSort } from '@fortawesome/free-solid-svg-icons/faSort';
 import { faFilter } from '@fortawesome/free-solid-svg-icons/faFilter';
+import { historyApi } from '../../services/api.js';
 
 const connected = computed(() => machine.value.connected);
 
@@ -117,7 +118,7 @@ export function ShotHistory() {
     async id => {
       setLoading(true);
       try {
-        await apiService.request({ tp: 'req:history:delete', id });
+        await historyApi.remove(id);
         // Reload the index after deletion
         await loadHistory();
       } catch (error) {

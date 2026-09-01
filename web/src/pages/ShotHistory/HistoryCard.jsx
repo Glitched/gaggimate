@@ -24,6 +24,7 @@ import VisualizerUploadModal from '../../components/VisualizerUploadModal.jsx';
 import { visualizerService } from '../../services/VisualizerService.js';
 import { ApiServiceContext } from '../../services/ApiService.js';
 import { Tooltip } from '../../components/Tooltip.jsx';
+import { profilesApi } from '../../services/api.js';
 
 function round2(v) {
   if (v == null || Number.isNaN(v)) return v;
@@ -100,8 +101,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     let profileData = null;
     if (loaded.profileId && apiService) {
       try {
-        const res = await apiService.request({ tp: 'req:profiles:load', id: loaded.profileId });
-        if (res.profile) profileData = res.profile;
+        profileData = await profilesApi.load(loaded.profileId);
       } catch (error) {
         // Planned-vs-actual is then omitted; the rest of the export is unaffected.
         console.warn('Failed to fetch profile for LLM export:', error);
@@ -195,13 +195,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
         let profileData = null;
         if (shot.profileId && apiService) {
           try {
-            const profileResponse = await apiService.request({
-              tp: 'req:profiles:load',
-              id: shot.profileId,
-            });
-            if (profileResponse.profile) {
-              profileData = profileResponse.profile;
-            }
+            profileData = await profilesApi.load(shot.profileId);
           } catch (error) {
             console.warn('Failed to fetch profile data:', error);
             // Continue without profile data

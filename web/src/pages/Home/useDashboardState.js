@@ -1,17 +1,12 @@
 import { computed } from '@preact/signals';
-import { useContext, useEffect, useState } from 'preact/hooks';
-import {
-  ApiServiceContext,
-  machine,
-  prefetchSettings,
-  getCachedSettings,
-} from '../../services/ApiService.js';
+import { useEffect, useState } from 'preact/hooks';
+import { machine, prefetchSettings, getCachedSettings } from '../../services/ApiService.js';
+import { machineApi } from '../../services/api.js';
 
 const status = computed(() => machine.value.status);
 const capabilities = computed(() => machine.value.capabilities);
 
 export function useDashboardState() {
-  const apiService = useContext(ApiServiceContext);
   const [isFlushing, setIsFlushing] = useState(false);
 
   const s = status.value;
@@ -67,45 +62,37 @@ export function useDashboardState() {
   // ── handlers ─────────────────────────────────────────────
   // apiService.send throws when the socket is down; these run from click
   // handlers, so swallow the error instead of leaving it uncaught.
-  const safeSend = message => {
-    try {
-      apiService.send(message);
-    } catch (error) {
-      console.warn('Command not sent, machine disconnected:', message.tp);
-    }
-  };
-  const send = tp => safeSend({ tp });
+  // Commands go over HTTP (services/api.js); the socket only carries status.
+  // Buttons fire and forget, so a failure is logged rather than thrown.
+  const run = promise => promise.catch(error => console.warn('Command failed:', error.message));
 
-  const changeMode = mode => safeSend({ tp: 'req:change-mode', mode });
+  const changeMode = mode => run(machineApi.setMode(mode));
 
-  const activate = () => send(isGrinding ? 'req:grind:activate' : 'req:process:activate');
+  const activate = () => run(isGrinding ? machineApi.grindActivate() : machineApi.activate());
   const deactivate = () => {
-    send(isGrinding ? 'req:grind:deactivate' : 'req:process:deactivate');
+    run(isGrinding ? machineApi.grindDeactivate() : machineApi.deactivate());
     if (isFlushing) {
-      send('req:process:clear');
+      run(machineApi.clear());
       setIsFlushing(false);
     }
   };
   const clear = () => {
-    send('req:process:clear');
+    run(machineApi.clear());
     setIsFlushing(false);
   };
 
   const startFlush = () => {
     if (isFlushing) return;
     setIsFlushing(true);
-    apiService.request({ tp: 'req:flush:start' }).catch(() => setIsFlushing(false));
+    machineApi.flush().catch(() => setIsFlushing(false));
   };
 
-  const raiseTemp = () => send('req:raise-temp');
-  const lowerTemp = () => send('req:lower-temp');
-  const raiseTarget = () => send(isGrinding ? 'req:raise-grind-target' : 'req:raise-brew-target');
-  const lowerTarget = () => send(isGrinding ? 'req:lower-grind-target' : 'req:lower-brew-target');
-  const changeTarget = target =>
-    safeSend({
-      tp: isGrinding ? 'req:change-grind-target' : 'req:change-brew-target',
-      target,
-    });
+  const raiseTemp = () => run(machineApi.step('temperature', 'raise'));
+  const lowerTemp = () => run(machineApi.step('temperature', 'lower'));
+  const raiseTarget = () => run(machineApi.step(isGrinding ? 'grind' : 'brew', 'raise'));
+  const lowerTarget = () => run(machineApi.step(isGrinding ? 'grind' : 'brew', 'lower'));
+  // TargetToggle passes 0/1: time-based vs volumetric targets.
+  const changeTarget = target => run(machineApi.setVolumetric(!!target));
 
   return {
     // raw status

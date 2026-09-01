@@ -1377,6 +1377,7 @@ void WebUIPlugin::handleMachineRest(AsyncWebServerRequest *request) {
     if (url.startsWith("/api/targets/")) {
         // /api/targets/{temperature|brew|grind}/{raise|lower}  POST, one step
         // /api/targets/{temperature|grind}                     PUT {"value": n}, absolute
+        // /api/targets/mode                                    PUT {"volumetric": bool}
         // brew has no absolute form: its target is the selected profile's duration or
         // volumetric target, which raiseBrewTarget()/lowerBrewTarget() step.
         const String rest = url.substring(String("/api/targets/").length());
@@ -1398,6 +1399,18 @@ void WebUIPlugin::handleMachineRest(AsyncWebServerRequest *request) {
                 return replyError(request, 404, "Unknown target; expected temperature, brew or grind");
             }
             return replyOk(request);
+        }
+        if (method == HTTP_PUT && dir.isEmpty() && which == "mode") {
+            // /api/targets/mode {"volumetric": bool}: brew/grind targets are time-based or
+            // volumetric (weight, needs a scale). Equivalent of req:change-brew-target /
+            // req:change-grind-target, whose "target" is that boolean despite the name.
+            if (!body["volumetric"].is<bool>()) {
+                return replyError(request, 400, "Body must be {\"volumetric\": true|false}");
+            }
+            controller->getSettings().setVolumetricTarget(body["volumetric"].as<bool>());
+            JsonDocument doc(&psramAllocator);
+            doc["volumetric"] = controller->getSettings().isVolumetricTarget();
+            return replyJson(request, 200, doc);
         }
         if (method == HTTP_PUT && dir.isEmpty()) {
             if (!body["value"].is<float>()) {

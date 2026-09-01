@@ -8,6 +8,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
 import { Spinner } from '../../../components/Spinner.jsx';
 import Section from '../../../components/Card.jsx';
+import { historyApi, otaApi } from '../../../services/api.js';
 
 const imageUrlToBase64 = async blob => {
   return new Promise((onSuccess, onError) => {
@@ -397,26 +398,35 @@ export function SystemTab() {
     };
   }, [apiService]);
 
-  // Request OTA settings as soon as the socket is up, and again on every
-  // reconnect while still loading — the previous fixed 500 ms timer threw when
-  // the socket wasn't open yet and left the tab wedged on the skeleton.
+  // Load the OTA/system status over HTTP; retried on each reconnect only while
+  // the first load has not landed. Later refreshes arrive as res:ota-settings
+  // broadcasts (the device re-sends after a check or a channel change).
   useEffect(() => {
     if (!connected.value || !isLoading) return;
-    try {
-      apiService.send({ tp: 'req:ota-settings' });
-    } catch (error) {
-      console.error('Failed to request OTA settings:', error);
-    }
+    let cancelled = false;
+    otaApi
+      .status()
+      .then(data => {
+        if (cancelled) return;
+        setFormData(data);
+        setChannel(current => current ?? data.channel);
+        setIsLoading(false);
+      })
+      .catch(error => console.error('Failed to load OTA settings:', error));
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- connected.value is a signal read; the render-time read subscribes this component
-  }, [connected.value, isLoading, apiService]);
+  }, [connected.value, isLoading]);
 
   const onSubmit = useCallback(
     async e => {
       e.preventDefault();
       try {
-        apiService.send({ tp: 'req:ota-settings', update: true, channel });
         setSubmitting(true);
+        await otaApi.check(channel); // the refreshed status arrives as res:ota-settings
       } catch (error) {
+        setSubmitting(false);
         console.error('Failed to save update channel:', error);
         showToast('Machine not connected — could not save the update channel.', { type: 'error' });
       }
@@ -434,17 +444,12 @@ export function SystemTab() {
     return () => clearTimeout(timeoutId);
   }, [submitting]);
 
-  const onUpdate = useCallback(
-    component => {
-      try {
-        apiService.send({ tp: 'req:ota-start', cp: component });
-      } catch (error) {
-        console.error('Failed to start update:', error);
-        showToast('Machine not connected — could not start the update.', { type: 'error' });
-      }
-    },
-    [apiService],
-  );
+  const onUpdate = useCallback(component => {
+    otaApi.start(component).catch(error => {
+      console.error('Failed to start update:', error);
+      showToast(`Could not start the update: ${error.message}`, { type: 'error' });
+    });
+  }, []);
 
   // Firmware flashes are disruptive — require a second click to confirm.
   const [pendingUpdate, setPendingUpdate] = useState(null);
@@ -475,8 +480,11 @@ export function SystemTab() {
     setRebuilt(false);
     setRebuilding(true);
     setRebuildProgress({ total: 0, current: 0, status: 'starting' });
-    apiService.send({ tp: 'req:history:rebuild' });
-  }, [apiService]);
+    historyApi.rebuild().catch(error => {
+      console.error('Failed to start the history rebuild:', error);
+      setRebuilding(false);
+    });
+  }, []);
 
   if (phase > 0) {
     return <OtaProgressView phase={phase} progress={progress} />;

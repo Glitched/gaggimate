@@ -4,6 +4,7 @@ import { ApiServiceContext } from '../../services/ApiService.js';
 import { Spinner } from '../../components/Spinner.jsx';
 import { faEdit } from '@fortawesome/free-solid-svg-icons/faEdit';
 import { faSave } from '@fortawesome/free-solid-svg-icons/faSave';
+import { historyApi } from '../../services/api.js';
 
 export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
   const apiService = useContext(ApiServiceContext);
@@ -76,30 +77,9 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
       }
 
       try {
-        const response = await apiService.request({
-          tp: 'req:history:notes:get',
-          id: shot.id,
-        });
-
-        let loadedNotes = buildDefaults();
-
-        if (response.notes && Object.keys(response.notes).length > 0) {
-          // Parse response.notes if it's a string
-          let parsedNotes = response.notes;
-          if (typeof response.notes === 'string') {
-            try {
-              parsedNotes = JSON.parse(response.notes);
-            } catch (e) {
-              console.warn('Failed to parse notes JSON:', e);
-              parsedNotes = {};
-            }
-          }
-
-          // Merge loaded notes with defaults
-          loadedNotes = { ...loadedNotes, ...parsedNotes };
-        }
-
-        finalize(loadedNotes);
+        // {} when the shot has no notes file; merged over the defaults either way.
+        const stored = await historyApi.notes(shot.id);
+        finalize({ ...buildDefaults(), ...stored });
       } catch (error) {
         console.error('Failed to load notes:', error);
         // Even if loading fails, set up defaults
@@ -116,11 +96,7 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
   const saveNotes = async () => {
     setLoading(true);
     try {
-      await apiService.request({
-        tp: 'req:history:notes:save',
-        id: shot.id,
-        notes: notes,
-      });
+      await historyApi.saveNotes(shot.id, notes);
       setIsEditing(false);
       if (onNotesUpdate) {
         onNotesUpdate(notes);

@@ -52,6 +52,7 @@ import { faAnglesDown } from '@fortawesome/free-solid-svg-icons/faAnglesDown';
 import { faAnglesUp } from '@fortawesome/free-solid-svg-icons/faAnglesUp';
 import { faGripVertical } from '@fortawesome/free-solid-svg-icons/faGripVertical';
 import { buildStatisticsProfileHref } from '../Statistics/utils/statisticsRoute.js';
+import { profilesApi } from '../../services/api.js';
 
 Chart.register(
   LineController,
@@ -616,8 +617,7 @@ export function ProfileList() {
 
   const loadProfiles = async () => {
     try {
-      const response = await apiService.request({ tp: 'req:profiles:list' });
-      setProfiles(response.profiles);
+      setProfiles(await profilesApi.list());
     } catch (error) {
       // Keep whatever list we have; a failed refresh must not strand the page
       // on the loading spinner.
@@ -641,7 +641,7 @@ export function ProfileList() {
         const orderedIds = pendingOrderRef.current;
         if (!orderedIds) return;
         try {
-          await apiService.request({ tp: 'req:profiles:reorder', order: orderedIds });
+          await profilesApi.reorder(orderedIds);
         } catch (e) {
           // optional: log or surface error
         }
@@ -657,9 +657,7 @@ export function ProfileList() {
         clearTimeout(orderDebounceRef.current);
         if (pendingOrderRef.current) {
           // fire and forget; no await during unmount
-          apiService
-            .request({ tp: 'req:profiles:reorder', order: pendingOrderRef.current })
-            .catch(() => {});
+          profilesApi.reorder(pendingOrderRef.current).catch(() => {});
         }
       }
     };
@@ -845,7 +843,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.filter(p => p.id !== id));
       try {
-        await apiService.request({ tp: 'req:profiles:delete', id });
+        await profilesApi.remove(id);
       } catch (error) {
         console.error('Failed to delete profile:', error);
         showToast('Deleting the profile failed.', { type: 'error' });
@@ -860,7 +858,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => ({ ...p, selected: p.id === id })));
       try {
-        await apiService.request({ tp: 'req:profiles:select', id });
+        await profilesApi.select(id);
       } catch (error) {
         console.error('Failed to select profile:', error);
         showToast('Selecting the profile failed.', { type: 'error' });
@@ -875,7 +873,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: true } : p)));
       try {
-        await apiService.request({ tp: 'req:profiles:favorite', id });
+        await profilesApi.favorite(id);
       } catch (error) {
         console.error('Failed to favorite profile:', error);
         showToast('Updating the favorite failed.', { type: 'error' });
@@ -890,7 +888,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: false } : p)));
       try {
-        await apiService.request({ tp: 'req:profiles:unfavorite', id });
+        await profilesApi.unfavorite(id);
       } catch (error) {
         console.error('Failed to unfavorite profile:', error);
         showToast('Updating the favorite failed.', { type: 'error' });
@@ -912,7 +910,7 @@ export function ProfileList() {
           delete copy.selected;
           delete copy.favorite;
           copy.label = `${original.label} Copy`;
-          await apiService.request({ tp: 'req:profiles:save', profile: copy });
+          await profilesApi.save(copy);
         }
       } catch (error) {
         console.error('Failed to duplicate profile:', error);
@@ -960,7 +958,7 @@ export function ProfileList() {
           let failed = 0;
           for (const p of parsed) {
             try {
-              await apiService.request({ tp: 'req:profiles:save', profile: p });
+              await profilesApi.save(p);
             } catch (error) {
               // Keep importing the remaining profiles even if one save fails.
               console.error('Failed to save imported profile:', error);
@@ -986,7 +984,7 @@ export function ProfileList() {
     for (const p of profiles) {
       if (!p.selected) {
         try {
-          await apiService.request({ tp: 'req:profiles:delete', id: p.id });
+          await profilesApi.remove(p.id);
         } catch (error) {
           // Keep deleting the rest; the reload below shows what remains.
           console.error('Failed to delete profile:', error);

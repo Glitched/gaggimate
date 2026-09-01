@@ -19,6 +19,7 @@ import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
 import { showToast } from '../../services/toast.js';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
+import { profilesApi } from '../../services/api.js';
 
 Chart.register(
   LineController,
@@ -104,10 +105,10 @@ export function ProfileEdit() {
         setLoading(false);
       } else if (connected.value) {
         try {
-          const response = await apiService.request({ tp: 'req:profiles:load', id: params.id });
+          const profile = await profilesApi.load(params.id);
           setInitialData({
-            ...response.profile,
-            phases: Array.isArray(response.profile?.phases) ? response.profile.phases : [],
+            ...profile,
+            phases: Array.isArray(profile?.phases) ? profile.phases : [],
           });
         } catch (error) {
           console.error('Failed to load profile:', error);
@@ -122,8 +123,8 @@ export function ProfileEdit() {
     async data => {
       setSaving(true);
       try {
-        const response = await apiService.request({ tp: 'req:profiles:save', profile: data });
-        setInitialData(response.profile);
+        const saved = await profilesApi.save(data);
+        setInitialData(saved);
         location.route('/profiles');
       } catch (error) {
         // Leave the form intact so the user's edits survive a failed save.

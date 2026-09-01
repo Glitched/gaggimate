@@ -9,6 +9,7 @@ import { profileChartHeightSignal } from '../../../utils/dashboardManager.js';
 import { SkeletonBlock } from '../../../components/SkeletonBlock.jsx';
 import { fmtElapsed, fmtPhaseTarget, getPhaseLabel } from '../utils.js';
 import { parseBinaryIndex, indexToShotList } from '../../ShotHistory/parseBinaryIndex.js';
+import { profilesApi } from '../../../services/api.js';
 
 function ProgressCard({ processInfo, isBrewing, isGrinding, selectedProfile }) {
   const p = processInfo;
@@ -168,11 +169,11 @@ export function ProfileCard({
     }
     let cancelled = false;
     setProfileLoading(true);
-    apiService
-      .request({ tp: 'req:profiles:load', id: selectedProfileId })
-      .then(res => {
+    profilesApi
+      .load(selectedProfileId)
+      .then(profile => {
         if (cancelled) return;
-        setProfileData(res.profile);
+        setProfileData(profile);
         setProfileLoading(false);
       })
       .catch(e => {

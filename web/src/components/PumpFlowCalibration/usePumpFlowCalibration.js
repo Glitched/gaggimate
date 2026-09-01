@@ -10,6 +10,7 @@ import {
   SHOT_END_TIMEOUT_MS,
 } from './constants.js';
 import { CALIBRATION_PROFILE, CALIBRATION_PROFILE_ID } from './profile.js';
+import { machineApi, profilesApi } from '../../services/api.js';
 
 /**
  * usePumpFlowCalibration
@@ -148,13 +149,13 @@ export function usePumpFlowCalibration({ currentCoeffs, onApplied }) {
       const [c1, c9] = parseCoeffs(currentCoeffs);
 
       pushLog('Saving calibration profile...');
-      await apiService.request({ tp: 'req:profiles:save', profile: CALIBRATION_PROFILE });
+      await profilesApi.save(CALIBRATION_PROFILE);
 
       pushLog('Selecting calibration profile...');
-      await apiService.request({ tp: 'req:profiles:select', id: CALIBRATION_PROFILE_ID });
+      await profilesApi.select(CALIBRATION_PROFILE_ID);
 
       pushLog('Switching to BREW mode...');
-      apiService.send({ tp: 'req:change-mode', mode: MODE_BREW });
+      await machineApi.setMode(MODE_BREW);
       await new Promise(r => setTimeout(r, POST_MODE_SETTLE_MS));
 
       pushLog('Snapshotting shot history...');
@@ -165,7 +166,7 @@ export function usePumpFlowCalibration({ currentCoeffs, onApplied }) {
       // Subscribe to evt:status BEFORE activating so a fast a:0→1→0 transition
       // (or a status arriving in the same tick) can't slip past the listener.
       const shotEnd = waitForShotEnd();
-      apiService.send({ tp: 'req:process:activate' });
+      await machineApi.activate();
       await shotEnd;
 
       pushLog('Shot finished. Fetching history...', 'ok');
@@ -201,14 +202,14 @@ export function usePumpFlowCalibration({ currentCoeffs, onApplied }) {
       if (profileToRestore) {
         try {
           pushLog('Restoring previous profile...');
-          await apiService.request({ tp: 'req:profiles:select', id: profileToRestore });
+          await profilesApi.select(profileToRestore);
         } catch (e) {
           pushLog(`Could not restore previous profile: ${e.message}`, 'warn');
         }
       }
       try {
         pushLog('Removing calibration profile...');
-        await apiService.request({ tp: 'req:profiles:delete', id: CALIBRATION_PROFILE_ID });
+        await profilesApi.remove(CALIBRATION_PROFILE_ID);
       } catch (e) {
         pushLog(`Could not delete calibration profile: ${e.message}`, 'warn');
       }
