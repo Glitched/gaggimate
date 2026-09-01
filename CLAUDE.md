@@ -182,7 +182,7 @@ JSON schemas for profiles, shot history, and notes are in `schema/`.
 
 `GitHubOTA` pulls display firmware from the update server / GitHub releases; `ControllerOTA` pushes the controller image over BLE DFU. Channels: `latest` / `nightly` (`DEFAULT_OTA_CHANNEL`).
 
-`POST /api/ota/upload` (header `X-OTA-Token`, `?target=fs` for a LittleFS image) pushes an image without a cable. The image is the **raw request body** (`Content-Type: application/octet-stream`; `curl --data-binary @firmware.bin`), not a multipart form: ESPAsyncWebServer parses multipart one byte at a time and managed ~26 KB/s — three minutes per image, and two aborted attempts — before this was changed. Pass `-H "Expect:"` to curl anyway; the `100-continue` handshake once stalled an upload with nothing sent. A failure returns `{"error": "<stage>: <reason> at N bytes", "received": N}`; a bare `Aborted` means firmware older than 2026-08-31 that lost the reason. A 30 s stall aborts the upload server-side so a dead connection cannot hold the OTA slot. Raw-body throughput on the panel is unmeasured as of this note — measure it on the first OTA flash and replace this sentence.
+`POST /api/ota/upload` (header `X-OTA-Token`, `?target=fs` for a LittleFS image) pushes an image without a cable. The image is the **raw request body** (`Content-Type: application/octet-stream`; `curl --data-binary @firmware.bin`), not a multipart form: ESPAsyncWebServer parses multipart one byte at a time and managed ~26 KB/s — three minutes per image, and two aborted attempts — before this was changed. Measured on 2026-09-01: a 4.4 MB image uploads in 85–105 s (42–51 KB/s), the device answers `{"status":"ok","restarting":true}` and is back on Wi-Fi ~35 s later; verified by pushing a `-dirty` build and reading its version back from `GET /api/ota`. Pass `-H "Expect:"` to curl; the `100-continue` handshake once stalled an upload with nothing sent. A failure returns `{"error": "<stage>: <reason> at N bytes", "received": N}`; a bare `Aborted` means firmware older than 2026-08-31 that lost the reason. A 30 s stall aborts the upload server-side so a dead connection cannot hold the OTA slot. USB (`pio run -e display -t upload`) is still ~50 s if the cable is in.
 
 ## Conventions
 
@@ -212,6 +212,12 @@ have stalled it:
   _after_ `loop()`, so the frame period was 25 ms plus render time (~43 ms on the
   panel, and uneven). It now uses `vTaskDelayUntil` with a 25 ms period; the sim
   mirrors that cadence in `sim/main.cpp`. Don't reintroduce a trailing sleep.
+- **Listing profiles from flash.** `GET /api/profiles` read and parsed every profile
+  file per request — ~0.9–2 s for ten on the panel, stalling both cores' caches.
+  It is now served from a PSRAM cache keyed on `ProfileManager::getRevision()`;
+  a cached list costs the same as `GET /api/status` (~90 ms, all Wi-Fi). Bump the
+  revision from any new code path that changes a profile, the selection, the
+  favourites or the order, or the list will be stale.
 - **Runtime image zoom.** `lv_img_set_zoom` != 256 sends every redraw through the
   software resampler. Pre-scale bitmaps to their on-screen size instead (the
   wordmark is rasterized at 394×79 for exactly this reason) and animate opacity,
@@ -229,8 +235,10 @@ The panel itself is the ceiling: `RGB_MAX_PIXEL_CLOCK_HZ` is 7 MHz in
 **23.5 Hz** physical refresh — the UI's 40 Hz loop already outruns it. Smoother
 motion means a higher pixel clock (10 MHz ≈ 34 Hz, 12 ≈ 40), which risks drift
 and tearing because the framebuffer is in PSRAM with no bounce buffers; bounce
-buffers need ~20 KB of internal RAM, and the device had ~57 KB free (largest
-block 39 KB) on 2026-08-31 — the same RAM the IP stack starves without. Untested.
+buffers need ~20 KB of internal RAM. The device had ~57 KB free (largest block
+39 KB) on 2026-08-31; removing the WebSocket request path raised that to ~82 KB
+(largest 71 KB) on 2026-09-01, with ~6.7 MB of PSRAM free — `GET /api/ota`
+reports all four figures. Untested.
 
 `scripts/lvgl_img.py` and `scripts/phosphor_icons.py` regenerate bitmaps without
 EEZ Studio; the sim's `--tap`, `--drag`, `--arc`, `--scale` and the `s` hotkey are
