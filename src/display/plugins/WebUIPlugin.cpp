@@ -470,11 +470,24 @@ void WebUIPlugin::setupServer() {
         request->send(response);
     });
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+#ifndef GAGGIMATE_SIM
+    // Direct firmware upload. The body handler streams straight into the
+    // inactive OTA partition; the request handler runs once the body is done.
+    server.on(
+        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); }, nullptr,
+        // Raw body (Content-Type: application/octet-stream), not multipart: the
+        // server's form-data parser walks the body one byte at a time and topped
+        // out at ~26 KB/s, three minutes for an image. The body callback hands
+        // over whole TCP segments, and Content-Length sizes the Updater up front.
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            handleFirmwareUpload(request, index, data, len, total);
+        });
+#endif
     // HTTP equivalents of the req:* WebSocket commands, so scripts and agents can
     // drive the machine with curl (docs/http-api.yaml). Plain-string routes match
     // the path and its subpaths; JSON bodies stream into _tempObject as for
-    // /api/settings. Registered after /api/ota/upload, which must keep POST
-    // /api/ota/upload. /api/history is registered per method so GETs never reach
+    // /api/settings. Registered after /api/ota/upload: "/api/ota" is a prefix
+    // route and would otherwise claim it. /api/history is registered per method so GETs never reach
     // it: the sim's server shim tries routes before static files, and a catch-all
     // here would shadow serveStatic("/api/history/") there.
     const auto jsonBody = [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -490,19 +503,6 @@ void WebUIPlugin::setupServer() {
     server.on("/api/history", HTTP_DELETE, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); });
     server.on(
         "/api/history", HTTP_PUT, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); }, nullptr, jsonBody);
-#ifndef GAGGIMATE_SIM
-    // Direct firmware upload. The body handler streams straight into the
-    // inactive OTA partition; the request handler runs once the body is done.
-    server.on(
-        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); }, nullptr,
-        // Raw body (Content-Type: application/octet-stream), not multipart: the
-        // server's form-data parser walks the body one byte at a time and topped
-        // out at ~26 KB/s, three minutes for an image. The body callback hands
-        // over whole TCP segments, and Content-Length sizes the Updater up front.
-        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            handleFirmwareUpload(request, index, data, len, total);
-        });
-#endif
     // The web UI is embedded in firmware flash and served from the memory-mapped blob (see serveWebAsset). It is no
     // longer in LittleFS, so OTA never touches the partition holding profiles/shots. The catch-all onNotFound handles
     // every path not claimed by an explicit server.on()/api route above. [GM-106]
