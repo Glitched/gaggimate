@@ -68,10 +68,14 @@ pio run -e display-sim -t run                                  # build + launch
 ./.pio/build/display-sim/program --screenshot shot.bmp 4000    # render, screenshot, exit
 ```
 
-WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA, watchdogs).
+WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA upload, watchdogs).
+
+Flags: `--scale` pretends a Bluetooth scale is connected (the weight row and volumetric UI only render with one); `--tap X,Y@MS`, `--drag X0,Y0>X1,Y1@T0~T1` and `--arc CX,CY,R,A0,A1@T0~T1` inject touches, so screens behind an interaction can be captured headlessly; pressing `s` in the window writes `sim_shot_N.bmp` of the live frame. A `--screenshot` run uses a hidden window and ignores the real mouse, and runs the UI loop at the device's 25 ms cadence, so frame counts match hardware. Arc angles are screen-convention: 0 = right, clockwise positive, **270 = top**.
 
 Copy real profiles into `sim_data/littlefs/p/` and shots into `sim_data/littlefs/h/`
-before reviewing UI work — empty states hide most layout problems.
+before reviewing UI work — empty states hide most layout problems. Favourites and
+the device theme are settings, not files: `fp` (comma-separated profile ids) and
+`theme` (0 = dark) in `sim_data/nvs/controller.json`. Ryan only uses dark.
 
 For headless screenshots, don't use Chrome's `--screenshot` with
 `--virtual-time-budget`: it fires before the WebSocket delivers anything, so
@@ -91,7 +95,18 @@ pio test -e native_autotune              # host-side Unity tests for the SIMC au
 pio test -e native_autotune -f test_autotune_simc
 ```
 
-Only `test/test_autotune_simc` exists. It direct-`#include`s `Autotune.cpp` so the native linker skips NayrodPID's Arduino-dependent siblings. There is no on-device test suite.
+Only `test/test_autotune_simc` exists as a unit test. It direct-`#include`s `Autotune.cpp` so the native linker skips NayrodPID's Arduino-dependent siblings. There is no on-device test suite.
+
+The HTTP API has black-box end-to-end suites that run against the simulator (`sim/tests/README.md`):
+
+```shell
+SDL_VIDEODRIVER=dummy ./.pio/build/display-sim/program --scale &   # headless sim
+./sim/tests/test-machine-api.sh       # mode, process, targets, OTA status, history, reorder, cache
+./sim/tests/test-profiles-api.sh      # profile CRUD, validation, the push-only socket contract
+./sim/tests/test-settings-api.sh
+```
+
+They mutate `sim_data/` (profiles, favourites, target temperature), so don't read the sim's state as ground truth right after a run.
 
 ### Lint / format / static analysis
 
@@ -102,7 +117,7 @@ platformio check -e controller
 npx prettier -w <file>.md
 ```
 
-`scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those.
+`scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those. `clang-format` is not installed on this Mac (`brew install clang-format` if you want the script to run); until then, match the style by hand and check `awk 'length > 130'` on touched files.
 
 `npm run lint` is not a reliable syntax gate — it has reported 0 errors on a
 `.jsx` file that Vite then refused to parse. Use `npm run build` to confirm the
@@ -145,9 +160,9 @@ Consequences to respect when editing:
 - Wi-Fi connect/disconnect is only _flagged_ from the Arduino Wi-Fi event task (`wifiConnectedPending`/`wifiDisconnectedPending`) and acted on in `loop()` — doing server/mDNS work in that small-stack callback corrupted the heap.
 - `updateControl()` only transmits boiler/pump/relay components that changed since `lastBoiler`/`lastPump`/`lastRelay`; these reset on reconnect to force a full resend.
 
-**Plugins and events.** `PluginManager` holds `Plugin`s (`setup()` + `loop()`) and a string-keyed event bus (`on(id, cb)` / `trigger(...)`, `Event` carries a small typed key/value list). Registration order is in `Controller::setup()` (`src/display/core/Controller.cpp` ~line 80). Existing plugins: `WebUIPlugin`, `ShotHistoryPlugin`, `BLEScalePlugin`, `MQTTPlugin` (Home Assistant), `HomekitPlugin`, `mDNSPlugin`, `BoilerFillPlugin`, `SmartGrindPlugin`, `LedControlPlugin`, `AutoWakeupPlugin`, `ImprovPlugin`, and two network watchdogs. New cross-cutting features belong here, not in `Controller`.
+**Plugins and events.** `PluginManager` holds `Plugin`s (`setup()` + `loop()`) and a string-keyed event bus (`on(id, cb)` / `trigger(...)`, `Event` carries a small typed key/value list). Registration order is the sequence of `registerPlugin` calls in `Controller::setup()` (`src/display/core/Controller.cpp`). Existing plugins: `WebUIPlugin`, `ShotHistoryPlugin`, `BLEScalePlugin`, `MQTTPlugin` (Home Assistant), `HomekitPlugin`, `mDNSPlugin`, `BoilerFillPlugin`, `SmartGrindPlugin`, `LedControlPlugin`, `AutoWakeupPlugin`, `ImprovPlugin`, and two network watchdogs. New cross-cutting features belong here, not in `Controller`.
 
-Event id conventions: `controller:*` for machine state, `evt:*` for things pushed to the web UI, `req:*`/`res:*` for the WebSocket request/response pairs.
+Event id conventions: `controller:*` for machine state, `evt:*` for things pushed to the web UI over the WebSocket. (There are no `req:*`/`res:*` pairs any more — commands and queries are HTTP routes.)
 
 **Processes.** `core/process/` — `BrewProcess`, `SteamProcess`, `PumpProcess`, `GrindProcess` implement `Process` (`getPumpValue()`, `isRelayActive()`, `progress()`, `isComplete()`, ...). Exactly one runs at a time via `Controller::startProcess`.
 
@@ -159,7 +174,7 @@ Event id conventions: `controller:*` for machine state, `evt:*` for things pushe
 
 ### Web UI (`web/`)
 
-Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. The socket is **push-only**: the device sends `evt:*` JSON messages (a `tp` field names the type) and ignores inbound frames. Every command and query is an HTTP route (`docs/http-api.yaml`: `POST /api/mode`, `/api/process/{action}`, `/api/targets/...`, `/api/ota`, `/api/history/...`, profile CRUD) — `web/src/services/api.js` is the client the pages use, and `curl` works the same way. The events are documented in `docs/websocket-api.yaml` (AsyncAPI); keep both in sync. `sim/tests/test-machine-api.sh` exercises the command routes against the simulator. The `req:*`/`res:*` request-response messages were removed on 2026-08-31; do not reintroduce request handling on the socket. The HTTP surface (settings partial update, REST profile CRUD, shot history downloads) is documented in `docs/http-api.yaml` (OpenAPI) — same rule. `sim/tests/` holds curl-based end-to-end suites for the HTTP API that run against the simulator. Bulk data (shot history index, `.slog` files) goes over plain HTTP under `/api/history/`.
+Preact + Vite + Tailwind 4 / daisyUI, signals for state. `services/ApiService.js` owns the WebSocket to `/ws` (with reconnect/backoff) and exposes a `machine` signal; pages under `src/pages/`. The socket is **push-only**: the device sends `evt:*` JSON messages (a `tp` field names the type) and ignores inbound frames; `docs/websocket-api.yaml` (AsyncAPI) lists them. Everything else — commands, queries, settings, profile CRUD, shot history, OTA — is an HTTP route documented in `docs/http-api.yaml` (OpenAPI); `web/src/services/api.js` is the client the pages use, and `curl` works the same way. Keep both documents in sync when adding a message or route. The `req:*`/`res:*` request-response messages were removed on 2026-08-31; do not reintroduce request handling on the socket. `sim/tests/*.sh` are curl-based end-to-end suites for the HTTP API that run against the simulator (see Tests).
 
 daisyUI 5's `.input` is a flex **wrapper**, not a style for an `<input>`:
 `display:inline-flex; position:relative`. Use `<label class="input">` around an
@@ -224,11 +239,13 @@ have stalled it:
   never zoom.
 - **WebSocket client churn.** `DEFAULT_MAX_WS_CLIENTS=3` plus `ws.cleanupClients()`
   in `loop()` evicts the oldest client whenever a fourth connects; the evicted tab
-  reconnects, evicts another, and each reconnect re-requests the profile list
-  (~2 s of flash reads, which stall both cores' caches). Four browser tabs made
-  the whole UI stutter. If the machine feels laggy, count `WebSocket client
-connected` lines on serial before blaming the UI code — ~30 in 45 s means tabs.
-  Closing tabs fixed it; evicting newcomers instead was rejected as worse UX.
+  reconnects and evicts another. With the old request-over-socket design every
+  reconnect also re-fetched the profile list from flash, and four browser tabs
+  made the whole UI stutter. The pages now fetch once over HTTP and the list is
+  cached, so churn is cheap — but it still happens with more than three tabs. If
+  the machine feels laggy, count `WebSocket client connected` lines on serial
+  before blaming the UI code (~30 in 45 s means tabs). Evicting newcomers instead
+  of the oldest was rejected as worse UX; closing tabs is the remedy.
 
 The panel itself is the ceiling: `RGB_MAX_PIXEL_CLOCK_HZ` is 7 MHz in
 `drivers/LilyGo-T-RGB/utilities.h`, and with the configured porches that is a
@@ -241,8 +258,7 @@ buffers need ~20 KB of internal RAM. The device had ~57 KB free (largest block
 reports all four figures. Untested.
 
 `scripts/lvgl_img.py` and `scripts/phosphor_icons.py` regenerate bitmaps without
-EEZ Studio; the sim's `--tap`, `--drag`, `--arc`, `--scale` and the `s` hotkey are
-how screens and gestures are exercised headlessly (see `sim/README.md`).
+EEZ Studio (see the UI paragraph under Architecture).
 
 ## Working on this Mac
 
