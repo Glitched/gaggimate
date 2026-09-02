@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Manual runs, e.g. to re-check a branch without pushing.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -86,3 +88,56 @@ jobs:
       - name: Lint web UI
         working-directory: web
         run: npm run lint:check
+
+  # Build the simulator (the display firmware compiled natively, sim/ shims for
+  # the platform) and run the black-box HTTP API suites in sim/tests/ against
+  # it. This is the only job that exercises the firmware's request handlers
+  # end to end; the stubbed web bundle is fine because the suites only touch
+  # /api endpoints.
+  sim-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GM_ALLOW_UNVERSIONED: '1'
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-sim-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-sim-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Node >= 22 for the WebSocket assertions in the profile suite.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install SDL2
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Install PlatformIO Core
+        run: pip install platformio==6.1.19
+      - name: Build simulator
+        run: pio run -e display-sim
+      # Each suite has its own readiness wait, so booting first is enough.
+      - name: Run HTTP API suites
+        run: |
+          SDL_VIDEODRIVER=dummy ./.pio/build/display-sim/program > sim.log 2>&1 &
+          SIM_PID=$!
+          trap 'kill "$SIM_PID" 2>/dev/null || true' EXIT
+          rc=0
+          for suite in sim/tests/test-*.sh; do
+            echo "=== $suite"
+            bash "$suite" || rc=1
+          done
+          if ! kill -0 "$SIM_PID" 2>/dev/null; then
+            echo "::error::simulator exited during the suites; last log lines follow"
+            tail -40 sim.log
+            rc=1
+          fi
+          exit $rc
