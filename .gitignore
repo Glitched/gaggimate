@@ -31,3 +31,4 @@ sim_shot_*.bmp
 managed_components/
 sdkconfig.defaults
 sdkconfig.*
+/coredump.bin
