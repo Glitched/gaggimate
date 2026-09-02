@@ -173,8 +173,16 @@ afterwards).** Read these before flashing it again:
   the driver resets the DMA at every VSYNC and reports a frame complete only when the DMA
   wrapped its descriptor link first, so VSYNCs minus completions per 10 s window is the number
   of frames the viewer saw shifted or torn. `GET /api/ota` reports it as `panelUnderruns`
-  (also in the `render:` serial line); 0 at rest is the baseline, and the counter is the
-  arbiter for any sdkconfig or driver experiment, so nobody has to watch the panel.
+  (also in the `render:` serial line). Nothing is consumed during the porches, so a DMA
+  stall longer than the LCD FIFO's slack (tens of microseconds) can never be made up within
+  the frame: the counter catches every frame with any shift, and says nothing about how big
+  the shift was. Baseline measured 2026-09-02 on the T-RGB at rest with a web client
+  connected: 2-5 per 10 s window (sub-line shifts from Wi-Fi/BLE/PSRAM traffic, not visible
+  on the dark standby screen); hammering `/api/profiles` + `/api/status` for 15 s took a
+  window to 10. Judge a config or driver experiment against those numbers, not against the
+  panel by eye; the FreeRTOS-in-flash build that visibly jittered was never measured with it.
+  `GET /api/ota` itself walks LittleFS (`usedBytes()`) with the cache off on every call, so
+  poll it sparingly while measuring.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
 - **The controller image from this branch has not run on hardware.** It builds against the
