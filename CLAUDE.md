@@ -90,8 +90,12 @@ afterwards).** Read these before flashing it again:
   logic task -14 KB; Wi-Fi driver -8.5 KB; **BLE init -48.2 KB**; Wi-Fi connected (web server,
   mDNS) -17 KB; steady state ~43 KB. The BLE cost is the controller-side library (always
   internal) sized by IDF's hub defaults, hence the `CONFIG_BT_CTRL_*` trims in the
-  `custom_sdkconfig` block. A shot then takes another ~14 KB (floor 18.9 KB on the untrimmed
-  build), which is why bounce buffers are still on hold. Both cores idle at 92-95 %.
+  `custom_sdkconfig` block. Those trims (max activities 4, adv-report buffers 50, scan dup
+  cache 30, NimBLE connections 2, esp_timer stack 4 KB) plus two of our task stacks brought
+  steady state to **55 KB free / 32 KB largest / 40 KB boot floor** on 2026-09-02. A shot
+  takes another ~14 KB, so the in-shot floor is now ~40 KB (it was 18.9 KB before the trims),
+  which is the number to protect before spending internal RAM on anything (bounce buffers
+  need ~19 KB). Both cores idle at 92-95 %.
 - **The hybrid build is in place** (one `custom_sdkconfig` block in the `[custom_sdk]` section of
   `platformio.ini`, referenced by every ESP env, 2026-09-02): the
   first `pio run` downloads `framework-espidf`, cmake and ninja, links a dummy sketch to
