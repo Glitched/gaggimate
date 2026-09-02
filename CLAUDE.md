@@ -128,6 +128,12 @@ afterwards).** Read these before flashing it again:
   state is silent at `CORE_DEBUG_LEVEL=3`; a tap out of standby logs the frame timing.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
+- **The controller image from this branch has not run on hardware.** It builds against the
+  same rebuilt libraries as the display, so its BLE host now allocates from PSRAM (the
+  board declares PSRAM). Nothing pushes it to the machine by itself: the wire protocol is
+  unchanged, and the display only sends a controller update when the button is pressed. Do
+  not apply a controller update from a nightly built off this branch until that image has
+  been flashed once over USB and watched on serial (pairing, ping watchdog, a heat-up).
 
 ```shell
 pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
@@ -224,6 +230,10 @@ platformio check -e display              # cppcheck; CI uses --fail-on-defect=me
 platformio check -e controller
 npx prettier -w <file>.md
 ```
+
+Both `check` envs set `check_skip_packages = yes`: PlatformIO's bundled cppcheck (2.11) cannot
+parse the GCC 14 libstdc++ headers in pioarduino's toolchain and otherwise reports a
+"breaking" syntax error in every file. Keep that when touching the check configuration.
 
 `scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those. The exclusions are `-path 'src/display/ui/*'` with no `./` prefix because `find src` prints paths without one; an earlier `./src/display/ui/**/*` pattern matched nothing and would have reformatted 81 files. `scripts/format.sh --check` is the CI form. `clang-format` is not installed on this Mac (`brew install clang-format` if you want the script to run); until then, match the style by hand and check `awk 'length > 130'` on touched files.
 
