@@ -12,12 +12,23 @@ struct PanelStats {
     std::atomic<uint32_t> flushes{0};      // LVGL flush callbacks
     std::atomic<uint32_t> flushUsTotal{0}; // time spent inside flush, microseconds
     std::atomic<uint32_t> flushUsMax{0};
-    std::atomic<uint32_t> vsyncs{0}; // RGB panel VSYNC interrupts (nominal ~23.5 Hz on the T-RGB)
+    std::atomic<uint32_t> vsyncs{0};     // RGB panel VSYNC interrupts (nominal ~23.5 Hz on the T-RGB)
+    std::atomic<uint32_t> vsyncsLate{0}; // VSYNCs that arrived > 1.5 periods after the previous one: a stalled/restarted frame
+    std::atomic<int64_t> lastVsyncUs{0};
 
     struct Snapshot {
         float uiFps = 0, flushHz = 0, vsyncHz = 0;
-        uint32_t flushAvgUs = 0, flushMaxUs = 0;
+        uint32_t flushAvgUs = 0, flushMaxUs = 0, vsyncsLate = 0;
     };
+
+    // ISR-safe: one atomic exchange and one compare. A gap over `latePeriodUs` means the panel DMA starved (PSRAM
+    // contention, or the cache being disabled during a flash write) and the driver restarted the frame at VSYNC.
+    void recordVsync(int64_t nowUs, int64_t latePeriodUs) {
+        const int64_t prev = lastVsyncUs.exchange(nowUs, std::memory_order_relaxed);
+        vsyncs.fetch_add(1, std::memory_order_relaxed);
+        if (prev != 0 && nowUs - prev > latePeriodUs)
+            vsyncsLate.fetch_add(1, std::memory_order_relaxed);
+    }
 
     void recordFlush(uint32_t us) {
         flushes.fetch_add(1, std::memory_order_relaxed);
@@ -31,7 +42,7 @@ struct PanelStats {
     Snapshot snapshot(uint32_t elapsedMs) {
         Snapshot s;
         const uint32_t frames = uiFrames.exchange(0), fl = flushes.exchange(0), total = flushUsTotal.exchange(0),
-                       mx = flushUsMax.exchange(0), vs = vsyncs.exchange(0);
+                       mx = flushUsMax.exchange(0), vs = vsyncs.exchange(0), late = vsyncsLate.exchange(0);
         if (elapsedMs == 0)
             return s;
         const float sec = elapsedMs / 1000.0f;
@@ -40,6 +51,7 @@ struct PanelStats {
         s.vsyncHz = vs / sec;
         s.flushAvgUs = fl ? total / fl : 0;
         s.flushMaxUs = mx;
+        s.vsyncsLate = late;
         return s;
     }
 };
