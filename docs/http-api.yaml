@@ -397,6 +397,11 @@ paths:
                   heapTotal: { type: integer }
                   psramFree: { type: integer, description: Free PSRAM (bytes). }
                   psramLargest: { type: integer }
+                  heapMinFree: { type: integer, description: Lowest free internal heap since boot (bytes). }
+                  uiFps: { type: number, description: UI loop iterations per second over the last 10 s window (~40 while animating on the T-RGB). }
+                  flushAvgUs: { type: integer, description: Mean LVGL flush (copy into the framebuffer) duration over the window, microseconds. }
+                  flushMaxUs: { type: integer, description: Longest LVGL flush in the window, microseconds. }
+                  panelVsyncHz: { type: number, description: RGB panel refresh rate over the window (~23.5 on the T-RGB); lower means the LCD DMA is starving and restarting frames. }
                   link:
                     type: object
                     description: >-

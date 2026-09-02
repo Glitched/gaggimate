@@ -1,4 +1,5 @@
 #include "DefaultUI.h"
+#include <display/core/PanelStats.h>
 
 #include <WiFi.h>
 #include <display/config.h>
@@ -1031,6 +1032,7 @@ void DefaultUI::loopTask(void *arg) {
     TickType_t lastWake = xTaskGetTickCount();
     while (true) {
         ui->loop();
+        panelStats().uiFrames.fetch_add(1, std::memory_order_relaxed);
         // Sleep only the remainder of the period. A fixed 25 ms vTaskDelay after loop() made
         // the frame period 25 ms plus the render time -- ~43 ms on the panel while animating
         // (measured 5 frames in 215 ms over serial) -- and uneven. With the period fixed, the UI
