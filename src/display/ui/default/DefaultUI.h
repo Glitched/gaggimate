@@ -115,8 +115,7 @@ class DefaultUI {
     void updateProfileInfo();
     void updateBoiler();
     void updateBrewProcess();
-    void updateMenuScreen();
-    String getErrorMessage();
+    const char *getErrorMessage();
 
     void adjustDials(lv_obj_t *dials);
     void adjustTarget(lv_obj_t *obj, double percentage, double start, double range) const;
@@ -125,7 +124,7 @@ class DefaultUI {
     int tempHistoryIndex = 0;
     int prevTargetTemp = 0;
     bool isTempHistoryInitialized = false;
-    int isTemperatureStable = false;
+    bool isTemperatureStable = false;
     unsigned long lastTempLog = 0;
 
     void updateTempHistory();
@@ -137,28 +136,37 @@ class DefaultUI {
     PluginManager *pluginManager;
     ProfileManager *profileManager;
 
-    // Screen state
-    int updateAvailable = false;
-    int apActive = false;
-    int wifiConnected = false;
-    int waitingForController = false;
-    int initialized = false;
-    int grindAvailable = false;
+    // Screen state. The plugin event callbacks registered in init() run on whichever task
+    // fired the event (logic task, AsyncTCP, BLE dispatch); the UI task reads and clears
+    // what they set. Anything written from a callback is atomic; the rest is UI-task-only.
+    std::atomic<bool> updateAvailable{false};
+    std::atomic<bool> apActive{false};
+    bool apActiveUi = false; // per-render snapshot of apActive: the QR-code effect watches it by address
+    bool wifiConnected = false;
+    std::atomic<bool> waitingForController{false};
+    std::atomic<bool> initialized{false};
+    bool grindAvailable = false;
 
     // Seasonal flags
-    int christmasMode = false;
+    bool christmasMode = false;
 
-    bool rerender = false;
+    std::atomic<bool> rerender{false};
     unsigned long lastRender = 0;
 
     int mode = MODE_STANDBY;
     bool pressureAvailable = false;
-    int heatingFlash = 0;
-    float pressure = 0.0f;
+    bool heatingFlash = false;
+    uint8_t heatingFlashTick = 0; // 250 ms ticks; the flash toggles every fourth one
+    std::atomic<float> pressure{0.0f};
     float currentTemp = 0.0f;
     float targetTemp = 0.0f;
-    double bluetoothWeight = 0.0;
-    BrewScreenState brewScreenState = BrewScreenState::Brew;
+    // Last values the temperature events reported, kept apart from currentTemp/targetTemp
+    // (which updateState() refreshes from the controller) so the callbacks only ever touch
+    // their own change detection and the rerender flag.
+    int lastTempEvent = 0;
+    int lastTargetTempEvent = 0;
+    std::atomic<float> bluetoothWeight{0.0f};
+    std::atomic<BrewScreenState> brewScreenState{BrewScreenState::Brew};
 
     // EEZ Structs
     SystemStatusValue systemStatus;
@@ -172,9 +180,11 @@ class DefaultUI {
     Value grindWeightTarget = FloatValue(18.0);
     Value grindTimeTarget = StringValue("0:15");
 
-    int profileDirty = 0;
+    bool profileDirty = false;
     int currentProfileIdx = 0;
-    std::atomic<int> profileLoaded{0}; // cleared from event callbacks on arbitrary tasks
+    // 0 = the favourites need (re)loading. Cleared by reloadProfiles() from event callbacks on
+    // arbitrary tasks, claimed by loopProfiles() on the profile task (or the sim's main loop).
+    std::atomic<int> profileLoaded{0};
     // The profile task (core 0) rebuilds these while the UI task reads them (GM-147).
     std::mutex profilesMutex;
     std::vector<String> favoritedProfileIds;
@@ -182,15 +192,15 @@ class DefaultUI {
     int currentThemeMode = -1; // Force applyTheme on first loop
 
     // Screen change
-    ScreensEnum targetScreen = ScreensEnum::SCREEN_ID_STANDBY_SCREEN;
+    std::atomic<ScreensEnum> targetScreen{ScreensEnum::SCREEN_ID_STANDBY_SCREEN};
     ScreensEnum currentScreen = ScreensEnum::SCREEN_ID_STANDBY_SCREEN;
 
-    // Standby brightness control
-    unsigned long standbyEnterTime = 0;
+    // Standby brightness control: when standby was entered, 0 once dimmed (or never entered).
+    std::atomic<unsigned long> standbyEnterTime{0};
 
-    xTaskHandle taskHandle;
+    xTaskHandle taskHandle = nullptr;
     static void loopTask(void *arg);
-    xTaskHandle profileTaskHandle;
+    xTaskHandle profileTaskHandle = nullptr;
     static void profileLoopTask(void *arg);
 };
 

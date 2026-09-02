@@ -16,6 +16,7 @@
 #include <display/ui/utils/effects.h>
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <utility>
 
 #include "esp_sntp.h"
@@ -86,7 +87,10 @@ void DefaultUI::updateTempHistory() {
         tempHistoryIndex += 1;
     }
 
-    if (tempHistoryIndex % 4 == 0) {
+    // 1 Hz heating flash: every fourth 250 ms tick, counted separately from the history index so
+    // the cadence holds while the temperature is still invalid (the index used to stall then,
+    // and the flash either froze or toggled every tick).
+    if (++heatingFlashTick % 4 == 0) {
         heatingFlash = !heatingFlash;
         rerender = true;
     }
@@ -116,7 +120,14 @@ void DefaultUI::updateTempStableFlag() {
     prevTargetTemp = targetTemp;
 }
 
-void DefaultUI::reloadProfiles() { profileLoaded = 0; }
+void DefaultUI::reloadProfiles() {
+    profileLoaded = 0;
+#ifndef GAGGIMATE_SIM // the sim has no task notifications; its main loop polls loopProfiles() instead
+    if (profileTaskHandle != nullptr) { // may be called before init() has created the task
+        xTaskNotifyGive(profileTaskHandle);
+    }
+#endif
+}
 
 DefaultUI::DefaultUI(Controller *controller, Driver *driver, PluginManager *pluginManager)
     : controller(controller), panelDriver(driver), pluginManager(pluginManager) {
@@ -127,24 +138,27 @@ DefaultUI::DefaultUI(Controller *controller, Driver *driver, PluginManager *plug
 void DefaultUI::init() {
     profileManager = controller->getProfileManager();
     auto triggerRender = [this](Event const &) { rerender = true; };
-    pluginManager->on("boiler:currentTemperature:change", [=](Event const &event) {
-        int newTemp = static_cast<int>(event.getFloat("value"));
-        if (newTemp != currentTemp) {
-            currentTemp = newTemp;
+    // The temperature and mode callbacks only ask for a render: updateState() reads the live
+    // values from the controller on every render, so writing them here from another task
+    // gained nothing.
+    pluginManager->on("boiler:currentTemperature:change", [this](Event const &event) {
+        const int newTemp = static_cast<int>(event.getFloat("value"));
+        if (newTemp != lastTempEvent) {
+            lastTempEvent = newTemp;
             rerender = true;
         }
     });
-    pluginManager->on("boiler:pressure:change", [=](Event const &event) {
-        float newPressure = event.getFloat("value");
+    pluginManager->on("boiler:pressure:change", [this](Event const &event) {
+        const float newPressure = event.getFloat("value");
         if (round(newPressure * 10.0f) != round(pressure * 10.0f)) {
             pressure = newPressure;
             rerender = true;
         }
     });
-    pluginManager->on("boiler:targetTemperature:change", [=](Event const &event) {
-        int newTemp = static_cast<int>(event.getFloat("value"));
-        if (newTemp != targetTemp) {
-            targetTemp = newTemp;
+    pluginManager->on("boiler:targetTemperature:change", [this](Event const &event) {
+        const int newTemp = static_cast<int>(event.getFloat("value"));
+        if (newTemp != lastTargetTempEvent) {
+            lastTargetTempEvent = newTemp;
             rerender = true;
         }
     });
@@ -155,8 +169,7 @@ void DefaultUI::init() {
     pluginManager->on("controller:process:end", triggerRender);
     pluginManager->on("controller:process:start", triggerRender);
     pluginManager->on("controller:mode:change", [this](Event const &event) {
-        mode = event.getInt("value");
-        switch (mode) {
+        switch (event.getInt("value")) {
         case MODE_STANDBY:
             changeScreen(SCREEN_ID_STANDBY_SCREEN);
             break;
@@ -200,7 +213,6 @@ void DefaultUI::init() {
                 standbyEnterTime = ::millis();
             }
         }
-        pressureAvailable = controller->getSystemInfo().capabilities.pressure;
     });
     pluginManager->on("controller:bluetooth:disconnect", [this](Event const &) {
         waitingForController = true;
@@ -208,7 +220,7 @@ void DefaultUI::init() {
     });
     pluginManager->on("controller:wifi:connect", [this](Event const &event) {
         rerender = true;
-        apActive = event.getInt("AP");
+        apActive = event.getInt("AP") != 0;
     });
     pluginManager->on("ota:update:start", [this](Event const &) {
         rerender = true;
@@ -220,7 +232,7 @@ void DefaultUI::init() {
     });
     pluginManager->on("ota:update:status", [this](Event const &event) {
         rerender = true;
-        updateAvailable = event.getInt("value");
+        updateAvailable = event.getInt("value") != 0;
     });
     pluginManager->on("controller:error", [this](Event const &) {
         rerender = true;
@@ -242,9 +254,9 @@ void DefaultUI::init() {
     pluginManager->on("profiles:profile:favorite", [this](Event const &event) { reloadProfiles(); });
     pluginManager->on("profiles:profile:unfavorite", [this](Event const &event) { reloadProfiles(); });
     pluginManager->on("profiles:profile:save", [this](Event const &event) { reloadProfiles(); });
-    pluginManager->on("controller:volumetric-measurement:bluetooth:change", [=](Event const &event) {
-        double newWeight = event.getFloat("value");
-        if (round(newWeight * 10.0) != round(bluetoothWeight * 10.0)) {
+    pluginManager->on("controller:volumetric-measurement:bluetooth:change", [this](Event const &event) {
+        const float newWeight = event.getFloat("value");
+        if (round(newWeight * 10.0f) != round(bluetoothWeight * 10.0f)) {
             bluetoothWeight = newWeight;
             rerender = true;
         }
@@ -266,8 +278,8 @@ void DefaultUI::loop() {
         rerender = true;
     }
 
-    if (rerender) {
-        rerender = false;
+    // exchange() so a request that lands between the test and the clear is not lost.
+    if (rerender.exchange(false)) {
         lastRender = now;
         applyTheme();
         if (controller->isErrorState()) {
@@ -305,13 +317,13 @@ void DefaultUI::loop() {
         currentScreen = static_cast<ScreensEnum>(eez_flow_get_current_screen());
         effect_mgr.evaluate_all();
 
-        if (currentScreen == SCREEN_ID_STANDBY_SCREEN) {
-            if (standbyEnterTime > 0) {
-                const Settings &settings = controller->getSettings();
-                const unsigned long now = millis();
-                if (now - standbyEnterTime >= settings.getStandbyBrightnessTimeout()) {
-                    setBrightness(settings.getStandbyBrightness());
-                }
+        if (currentScreen == SCREEN_ID_STANDBY_SCREEN && standbyEnterTime > 0) {
+            const Settings &settings = controller->getSettings();
+            if (now - standbyEnterTime >= settings.getStandbyBrightnessTimeout()) {
+                // Dim once. handleScreenChange() restores the main brightness on the way out and
+                // re-arms the timer on the next entry, so nothing needs re-sending per render.
+                setBrightness(settings.getStandbyBrightness());
+                standbyEnterTime = 0;
             }
         }
     }
@@ -378,7 +390,9 @@ void DefaultUI::pollProfileDial() {
 }
 
 void DefaultUI::loopProfiles() {
-    if (!profileLoaded) {
+    // Claim the reload before building, so a reloadProfiles() that lands mid-rebuild clears the
+    // flag again and is picked up by the next wake instead of being overwritten by "loaded" at the end.
+    if (profileLoaded.exchange(1) == 0) {
         // Build into locals and swap under the lock — the UI task reads these concurrently (GM-147).
         const auto favoritedIds = profileManager->getFavoritedProfiles();
         std::vector<String> ids;
@@ -400,7 +414,6 @@ void DefaultUI::loopProfiles() {
             favoritedProfileIds = std::move(ids);
             favoritedProfiles = std::move(profiles);
         }
-        profileLoaded = 1;
     }
 }
 
@@ -501,7 +514,7 @@ void DefaultUI::setupState() {
     effect_mgr.use_effect([this]() { return currentScreen == SCREEN_ID_INFO_SCREEN; },
                           [=]() {
                               String content = "";
-                              if (apActive) {
+                              if (apActiveUi) {
                                   // WIFI: QR syntax — escape \ ; , : " in the password per the spec.
                                   const String pw = controller->getSettings().getWifiApPassword();
                                   String escaped;
@@ -527,28 +540,27 @@ void DefaultUI::setupState() {
                               const char *data = content.c_str();
                               lv_qrcode_update(objects.qrcode, data, strlen(data));
                           },
-                          &wifiConnected, &apActive);
+                          &wifiConnected, &apActiveUi); // the effect copies its deps, which an atomic forbids
     effect_mgr.use_effect([this]() { return currentScreen == SCREEN_ID_MENU_SCREEN_NEW; },
                           [this]() {
                               int radius = 135;
                               int count = grindAvailable ? 4 : 3;
                               int step = 360 / (grindAvailable ? 4 : 3);
-                              int iconOffset = grindAvailable ? 1 : 0;
                               int rotationOffset = count == 4 ? 45 : 0;
                               positionMenuIcon(objects.btn_brew_1, step * 0 - rotationOffset, radius);
                               positionMenuIcon(objects.btn_steam_1, step * 1 - rotationOffset, radius);
                               positionMenuIcon(objects.btn_water_1, step * 2 - rotationOffset, radius);
                               positionMenuIcon(objects.btn_grind_1, step * 3 - rotationOffset, radius);
-                              // positionMenuIcon(objects.btn_settings_1, step * (3 + iconOffset) - rotationOffset, radius);
                           },
                           &grindAvailable);
 }
 
 void DefaultUI::handleScreenChange() {
-    if (currentScreen == targetScreen) {
+    const ScreensEnum target = targetScreen; // one snapshot: changeScreen() may race us from another task
+    if (currentScreen == target) {
         return;
     }
-    if (targetScreen == SCREEN_ID_STANDBY_SCREEN) {
+    if (target == SCREEN_ID_STANDBY_SCREEN) {
         standbyEnterTime = ::millis();
     } else if (currentScreen == SCREEN_ID_STANDBY_SCREEN) {
         // Hold the switch until the exit transition has played out. A tap started it on
@@ -564,9 +576,9 @@ void DefaultUI::handleScreenChange() {
         setBrightness(settings.getMainBrightness());
     }
     const ScreensEnum from = currentScreen;
-    eez_flow_set_screen(targetScreen, LV_SCR_LOAD_ANIM_NONE, 0, 0);
-    animateGaugeTicks(from, targetScreen);
-    if (targetScreen == SCREEN_ID_STANDBY_SCREEN && from != SCREEN_ID_STANDBY_SCREEN) {
+    eez_flow_set_screen(target, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+    animateGaugeTicks(from, target);
+    if (target == SCREEN_ID_STANDBY_SCREEN && from != SCREEN_ID_STANDBY_SCREEN) {
         beginStandbyEnter();
     }
     rerender = true;
@@ -749,8 +761,9 @@ void DefaultUI::updateState() {
     mode = controller->getMode();
     currentTemp = static_cast<int>(controller->getCurrentTemp());
     targetTemp = static_cast<int>(controller->getTargetTemp());
-    pressureAvailable = controller->getSystemInfo().capabilities.pressure ? 1 : 0;
+    pressureAvailable = controller->getSystemInfo().capabilities.pressure;
     wifiConnected = WiFi.status() == WL_CONNECTED;
+    apActiveUi = apActive;
     grindAvailable = settings.isSmartGrindActive() || settings.getAltRelayFunction() == ALT_RELAY_GRIND;
 
     uiFlags.brew_adjustments(brewScreenState == BrewScreenState::Settings);
@@ -768,19 +781,19 @@ void DefaultUI::updateState() {
 
 void DefaultUI::updateSystemStatus() {
     const auto &settings = controller->getSettings();
+    const SystemInfo info = controller->getSystemInfo(); // returned by value; one copy for the whole render
     systemStatus.bluetooth(controller->getClientController()->isConnected());
     systemStatus.wifi(!apActive && WiFi.status() == WL_CONNECTED);
     bool error = !initialized || waitingForController || controller->isErrorState() || controller->isUpdating() ||
-                 controller->isAutotuning() || controller->getSystemInfo().protocolMismatch || !controller->isReady();
+                 controller->isAutotuning() || info.protocolMismatch || !controller->isReady();
     systemStatus.error(error);
-    const String errorLabel = error ? getErrorMessage() : "";
-    if (stringChanged(systemStatus.error_label(), errorLabel.c_str()))
-        systemStatus.error_label(errorLabel.c_str());
+    const char *errorLabel = error ? getErrorMessage() : "";
+    if (stringChanged(systemStatus.error_label(), errorLabel))
+        systemStatus.error_label(errorLabel);
     systemStatus.volumetric_available(controller->isVolumetricAvailable());
     systemStatus.bluetooth_scales(controller->isBluetoothScaleHealthy());
-    const String controllerVersion = controller->getSystemInfo().version;
-    if (stringChanged(systemStatus.controller_version(), controllerVersion.c_str()))
-        systemStatus.controller_version(controllerVersion.c_str());
+    if (stringChanged(systemStatus.controller_version(), info.version.c_str()))
+        systemStatus.controller_version(info.version.c_str());
     if (stringChanged(systemStatus.display_version(), BUILD_GIT_VERSION))
         systemStatus.display_version(BUILD_GIT_VERSION);
     systemStatus.update_available(updateAvailable);
@@ -788,17 +801,27 @@ void DefaultUI::updateSystemStatus() {
     systemStatus.pressure_available(pressureAvailable);
     systemStatus.grind_available(grindAvailable);
     systemStatus.mode(mode);
-    const String ip = apActive ? String("4.4.4.1") : WiFi.localIP().toString();
-    if (stringChanged(systemStatus.ip(), ip.c_str()))
-        systemStatus.ip(ip.c_str());
-    const String network = apActive ? String(WIFI_AP_SSID) : systemStatus.wifi() ? settings.getWifiSsid() : String("Disconnected");
+    char ipBuf[16] = "4.4.4.1"; // the AP's own address
+    if (!apActive) {
+        const IPAddress ip = WiFi.localIP();
+        snprintf(ipBuf, sizeof(ipBuf), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+    }
+    if (stringChanged(systemStatus.ip(), ipBuf))
+        systemStatus.ip(ipBuf);
+    const String network =
+        apActive ? String(WIFI_AP_SSID) : systemStatus.wifi() ? settings.getWifiSsid() : String("Disconnected");
     if (stringChanged(systemStatus.network(), network.c_str()))
         systemStatus.network(network.c_str());
     systemStatus.ap_active(apActive);
 
+    // Read the clock directly rather than through getLocalTime(): that helper sleeps 10 ms per
+    // call while the year is still 1970, i.e. every render blocked the UI task until NTP had synced.
     char timeBuf[12] = "";
+    time_t now;
+    time(&now);
     struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 5)) {
+    localtime_r(&now, &timeinfo);
+    if (timeinfo.tm_year > (2016 - 1900)) {
         strftime(timeBuf, sizeof(timeBuf), settings.isClock24hFormat() ? "%H:%M" : "%I:%M %p", &timeinfo);
         if (!settings.isClock24hFormat() && timeBuf[0] == '0')
             timeBuf[0] = ' ';
@@ -963,9 +986,7 @@ void DefaultUI::updateBrewProcess() {
     brewProcess.is_complete(process->isComplete());
 }
 
-void DefaultUI::updateMenuScreen() {}
-
-String DefaultUI::getErrorMessage() {
+const char *DefaultUI::getErrorMessage() {
     if (controller->isUpdating()) {
         return "Updating...";
     }
@@ -1020,8 +1041,15 @@ void DefaultUI::loopTask(void *arg) {
 
 void DefaultUI::profileLoopTask(void *arg) {
     auto *ui = static_cast<DefaultUI *>(arg);
+    ui->loopProfiles(); // initial load
     while (true) {
+        // Sleep until reloadProfiles() notifies us instead of polling the flag every 25 ms. A
+        // notification given before the task first waits is counted, not lost, so early reloads are safe.
+#ifdef GAGGIMATE_SIM
+        vTaskDelay(pdMS_TO_TICKS(UI_LOOP_PERIOD_MS)); // never runs: the sim drives loopProfiles() from its main loop
+#else
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#endif
         ui->loopProfiles();
-        vTaskDelay(25 / portTICK_PERIOD_MS);
     }
 }
