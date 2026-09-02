@@ -116,18 +116,29 @@ afterwards).** Read these before flashing it again:
   *without* the block reinstalls the stock libs, so never add an ESP env without
   `custom_sdkconfig = ${custom_sdk.custom_sdkconfig}`. CI inherits the download and the
   compile step on every run (the hash marker `sdkconfig.defaults` is not cached).
-- **The panel.** IDF 5's RGB driver restarts the frame at the next VSYNC on a DMA underrun
-  (`CONFIG_LCD_RGB_RESTART_IN_VSYNC=y` in the prebuilt config) where IDF 4.4 just tore, so
-  PSRAM-bandwidth contention that used to be an occasional tear shows up as dropped frames.
-  Bounce buffers (`bounce_buffer_size_px` in `esp_lcd_rgb_panel_config_t`, two internal-RAM
-  buffers of N lines) remove the underrun, but need the heap back first. The UI loop itself
-  was fine: `standby exit: 8 frames in 188 ms` on this branch. **Update 2026-09-02:** with
-  the hybrid build the panel stayed at 23.5 Hz and the UI at 40 fps while Ryan drove the
-  screens, and he called the display fixed; the stutter was a symptom of the defaults boot,
-  not of the driver. Bounce buffers are therefore not needed for parity. `GET /api/ota` now
-  reports `uiFps`, `flushAvgUs`, `flushMaxUs`, `panelVsyncHz` and `heapMinFree` (10 s window,
-  also one `render:` line per 10 s over serial) so this question is answerable without a
-  cable next time. A full-screen flush costs ~27 ms, i.e. one 25 ms frame; that is normal.
+- **The panel needs bounce buffers on IDF 5.** The RGB driver resets the DMA at every VSYNC
+  (`CONFIG_LCD_RGB_RESTART_IN_VSYNC=y`), so a DMA stall shows as a one-frame shift instead of
+  a permanent tear. On every build since the migration the standby screen jumped every 1-5 s
+  at rest: `panelUnderruns` 4-5 per 10 s window with nothing polling and no web client, and
+  Ryan confirmed it never happened on the Arduino 2 firmware (2026-09-02). Instruction and
+  data cache sizes, cache line size, flash (80 MHz DIO) and PSRAM (80 MHz octal) clocks are
+  identical between the old and new images, so the difference is in the traffic on the shared
+  flash/PSRAM bus: the hybrid build keeps the Wi-Fi, LWIP, NimBLE host and TLS buffers in
+  PSRAM, and the LCD FIFO only has tens of microseconds of slack. Two 10-line bounce buffers
+  (`bounce_buffer_size_px = 480 * 10` in `LilyGo_RGBPanel.cpp`, 2 x 9.6 KB of internal RAM,
+  ~0.7 ms of slack) took the count to 0 in every window at rest. They cost exactly the heap
+  the PR #9 trims recovered: 35 KB free / 18 KB boot floor / 20 KB largest block (52 / 40 /
+  32 without), so the heap-trace session and the BLE init cost matter again. The refill is a
+  CPU copy from PSRAM in the driver's EOF interrupt, so `CONFIG_LCD_RGB_ISR_IRAM_SAFE` and
+  `CONFIG_GDMA_ISR_IRAM_SAFE` had to go: with the cache off during a flash write the copy
+  would fault instead of waiting. Untested and worth a try (C++ change only, 80 s build):
+  smaller bounce buffers (6 lines = 11.5 KB, 5 lines = 9.6 KB) if the counter still reads 0
+  at rest and through a shot. Shot-log writes still disable the cache for milliseconds, which
+  exceeds any bounce slack; that part needs `CONFIG_SPI_FLASH_AUTO_SUSPEND` (flash chip
+  permitting) or write scheduling. The UI loop itself is fine: `standby exit: 8 frames in
+  188 ms`, 40 fps, a full-screen flush ~27 ms. `GET /api/ota` reports `uiFps`, `flushAvgUs`,
+  `flushMaxUs`, `panelVsyncHz`, `panelLateVsyncs`, `panelUnderruns` and `heapMinFree` (10 s
+  window, also one `render:` line per 10 s over serial), so none of this needs a cable.
 - **OTA slots vs USB.** `POST /api/ota/upload` writes the *inactive* app slot and flips
   `otadata`; `esptool write-flash 0x10000` only rewrites `app0`. After an OTA the device
   boots `app1`, so a USB flash of app0 changes nothing and you will debug a stale image
@@ -442,8 +453,8 @@ The panel itself is the ceiling: `RGB_MAX_PIXEL_CLOCK_HZ` is 7 MHz in
 `drivers/LilyGo-T-RGB/utilities.h`, and with the configured porches that is a
 **23.5 Hz** physical refresh — the UI's 40 Hz loop already outruns it. Smoother
 motion means a higher pixel clock (10 MHz ≈ 34 Hz, 12 ≈ 40), which risks drift
-and tearing because the framebuffer is in PSRAM with no bounce buffers; bounce
-buffers need ~20 KB of internal RAM. The device had ~57 KB free (largest block
+and tearing because the framebuffer is in PSRAM; the two 10-line bounce buffers
+added on 2026-09-02 give the DMA ~0.7 ms of slack, not a faster panel. The device had ~57 KB free (largest block
 39 KB) on 2026-08-31; removing the WebSocket request path raised that to ~82 KB
 (largest 71 KB) on 2026-09-01, with ~6.7 MB of PSRAM free — `GET /api/ota`
 reports all four figures. Untested.

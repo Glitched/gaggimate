@@ -400,9 +400,14 @@ void LilyGo_RGBPanel::initBUS() {
                     },
             },
         .data_width = 16, // RGB565 in parallel mode, thus 16bit in width
-        // No bounce buffers (yet): they would take ~19 KB of internal RAM, and a shot already drives the internal
-        // heap floor to ~19 KB on this build (2026-09-02). The tearing they would fix comes from the shot log's
-        // LittleFS writes disabling the cache while the DMA fetches the PSRAM framebuffer; see CLAUDE.md.
+        // Two 10-line bounce buffers in internal RAM (2 x 9.6 KB). The DMA reads those, and the driver's EOF interrupt
+        // refills them from the PSRAM framebuffer, so a stall on the shared flash/PSRAM bus (Wi-Fi, BLE and LWIP
+        // buffers live in PSRAM since the hybrid build) has ~0.7 ms of slack instead of the LCD FIFO's tens of
+        // microseconds. Without them the standby screen jumped every 1-5 s at rest (panelUnderruns 4-5 per 10 s,
+        // 2026-09-02). The refill is a CPU copy from PSRAM, so the LCD/GDMA interrupts must not be IRAM-safe: with
+        // the cache off during a flash write they would fault instead of waiting. The frame size must be a multiple
+        // of the bounce size (480 * 480 / 4800 = 48 chunks).
+        .bounce_buffer_size_px = BOARD_TFT_WIDTH * 10,
         .dma_burst_size = 64,
         .hsync_gpio_num = BOARD_TFT_HSYNC,
         .vsync_gpio_num = BOARD_TFT_VSYNC,
