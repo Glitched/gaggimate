@@ -106,7 +106,7 @@ SDL_VIDEODRIVER=dummy ./.pio/build/display-sim/program --scale &   # headless si
 ./sim/tests/test-settings-api.sh
 ```
 
-They mutate `sim_data/` (profiles, favourites, target temperature), so don't read the sim's state as ground truth right after a run.
+Each suite waits for the port, snapshots what it changes (selected profile, favourites, the settings keys it touches, mode and target temperature) and restores it from an EXIT trap, so `sim_data/` is left as found — but a suite killed mid-run (SIGKILL, not Ctrl-C) skips the trap, so don't read the sim's state as ground truth right after an aborted run.
 
 ### Lint / format / static analysis
 
@@ -117,11 +117,13 @@ platformio check -e controller
 npx prettier -w <file>.md
 ```
 
-`scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those. `clang-format` is not installed on this Mac (`brew install clang-format` if you want the script to run); until then, match the style by hand and check `awk 'length > 130'` on touched files.
+`scripts/format.sh` deliberately skips `src/display/ui/**` and `src/display/drivers/**` — generated and vendored code. Don't reformat those. The exclusions are `-path 'src/display/ui/*'` with no `./` prefix because `find src` prints paths without one; an earlier `./src/display/ui/**/*` pattern matched nothing and would have reformatted 81 files. `scripts/format.sh --check` is the CI form. `clang-format` is not installed on this Mac (`brew install clang-format` if you want the script to run); until then, match the style by hand and check `awk 'length > 130'` on touched files.
 
-`npm run lint` is not a reliable syntax gate — it has reported 0 errors on a
-`.jsx` file that Vite then refused to parse. Use `npm run build` to confirm the
-web UI compiles. Likewise don't pipe `npx prettier --write` to `/dev/null`: a
+`npm run lint` once reported 0 errors on a `.jsx` file that Vite then refused
+to parse: ESLint 8 given a directory only picks up `.js`, so until 2026-09-01
+the lint scripts had never seen a component file. They now pass
+`--ext .js,.jsx` (keep that if the scripts are touched). Lint still is not a
+build; use `npm run build` to confirm the web UI compiles. Likewise don't pipe `npx prettier --write` to `/dev/null`: a
 parse failure is reported there and nowhere else, and prettier leaves the file
 unchanged when it can't parse it.
 
@@ -140,7 +142,7 @@ Protocol version mismatches and pre-framing controllers fall back to an OTA-reco
 
 ### Controller firmware (`src/controller/`, `lib/GaggiMateController/`)
 
-Thin `main.cpp`; everything lives in `GaggiMateController`. It detects the board variant (`ControllerConfig`, `boards/*.json`) and addon hardware at boot, instantiates peripherals under `peripherals/` (`Heater`, `DimmedPump`/`SimplePump`, `SimpleRelay`, `Max31855Thermocouple`, `PressureSensor`, `FlowSensor`, `DistanceSensor`, `ADSAdc`, `LedController`), and owns the safety layer: thermal-runaway shutdown and a ping-timeout watchdog (`PING_TIMEOUT_SECONDS`) that kills outputs when the display goes quiet. Most peripherals run their own FreeRTOS task.
+Thin `main.cpp`; everything lives in `GaggiMateController`. It detects the board variant and addon hardware at boot (the per-board pin and capability tables are C++ literals in `ControllerConfig.h`; `boards/*.json` are PlatformIO board definitions — partition table, PSRAM flags — not pin maps), instantiates peripherals under `peripherals/` (`Heater`, `DimmedPump`/`SimplePump`, `SimpleRelay`, `Max31855Thermocouple`, `PressureSensor`, `FlowSensor`, `DistanceSensor`, `ADSAdc`, `LedController`), and owns the safety layer: thermal-runaway shutdown and a ping-timeout watchdog (`PING_TIMEOUT_SECONDS`) that kills outputs when the display goes quiet. Most peripherals run their own FreeRTOS task.
 
 `lib/NayrodPID` holds the control math used here: `PressureController` (pressure/flow/power modes with a pump-flow + rotary-vane-slip model), Kalman filters, `HydraulicParameterEstimator`, and `Autotune` (SIMC integrator+lag rule).
 
@@ -206,13 +208,17 @@ JSON schemas for profiles, shot history, and notes are in `schema/`.
 - **Do not create non-semver git tags.** `auto_firmware_version.py` runs `git describe --tags --dirty --exclude nightly --exclude db`, and whatever comes back becomes `BUILD_GIT_VERSION`. `lib/OTA`'s `from_string()` splits it on `.` — a string with fewer than three dot-separated parts used to throw `std::out_of_range` from `GitHubOTA`'s constructor during `Controller::setup()`, with no handler above it, so the display boot-looped and needed a USB reflash. That is why `nightly` and `db` are excluded. `from_string()` now returns 0.0.0 instead of throwing, but a device still running older firmware will brick, so prefer branches over tags for local bookmarks.
 - Code comments reference Linear issue ids (`GM-106`, `GM-147`, ...). Follow that when a comment explains a non-obvious fix.
 - Commits are Conventional-Commit-ish: `fix:`, `feat:`, `chore:`, often with a `(#PR)` suffix.
-- Contributions require a signed CLA (see `CONTRIBUTING.md`). Note that `CONTRIBUTING.md` still refers to a `ui/` SquareLine Studio project — the current source is `eez-ui/` (EEZ Studio).
+- Contributions require a signed CLA (see `CONTRIBUTING.md`).
 - `/api/settings` is unauthenticated. It echoes Wi-Fi and AP passwords back **only**
   in AP mode, where the caller had to know the AP password to reach the device;
   on a shared network both are replaced with `PASSWORD_PLACEHOLDER`
   (`---unchanged---`). Every POST handler for a credential must skip that
   sentinel, or saving an unedited settings form stores the placeholder as the
-  password. Don't widen what this endpoint discloses.
+  password. Don't widen what this endpoint discloses. The same unauthenticated
+  POST also _accepts_ `otaUploadToken`, so on a shared network any LAN client can
+  set its own token and then use the upload route; closing that (require the
+  current token in `X-OTA-Token`, or AP mode) is an open audit finding, not a
+  feature to preserve.
 - License: CC BY-NC-SA 4.0.
 
 ## Device performance
