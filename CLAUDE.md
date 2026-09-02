@@ -109,7 +109,15 @@ afterwards).** Read these before flashing it again:
   `ARDUINO_LIB_COMPILE_FLAG` is `Build`; keep that guard. The pass leaves `.dummy/`,
   `managed_components/`, `sdkconfig.defaults` and `sdkconfig.<env>` in the project root
   (git-ignored; `sdkconfig.defaults` carries the hash pioarduino uses to decide whether the
-  cached libs match). The libs are keyed on the block's text plus the board's memory layout:
+  cached libs match). The libs are keyed on the block's text plus the board's memory layout
+  (not on anything else: a `components/` directory in the repo root is compiled into the
+  library pass as an IDF project component, but changing it does not invalidate cached libs,
+  and the app links such a component as an archive placed before the IDF libraries, so a symbol
+  the IDF libraries need from it must also be compiled into the app as an object; see commit
+  ccec8eac for a worked example). The pass leaves a generated `CMakeLists.txt` and
+  `dependencies.lock` in the repo root, both git-ignored. Since 2026-09-02 `[env:display]`
+  extends the shared block (PSRAM code/rodata, see The panel), so it owns its own lib set and CI
+  recompiles the libraries once more per run:
   controller, display and display-headless (all qio_opi) share one set and were verified to
   build back to back without a recompile; display-headless-8m (qio_qspi) gets its own and
   re-triggers the ~3 min compile step whenever it is alternated with the others. An env
@@ -134,9 +142,20 @@ afterwards).** Read these before flashing it again:
   off during a flash write the copy would fault instead of waiting. While the cache is off
   the buffers are not refilled and the panel shows repeating rows instead of a shifted
   frame; an OTA write makes that continuous for a minute (Ryan saw it on 2026-09-02), and
-  blanking the backlight for the write phase is the cheap fix, not yet done. Shot-log writes
-  still disable the cache for milliseconds, which exceeds any bounce slack; that part needs
-  `CONFIG_SPI_FLASH_AUTO_SUSPEND` (flash chip permitting) or write scheduling. The UI loop
+  blanking the backlight for the write phase would have been the cosmetic fix. **Solved the
+  same evening by running code and rodata from PSRAM** (`CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y` +
+  `CONFIG_SPIRAM_RODATA=y` in the display env's block): with nothing fetched from flash, the
+  flash driver takes a mutex instead of disabling the cache around erases and page writes
+  (`spi_flash_os_func_app.c`, `SPI_FLASH_CACHE_NO_DISABLE`), and the IRAM-safe LCD/GDMA
+  interrupts (back in the shared block) keep refilling the bounce buffers through the write.
+  Write test (six profile creates and deletes in ~16 s, `panelUnderruns`/`panelLateVsyncs` in
+  the overlapping window): 9/2 before; 0/0 with this. Costs ~4.4 MB of PSRAM (2.2 MB left),
+  nothing internal, and code now runs from the faster octal PSRAM. The alternative,
+  `CONFIG_SPI_FLASH_AUTO_SUSPEND`, was measured first (commit ccec8eac): it needs a chip
+  whitelist (IDF 5.5 only lists the W25Q64; the T-RGB has a W25Q128, `esptool flash-id` says
+  0xEF4018), an unlisted chip asserts at boot in `esp_flash_init_default_chip` (the bootloader
+  rolls back), and even with a custom driver list it left 5 underruns per write window because
+  every cache miss to flash parks the bus for a suspend handshake. The UI loop
   itself is fine: `standby exit: 8 frames in
   188 ms`, 40 fps, a full-screen flush ~27 ms. `GET /api/ota` reports `uiFps`, `flushAvgUs`,
   `flushMaxUs`, `panelVsyncHz`, `panelLateVsyncs`, `panelUnderruns` and `heapMinFree` (10 s
