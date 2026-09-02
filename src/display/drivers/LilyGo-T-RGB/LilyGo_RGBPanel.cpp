@@ -409,9 +409,10 @@ void LilyGo_RGBPanel::initBUS() {
         // LWIP buffers live in PSRAM since the hybrid build) has a few hundred microseconds of slack instead of the
         // LCD FIFO's tens. Without them the standby screen jumped every 1-5 s at rest (panelUnderruns 4-5 per 10 s,
         // 2026-09-02); 10 lines (19.2 KB) took that to 0. The refill is a CPU copy from PSRAM inside the driver's
-        // EOF interrupt. With flash auto-suspend (display env) the cache is never disabled, so that interrupt can be
-        // IRAM-safe and keeps refilling through erases and page writes; without auto-suspend it must not be, or
-        // the copy faults while the cache is off. The frame height must be a multiple of the line count.
+        // EOF interrupt. The display env runs code and rodata from PSRAM (CONFIG_SPIRAM_FETCH_INSTRUCTIONS +
+        // CONFIG_SPIRAM_RODATA), so the flash driver never disables the cache and that interrupt, IRAM-safe, keeps
+        // refilling through shot-log and OTA writes. On a build that does disable the cache the LCD/GDMA interrupts
+        // must not be IRAM-safe, or the copy faults. The frame height must be a multiple of the line count.
         .bounce_buffer_size_px = BOARD_TFT_WIDTH * PANEL_BOUNCE_LINES,
         .dma_burst_size = 64,
         .hsync_gpio_num = BOARD_TFT_HSYNC,
