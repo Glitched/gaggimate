@@ -99,7 +99,7 @@ void ShotHistoryPlugin::setup(Controller *c, PluginManager *pm) {
     if (fs->exists("/h/recent.bin")) {
         fs->remove("/h/recent.bin");
     }
-    xTaskCreatePinnedToCore(loopTask, "ShotHistoryPlugin::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle, 0);
+    xTaskCreatePinnedToCore(loopTask, "ShotHistoryPlugin::loop", configMINIMAL_STACK_SIZE * 4, this, 1, &taskHandle, 0);
 }
 
 void ShotHistoryPlugin::record() {

@@ -67,7 +67,8 @@ Settings::Settings() {
     log_i("nvs_flash_init at construction: %s", esp_err_to_name(nvsErr));
     reload();
 
-    xTaskCreate(loopTask, "Settings::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle);
+    // High-water mark showed ~300 B used of 6 KB (GET /api/debug/heap, 2026-09-02); NVS writes need little stack.
+    xTaskCreate(loopTask, "Settings::loop", configMINIMAL_STACK_SIZE * 3, this, 1, &taskHandle);
 }
 
 bool Settings::reload() {

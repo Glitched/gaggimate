@@ -84,9 +84,14 @@ afterwards).** Read these before flashing it again:
   **Measured 2026-09-02 with exactly those four options:** 43 KB free / 32 KB largest block /
   308 KB total internal on a fresh boot (old firmware 81 / 70 / 294; prebuilt config 14 / 7.6 /
   276). Boot floor (`heapMinFree`) 29.7 KB. TLS no longer draws on internal RAM, so OTA is
-  unblocked; the remaining ~38 KB gap to the old firmware is unattributed (candidates: Wi-Fi
-  static RX buffers, NimBLE 2 pools that stay internal, AsyncTCP queues) -- a boot-phase heap
-  log would settle it.
+  unblocked. **Attributed on 2026-09-02 with `GET /api/debug/heap`** (boot-stage checkpoints,
+  fresh boot, internal heap free after each stage): setup start 171 KB; filesystem + panel
+  -5.7 KB; UI object + profiles -10 KB; plugins constructed and set up -21.6 KB; UI init +
+  logic task -14 KB; Wi-Fi driver -8.5 KB; **BLE init -48.2 KB**; Wi-Fi connected (web server,
+  mDNS) -17 KB; steady state ~43 KB. The BLE cost is the controller-side library (always
+  internal) sized by IDF's hub defaults, hence the `CONFIG_BT_CTRL_*` trims in the
+  `custom_sdkconfig` block. A shot then takes another ~14 KB (floor 18.9 KB on the untrimmed
+  build), which is why bounce buffers are still on hold. Both cores idle at 92-95 %.
 - **The hybrid build is in place** (one `custom_sdkconfig` block in the `[custom_sdk]` section of
   `platformio.ini`, referenced by every ESP env, 2026-09-02): the
   first `pio run` downloads `framework-espidf`, cmake and ninja, links a dummy sketch to
@@ -126,6 +131,12 @@ afterwards).** Read these before flashing it again:
   DTR/RTS low, pulse RTS high for 150 ms, then set DTR high and read
   (`scripts` has nothing for this yet; the recipe is a 15-line pyserial script). Steady
   state is silent at `CORE_DEBUG_LEVEL=3`; a tap out of standby logs the frame timing.
+- **`GET /api/debug/heap`** returns the checkpoint table (`heapCheckpoint("label")` calls in
+  `Controller::setup()`, the wifi:connect dispatch and brew start/end), the current internal
+  and PSRAM figures, and every FreeRTOS task with stack headroom and cumulative CPU share.
+  Add a checkpoint around anything you suspect; the table holds 32. The OTA upload's stall
+  check once aborted a healthy push with "no data for 4294967242 ms" (a millis() race across
+  tasks); it now compares signed and fresh.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
 - **The controller image from this branch has not run on hardware.** It builds against the
