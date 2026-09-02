@@ -88,6 +88,10 @@ jobs:
           cp .pio/build/display/firmware.bin upload/display/firmware.bin
           cp .pio/build/display/partitions.bin upload/display/partitions.bin
           cp .pio/build/display/bootloader.bin upload/display/bootloader.bin
+      # Static internal-RAM budget (IRAM mirror + .data + .bss by contributor), so a change
+      # that grows it is visible in the log before it reaches a device.
+      - name: RAM budget (display)
+        run: python3 scripts/ram_budget.py .pio/build/display/firmware.map
       - name: Build headless
         run: |
           pio run -e display-headless

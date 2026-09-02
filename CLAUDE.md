@@ -144,6 +144,24 @@ afterwards).** Read these before flashing it again:
   Add a checkpoint around anything you suspect; the table holds 32. The OTA upload's stall
   check once aborted a healthy push with "no data for 4294967242 ms" (a millis() race across
   tasks); it now compares signed and fresh.
+- **Static RAM is half the budget.** On the S3, IRAM and DRAM are carved from the same SRAM,
+  so every byte of code the linker places in IRAM (except the first 16 KB, which sit in SRAM0
+  next to the instruction cache) is a byte the heap never sees; the linker records the mirror
+  as `.dram0.dummy`. On 2026-09-02 the display image had 105 KB of IRAM code (89.5 KB
+  mirrored), 31.5 KB `.data` and 63 KB `.bss`: 184 KB decided at link time against a ~306 KB
+  heap. `python3 scripts/ram_budget.py [firmware.map]` attributes all three to their archives
+  and CI prints it after the display build. The big IRAM users are the BLE controller (20 KB,
+  fixed), FreeRTOS (16 KB) and the flash driver (11 KB, must stay);
+  `CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y` and `CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y`
+  in the `custom_sdkconfig` block move the non-ISR parts of FreeRTOS and esp_ringbuf to flash:
+  IRAM code 105.5 -> 93.0 KB (FreeRTOS 16.3 -> 5.3 KB), i.e. 12.5 KB of DRAM back at link time.
+  Arduino's config already keeps the Wi-Fi and LWIP code out of IRAM (`ESP_WIFI_IRAM_OPT`,
+  `LWIP_IRAM_OPTIMIZATION` unset), so those are not further savings. Rejected on purpose:
+  `CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY` (~20 KB) delays BLE interrupts while the flash cache is
+  off, which is during every shot-log write; fewer than 4 BLE activities breaks Improv
+  advertising next to a scan and two connections. The Wi-Fi "cache TX" queue is not an
+  internal-RAM lever either: it holds pointers to PSRAM packets waiting for one of the 8
+  internal staging buffers, and 8 is already Arduino's floor.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
 - **The controller image from this branch has not run on hardware.** It builds against the
