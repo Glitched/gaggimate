@@ -22,7 +22,9 @@ class ShotHistoryPlugin : public Plugin {
 
     void record();
 
-    void handleRequest(JsonDocument &request, JsonDocument &response);
+    // Behind DELETE /api/history/{id} and PUT /api/history/{id}.json (WebUIPlugin).
+    void deleteShot(const String &id);
+    void saveShotNotes(const String &id, const JsonDocument &notes);
 
     // Index management methods
     bool appendToIndex(const ShotIndexEntry &entry);
@@ -43,7 +45,6 @@ class ShotHistoryPlugin : public Plugin {
     bool readEntryAtPosition(File &indexFile, size_t position, ShotIndexEntry &entry);
     bool writeEntryAtPosition(File &indexFile, size_t position, const ShotIndexEntry &entry);
     void saveNotes(const String &id, const JsonDocument &notes);
-    void loadNotes(const String &id, JsonDocument &notes);
     void startRecording();
 
     uint16_t getSystemInfo(); // Helper to pack system state bits

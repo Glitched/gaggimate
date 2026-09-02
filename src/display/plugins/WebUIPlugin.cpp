@@ -156,7 +156,7 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
 
 void WebUIPlugin::loop() {
     if (restartPending != 0 && millis() >= restartPending) {
-        ESP_LOGI("WebUIPlugin", "Rebooting after firmware upload");
+        ESP_LOGI("WebUIPlugin", "Rebooting (deferred restart)");
         delay(50);
         ESP.restart();
     }
@@ -194,7 +194,7 @@ void WebUIPlugin::loop() {
         ota->checkForUpdates();
         pluginManager->trigger("ota:update:status", "value", ota->isUpdateAvailable());
         lastUpdateCheck = now;
-        updateOTAStatus(ota->getCurrentVersion());
+        updateOTAStatus();
     }
     if (now > lastStatus + STATUS_PERIOD && !ws.getClients().empty()) {
         lastStatus = now;
@@ -397,9 +397,8 @@ void WebUIPlugin::setupServer() {
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             bufferJsonBody(request, data, len, index, total, 16 * 1024);
         });
-    // REST profile API for external tools (scripts, agents): the WebSocket
-    // req:profiles:* contract needs a stateful client, this needs only HTTP.
-    // The plain-string route matches /api/profiles and all subpaths.
+    // REST profile API, used by the web UI and by external tools (scripts, agents)
+    // alike. The plain-string route matches /api/profiles and all subpaths.
     server.on(
         "/api/profiles", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleProfilesRest(request); }, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -480,8 +479,8 @@ void WebUIPlugin::setupServer() {
             handleFirmwareUpload(request, index, data, len, total);
         });
 #endif
-    // HTTP equivalents of the req:* WebSocket commands, so scripts and agents can
-    // drive the machine with curl (docs/http-api.yaml). Plain-string routes match
+    // Command routes (mode, process, targets, OTA, history), so scripts and agents
+    // can drive the machine with curl (docs/http-api.yaml). Plain-string routes match
     // the path and its subpaths; JSON bodies stream into _tempObject as for
     // /api/settings. Registered after /api/ota/upload: "/api/ota" is a prefix
     // route and would otherwise claim it. /api/history is registered per method so GETs never reach
@@ -519,9 +518,11 @@ void WebUIPlugin::setupServer() {
                 // die, no recovery). Reclaiming via close is the safer failure
                 // mode. (Was the v1.8.1 behaviour.)
                 client->setCloseClientOnQueueFull(true);
-                ESP_LOGI("WebUIPlugin", "WebSocket client connected (%d open connections)", server->getClients().size());
+                ESP_LOGI("WebUIPlugin", "WebSocket client connected (%u open connections)",
+                         static_cast<unsigned>(server->getClients().size()));
             } else if (type == WS_EVT_DISCONNECT) {
-                ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%d open connections)", server->getClients().size());
+                ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%u open connections)",
+                         static_cast<unsigned>(server->getClients().size()));
             }
             // The socket is push-only: every command and query is an HTTP route
             // (docs/http-api.yaml). Inbound frames are ignored.
@@ -590,7 +591,7 @@ struct SettingsPatch {
 };
 } // namespace
 
-void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
+void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) {
     bool restartRequested = false;
     if (request->method() == HTTP_POST) {
         JsonDocument json(&psramAllocator);
@@ -868,8 +869,9 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     serializeJson(doc, *response);
     request->send(response);
 
-    if (restartRequested)
-        ESP.restart();
+    if (restartRequested) {
+        restartPending = millis() + 1000; // loop() reboots once the response has left the socket
+    }
 }
 
 // REST profile API: JSON in/out, full-document writes with save-echo.
@@ -1090,8 +1092,8 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) {
 }
 
 // --- REST command surface -------------------------------------------------------------------
-// Each route does exactly what the matching req:* WebSocket handler does, so the two doors
-// cannot drift. Responses: 200 {"ok":true} or a small JSON object; 4xx {"error": "..."}.
+// The only command path into the machine: the WebSocket has been push-only (evt:* messages)
+// since 2026-08-31. Responses: 200 {"ok":true} or a small JSON object; 4xx {"error": "..."}.
 
 namespace {
 
@@ -1118,6 +1120,17 @@ void replyError(AsyncWebServerRequest *request, int code, const char *message) {
     JsonDocument doc(&psramAllocator);
     doc["error"] = message;
     replyJson(request, code, doc);
+}
+
+// 405 with the Allow header RFC 9110 requires on that status.
+void replyMethodNotAllowed(AsyncWebServerRequest *request, const char *allow) {
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->setCode(405);
+    response->addHeader("Allow", allow);
+    JsonDocument doc(&psramAllocator);
+    doc["error"] = "Method not allowed";
+    serializeJson(doc, *response);
+    request->send(response);
 }
 
 // Accepts the numeric mode or its name; returns -1 when neither.
@@ -1226,8 +1239,7 @@ void WebUIPlugin::handleMachineRest(AsyncWebServerRequest *request) {
         }
         if (method == HTTP_PUT && dir.isEmpty() && which == "mode") {
             // /api/targets/mode {"volumetric": bool}: brew/grind targets are time-based or
-            // volumetric (weight, needs a scale). Equivalent of req:change-brew-target /
-            // req:change-grind-target, whose "target" is that boolean despite the name.
+            // volumetric (weight, needs a scale). One setting covers both targets.
             if (!body["volumetric"].is<bool>()) {
                 return replyError(request, 400, "Body must be {\"volumetric\": true|false}");
             }
@@ -1272,7 +1284,7 @@ void WebUIPlugin::handleOtaRest(AsyncWebServerRequest *request) {
             return replyJson(request, 200, doc);
         }
         if (method == HTTP_POST) {
-            // As req:ota-settings with update=true: optionally switch channel, then re-check.
+            // Optionally switch the release channel, then schedule an update check.
             JsonDocument body(&psramAllocator);
             takeJsonBody(request, body);
             if (body["channel"].is<const char *>()) {
@@ -1332,12 +1344,8 @@ void WebUIPlugin::handleHistoryRest(AsyncWebServerRequest *request) {
             return replyError(request, 400, "Shot id must be numeric");
         }
     }
-    JsonDocument req(&psramAllocator);
-    JsonDocument resp(&psramAllocator);
-    req["id"] = id;
     if (method == HTTP_DELETE && !notes) {
-        req["tp"] = "req:history:delete";
-        ShotHistory.handleRequest(req, resp);
+        ShotHistory.deleteShot(id);
         return replyOk(request);
     }
     if (method == HTTP_PUT && notes) {
@@ -1345,9 +1353,7 @@ void WebUIPlugin::handleHistoryRest(AsyncWebServerRequest *request) {
         if (!takeJsonBody(request, body) || !body.is<JsonObject>()) {
             return replyError(request, 400, "Body must be a JSON notes object");
         }
-        req["tp"] = "req:history:notes:save";
-        req["notes"] = body;
-        ShotHistory.handleRequest(req, resp);
+        ShotHistory.saveShotNotes(id, body);
         return replyOk(request);
     }
     replyError(request, 405, "DELETE /api/history/{id} or PUT /api/history/{id}.json");
@@ -1356,13 +1362,12 @@ void WebUIPlugin::handleHistoryRest(AsyncWebServerRequest *request) {
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
     JsonDocument doc(&psramAllocator);
     JsonArray scalesArray = doc.to<JsonArray>();
-    std::vector<DiscoveredDevice> devices = BLEScales.getDiscoveredScales();
-    for (const DiscoveredDevice &device : BLEScales.getDiscoveredScales()) {
-        JsonDocument scale(&psramAllocator);
+    const std::vector<DiscoveredDevice> devices = BLEScales.getDiscoveredScales(); // returned by value
+    for (const DiscoveredDevice &device : devices) {
+        JsonObject scale = scalesArray.add<JsonObject>();
         scale["uuid"] = device.getAddress().toString();
         scale["name"] = device.getName();
         scale["rssi"] = device.getRSSI();
-        scalesArray.add(scale);
     }
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     serializeJson(doc, *response);
@@ -1371,8 +1376,7 @@ void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
 
 void WebUIPlugin::handleBLEScaleScan(AsyncWebServerRequest *request) {
     if (request->method() != HTTP_POST) {
-        request->send(404);
-        return;
+        return replyMethodNotAllowed(request, "POST");
     }
     BLEScales.scan();
     JsonDocument doc(&psramAllocator);
@@ -1384,10 +1388,13 @@ void WebUIPlugin::handleBLEScaleScan(AsyncWebServerRequest *request) {
 
 void WebUIPlugin::handleBLEScaleConnect(AsyncWebServerRequest *request) {
     if (request->method() != HTTP_POST) {
-        request->send(404);
-        return;
+        return replyMethodNotAllowed(request, "POST");
     }
-    BLEScales.connect(request->arg("uuid").c_str());
+    const String uuid = request->arg("uuid"); // form field or query parameter
+    if (uuid.isEmpty()) {
+        return replyError(request, 400, "Missing uuid");
+    }
+    BLEScales.connect(uuid.c_str());
     JsonDocument doc(&psramAllocator);
     doc["success"] = true;
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -1467,7 +1474,7 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
     }
 }
 
-void WebUIPlugin::updateOTAStatus(const String &version) {
+void WebUIPlugin::updateOTAStatus() {
     if (ws.getClients().empty()) {
         return;
     }
@@ -1669,7 +1676,8 @@ void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
         return;
     }
 
-    ESP_LOGI("WebUIPlugin", "Streaming core dump: %d bytes from 0x%x", coreSize, coreAddr);
+    ESP_LOGI("WebUIPlugin", "Streaming core dump: %u bytes from 0x%lx", static_cast<unsigned>(coreSize),
+             static_cast<unsigned long>(coreAddr));
 
     // Create a streaming response
     AsyncWebServerResponse *response =

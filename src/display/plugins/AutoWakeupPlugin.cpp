@@ -24,13 +24,15 @@ void AutoWakeupPlugin::setup(Controller *controller, PluginManager *pluginManage
 }
 
 void AutoWakeupPlugin::loop() {
-    if (!settings->isAutoWakeupEnabled() || settings->getAutoWakeupSchedules().empty()) {
+    if (!settings->isAutoWakeupEnabled()) {
         return;
     }
 
     unsigned long now = millis();
 
-    // Check every minute
+    // Check every AUTO_WAKEUP_CHECK_INTERVAL. getAutoWakeupSchedules() returns the
+    // vector by value, so it is only read inside this gate (in checkAutoWakeup(),
+    // which is a no-op for an empty list), not on every 50 ms loop pass.
     if (now - lastAutoWakeupCheck > AUTO_WAKEUP_CHECK_INTERVAL) {
         lastAutoWakeupCheck = now;
 

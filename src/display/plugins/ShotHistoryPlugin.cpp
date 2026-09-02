@@ -519,56 +519,34 @@ size_t ShotHistoryPlugin::getFreeSpace() {
     return total > used ? (total - used) : 0;
 }
 
-void ShotHistoryPlugin::handleRequest(JsonDocument &request, JsonDocument &response) {
-    String type = request["tp"].as<String>();
-    response["tp"] = String("res:") + type.substring(4);
-    response["rid"] = request["rid"].as<String>();
+void ShotHistoryPlugin::deleteShot(const String &id) {
+    const String paddedId = padId(id);
+    fs->remove("/h/" + paddedId + ".slog");
+    fs->remove("/h/" + paddedId + ".json");
+    markIndexDeleted(id.toInt());
+}
 
-    if (type == "req:history:delete") {
-        auto id = request["id"].as<String>();
-        String paddedId = id;
-        while (paddedId.length() < 6) {
-            paddedId = "0" + paddedId;
-        }
-        fs->remove("/h/" + paddedId + ".slog");
-        fs->remove("/h/" + paddedId + ".json");
+void ShotHistoryPlugin::saveShotNotes(const String &id, const JsonDocument &notes) {
+    saveNotes(id, notes);
 
-        // Mark as deleted in index
-        markIndexDeleted(id.toInt());
+    // Update rating and volume in index
+    uint8_t rating = notes["rating"].as<uint8_t>();
 
-        response["msg"] = "Ok";
-    } else if (type == "req:history:notes:get") {
-        auto id = request["id"].as<String>();
-        JsonDocument notes(&psramAllocator);
-        loadNotes(id, notes);
-        response["notes"] = notes;
-    } else if (type == "req:history:notes:save") {
-        auto id = request["id"].as<String>();
-        JsonDocument notes; // explicit document: variant->const JsonDocument& is ambiguous on clang
-        notes.set(request["notes"]);
-        saveNotes(id, notes);
-
-        // Update rating and volume in index
-        uint8_t rating = notes["rating"].as<uint8_t>();
-
-        // Check if user provided a doseOut value to override volume
-        uint16_t volume = 0;
-        if (notes["doseOut"].is<String>() && !notes["doseOut"].as<String>().isEmpty()) {
-            float doseOut = notes["doseOut"].as<String>().toFloat();
-            if (doseOut > 0.0f) {
-                volume = encodeUnsigned(doseOut, WEIGHT_SCALE, WEIGHT_MAX_VALUE);
-            }
-        }
-
-        // Always use updateIndexMetadata - it handles both rating and optional volume
-        updateIndexMetadata(id.toInt(), rating, volume);
-
-        response["msg"] = "Ok";
-    } else if (type == "req:history:rebuild") {
-        // Rebuild is now handled asynchronously by WebUIPlugin
-        // This path shouldn't be reached, but handle it just in case
-        response["msg"] = "Use async rebuild";
+    // A doseOut value overrides the index volume. schema/shot_notes.json says
+    // number; older clients stored it as a string, so accept both.
+    uint16_t volume = 0;
+    float doseOut = 0.0f;
+    if (notes["doseOut"].is<float>() || notes["doseOut"].is<int>()) {
+        doseOut = notes["doseOut"].as<float>();
+    } else if (notes["doseOut"].is<String>() && !notes["doseOut"].as<String>().isEmpty()) {
+        doseOut = notes["doseOut"].as<String>().toFloat();
     }
+    if (doseOut > 0.0f) {
+        volume = encodeUnsigned(doseOut, WEIGHT_SCALE, WEIGHT_MAX_VALUE);
+    }
+
+    // Always use updateIndexMetadata - it handles both rating and optional volume
+    updateIndexMetadata(id.toInt(), rating, volume);
 }
 
 void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
@@ -578,15 +556,6 @@ void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
         serializeJson(notes, notesStr);
         file.print(notesStr);
         file.close();
-    }
-}
-
-void ShotHistoryPlugin::loadNotes(const String &id, JsonDocument &notes) {
-    File file = fs->open("/h/" + id + ".json", "r");
-    if (file) {
-        String notesStr = file.readString();
-        file.close();
-        deserializeJson(notes, notesStr);
     }
 }
 
@@ -730,9 +699,10 @@ void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uin
             if (volume > 0) {
                 entry.volume = volume;
             }
-            if (rating > 0) {
-                entry.flags |= SHOT_FLAG_HAS_NOTES;
-            }
+            // The notes file has just been written, so flag it as rebuildIndex() does
+            // (file exists => flag). The web UI skips the notes fetch when the flag is
+            // clear, so an unrated note that left it clear was invisible after a reload.
+            entry.flags |= SHOT_FLAG_HAS_NOTES;
 
             if (writeEntryAtPosition(indexFile, entryPos, entry)) {
                 ESP_LOGD("ShotHistoryPlugin", "Updated metadata for shot %u: rating=%u, volume=%u", shotId, rating, volume);

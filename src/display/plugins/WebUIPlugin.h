@@ -46,7 +46,7 @@ class WebUIPlugin : public Plugin {
     // Serves the web UI from the firmware-embedded, memory-mapped flash blob
     // (catch-all for any path not claimed by an explicit route). [GM-106]
     void serveWebAsset(AsyncWebServerRequest *request);
-    void handleSettings(AsyncWebServerRequest *request) const;
+    void handleSettings(AsyncWebServerRequest *request);
     void handleProfilesRest(AsyncWebServerRequest *request);
     // GET /api/profiles bodies, serialised once per ProfileManager revision and kept in PSRAM.
     // Listing reads and parses every profile file from flash (~2 s for ten, stalling both cores'
@@ -58,7 +58,7 @@ class WebUIPlugin : public Plugin {
         std::shared_ptr<const PsramString> full, minimal;
     } profileListCache;
     std::shared_ptr<const PsramString> profileListJson(bool minimal);
-    // HTTP equivalents of the req:* WebSocket commands (docs/http-api.yaml).
+    // Command routes (docs/http-api.yaml).
     void handleMachineRest(AsyncWebServerRequest *request);
     void handleOtaRest(AsyncWebServerRequest *request);
     void handleHistoryRest(AsyncWebServerRequest *request);
@@ -67,7 +67,7 @@ class WebUIPlugin : public Plugin {
     void handleBLEScaleScan(AsyncWebServerRequest *request);
     void handleBLEScaleConnect(AsyncWebServerRequest *request);
     void handleBLEScaleInfo(AsyncWebServerRequest *request);
-    void updateOTAStatus(const String &version);
+    void updateOTAStatus();
     void updateOTAProgress(uint8_t phase, int progress);
     void sendAutotuneResult();
     void sendAutotuneFailed();
@@ -90,7 +90,8 @@ class WebUIPlugin : public Plugin {
     // Guards against a second upload racing the first, and lets the completion
     // handler tell "we wrote an image" apart from "the body never arrived".
     // Reboot is deferred to loop() so the HTTP response leaves the socket
-    // before the device resets. 0 = no reboot scheduled.
+    // before the device resets (firmware upload, and POST /api/settings with
+    // restart=true). 0 = no reboot scheduled.
     unsigned long restartPending = 0;
     bool uploadInProgress = false;
     size_t uploadTotal = 0;
