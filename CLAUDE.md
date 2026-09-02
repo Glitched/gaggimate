@@ -150,18 +150,31 @@ afterwards).** Read these before flashing it again:
   as `.dram0.dummy`. On 2026-09-02 the display image had 105 KB of IRAM code (89.5 KB
   mirrored), 31.5 KB `.data` and 63 KB `.bss`: 184 KB decided at link time against a ~306 KB
   heap. `python3 scripts/ram_budget.py [firmware.map]` attributes all three to their archives
-  and CI prints it after the display build. The big IRAM users are the BLE controller (20 KB,
-  fixed), FreeRTOS (16 KB) and the flash driver (11 KB, must stay);
-  `CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y` and `CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y`
-  in the `custom_sdkconfig` block move the non-ISR parts of FreeRTOS and esp_ringbuf to flash:
-  IRAM code 105.5 -> 93.0 KB (FreeRTOS 16.3 -> 5.3 KB), i.e. 12.5 KB of DRAM back at link time.
-  Arduino's config already keeps the Wi-Fi and LWIP code out of IRAM (`ESP_WIFI_IRAM_OPT`,
-  `LWIP_IRAM_OPTIMIZATION` unset), so those are not further savings. Rejected on purpose:
-  `CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY` (~20 KB) delays BLE interrupts while the flash cache is
-  off, which is during every shot-log write; fewer than 4 BLE activities breaks Improv
-  advertising next to a scan and two connections. The Wi-Fi "cache TX" queue is not an
+  and CI prints it after the display build. The big IRAM users are the BLE controller (20 KB),
+  FreeRTOS (16 KB) and the flash driver (11 KB). **Moving code out of IRAM tears the panel.**
+  `CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y` + `CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH=y`
+  gave 12.5 KB of heap (IRAM 105.5 -> 93 KB, measured 319 KB total / 66 KB free) and the
+  standby screen jittered and clipped at rest within minutes of the OTA on 2026-09-02; rolled
+  back the same hour. Mechanism: flash and PSRAM sit behind the same cache and SPI bus, so
+  kernel code that now misses the 16 KB icache is fetched over the bus the RGB DMA needs for
+  the PSRAM framebuffer, and the DMA falls behind the pixel clock. Anything that adds flash
+  fetches to hot paths (these options, `CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY`, cutting the icache)
+  is off the table on a PSRAM-framebuffer board; the lever that goes the other way,
+  `CONFIG_SPIRAM_FETCH_INSTRUCTIONS` + `CONFIG_SPIRAM_RODATA` (code and rodata copied into
+  PSRAM at boot, which also keeps the cache on during flash writes), is untested and is the
+  next tearing experiment. Arduino's config already keeps the Wi-Fi and LWIP code out of IRAM
+  (`ESP_WIFI_IRAM_OPT`, `LWIP_IRAM_OPTIMIZATION` unset). Fewer than 4 BLE activities breaks
+  Improv advertising next to a scan and two connections. The Wi-Fi "cache TX" queue is not an
   internal-RAM lever either: it holds pointers to PSRAM packets waiting for one of the 8
   internal staging buffers, and 8 is already Arduino's floor.
+- **`panelLateVsyncs` cannot see tearing; `panelUnderruns` can.** The LCD peripheral generates
+  the panel timing on its own, so VSYNC keeps arriving at 23.5 Hz while the DMA starves; a
+  late VSYNC only means the interrupt was held off. With `CONFIG_LCD_RGB_RESTART_IN_VSYNC`
+  the driver resets the DMA at every VSYNC and reports a frame complete only when the DMA
+  wrapped its descriptor link first, so VSYNCs minus completions per 10 s window is the number
+  of frames the viewer saw shifted or torn. `GET /api/ota` reports it as `panelUnderruns`
+  (also in the `render:` serial line); 0 at rest is the baseline, and the counter is the
+  arbiter for any sdkconfig or driver experiment, so nobody has to watch the panel.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
 - **The controller image from this branch has not run on hardware.** It builds against the

@@ -281,6 +281,14 @@ static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_pan
     return false;
 }
 
+// Fires when the DMA wraps its descriptor link at the end of a frame. With CONFIG_LCD_RGB_RESTART_IN_VSYNC the driver
+// resets the DMA at every VSYNC, so a frame that was still being fetched from PSRAM at that moment never gets here:
+// VSYNCs minus these per window is the number of frames the viewer saw shifted or stale (`panelUnderruns`).
+static bool IRAM_ATTR onPanelFrameComplete(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+    panelStats().recordFrameComplete();
+    return false;
+}
+
 void WavesharePanel::initBUS() {
     if (_panelDrv) {
         return;
@@ -882,7 +890,8 @@ void WavesharePanel::initBUS() {
     };
 
     ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_config, &_panelDrv));
-    const esp_lcd_rgb_panel_event_callbacks_t panelCallbacks = {.on_vsync = onPanelVsync};
+    const esp_lcd_rgb_panel_event_callbacks_t panelCallbacks = {.on_vsync = onPanelVsync,
+                                                               .on_frame_buf_complete = onPanelFrameComplete};
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(_panelDrv, &panelCallbacks, nullptr));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(_panelDrv));
     ESP_ERROR_CHECK(esp_lcd_panel_init(_panelDrv));
