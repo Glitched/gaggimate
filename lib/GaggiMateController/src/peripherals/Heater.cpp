@@ -221,19 +221,15 @@ float Heater::softPwm(uint32_t windowSize) {
     }
     float optimumOutput = output;
 
-    // PWM relay output
+    // PWM relay output. No minimum-interval guard between switches: the 10 ms task period (1 ms in loopAutotune)
+    // already spaces them, and the old absolute-timestamp guard (msNow > nextSwitchTime) stalled every switch for
+    // 49.7 days after millis() wrapped, leaving the relay stuck in whatever state it was in.
     if (!relayStatus && static_cast<unsigned long>(optimumOutput) > (msNow - windowStartTime)) {
-        if (msNow > nextSwitchTime) {
-            nextSwitchTime = msNow;
-            relayStatus = true;
-            digitalWrite(heaterPin, HIGH);
-        }
+        relayStatus = true;
+        digitalWrite(heaterPin, HIGH);
     } else if (relayStatus && static_cast<unsigned long>(optimumOutput) < (msNow - windowStartTime)) {
-        if (msNow > nextSwitchTime) {
-            nextSwitchTime = msNow;
-            relayStatus = false;
-            digitalWrite(heaterPin, LOW);
-        }
+        relayStatus = false;
+        digitalWrite(heaterPin, LOW);
     }
     return optimumOutput;
 }

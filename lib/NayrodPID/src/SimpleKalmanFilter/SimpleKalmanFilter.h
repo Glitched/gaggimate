@@ -31,6 +31,8 @@ class SimpleKalmanFilter {
     float _current_estimate; // Current state estimate
     float _last_estimate;    // Previous state estimate
     float _kalman_gain;      // Kalman gain
+    // First updateEstimate() seeds the estimate from the measurement.
+    bool _initialised = false;
 };
 
 #endif

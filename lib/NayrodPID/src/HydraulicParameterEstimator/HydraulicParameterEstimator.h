@@ -22,11 +22,11 @@ class HydraulicParameterEstimator {
     float getCeff() { return C_eff; };
     float C_fixed;
     float K_est_init;
-    float K_est;
+    float K_est = 0.0f;
     float C_eff;
 
-    float P_filtered;
-    float dPdt_filtered;
+    float P_filtered = 0.0f;
+    float dPdt_filtered = 0.0f;
 
     // === Etat & hyperparamètres EKF ===
     float X_state[3] = {0.0f, 0.0f, 0.0f}; // [P, k, Qout]

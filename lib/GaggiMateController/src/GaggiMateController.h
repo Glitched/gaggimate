@@ -2,6 +2,7 @@
 #define GAGGIMATECONTROLLER_H
 #include "ControllerConfig.h"
 #include "GaggiMateServer.h"
+#include <atomic>
 #include <peripherals/DigitalInput.h>
 #include <peripherals/DistanceSensor.h>
 #include <peripherals/FlowSensor.h>
@@ -15,6 +16,7 @@
 #include <vector>
 
 constexpr double PING_TIMEOUT_SECONDS = 20.0;
+constexpr unsigned long PING_TIMEOUT_MS = static_cast<unsigned long>(PING_TIMEOUT_SECONDS * 1000.0);
 
 constexpr int DETECT_EN_PIN = 40;
 constexpr int DETECT_VALUE_PIN = 11;
@@ -61,8 +63,10 @@ class GaggiMateController {
     std::vector<ControllerConfig> configs;
 
     String _version;
-    unsigned long lastPingTime = 0;
-    size_t errorState = ERROR_CODE_NONE;
+    // Both cross task boundaries: written from the BLE dispatch task (handlePing), the heater task
+    // (thermalRunawayShutdown) and loop(); read from all of them.
+    std::atomic<unsigned long> lastPingTime{0};
+    std::atomic<size_t> errorState{ERROR_CODE_NONE};
 
     const char *LOG_TAG = "GaggiMateController";
 };

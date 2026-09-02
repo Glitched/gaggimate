@@ -24,7 +24,8 @@ void ControllerOTA::update(WiFiClientSecure &wifi_client, const String &release_
         LittleFS.remove("/board-firmware.bin");
     }
     if (!downloadFile(wifi_client, release_url)) {
-        ESP_LOGE("ControllerOTA", "Download of firmware file failed");
+        ESP_LOGE("ControllerOTA", "Download of firmware file failed, aborting controller update");
+        return; // never stream a missing or partial image to the controller
     }
     File file = LittleFS.open("/board-firmware.bin", FILE_READ);
     runUpdate(file, file.size());

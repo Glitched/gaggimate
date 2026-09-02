@@ -6,12 +6,17 @@ SimpleKalmanFilter::SimpleKalmanFilter(float mea_e, float est_e, float q) {
     _err_measure = mea_e;      // R - Measurement noise covariance
     _err_estimate = est_e;     // P - Error covariance
     _q = q;                    // Q - Process noise covariance
-    _current_estimate = mea_e; // Initialize estimate
-    _last_estimate = mea_e;    // Initialize previous estimate
+    _current_estimate = 0.0f;  // Seeded from the first measurement in updateEstimate()
+    _last_estimate = 0.0f;
     _kalman_gain = 0.0;        // Initialize Kalman gain
 }
 
 float SimpleKalmanFilter::updateEstimate(float mea) {
+    if (!_initialised) {
+        // Start at the first reading rather than at the noise variance the constructor used to store here.
+        _last_estimate = mea;
+        _initialised = true;
+    }
     _err_estimate = _err_estimate + _q;
     _kalman_gain = _err_estimate / (_err_estimate + _err_measure);
     _current_estimate = _last_estimate + _kalman_gain * (mea - _last_estimate);

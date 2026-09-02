@@ -10,6 +10,8 @@ using distance_callback_t = std::function<void(int)>;
 class DistanceSensor {
   public:
     DistanceSensor(SoftWire *wire, distance_callback_t callback);
+    DistanceSensor(const DistanceSensor &) = delete;
+    DistanceSensor &operator=(const DistanceSensor &) = delete;
     void setup();
 
   private:
@@ -17,7 +19,7 @@ class DistanceSensor {
 
     SoftWire *i2c;
     VL53L0X *tof;
-    xTaskHandle taskHandle;
+    xTaskHandle taskHandle = nullptr;
     distance_callback_t _callback;
     int measurements = 0;
     int currentMillis = 0;

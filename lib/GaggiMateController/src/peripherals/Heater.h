@@ -21,6 +21,8 @@ class Heater {
   public:
     Heater(TemperatureSensor *sensor, uint8_t heaterPin, const heater_error_callback_t &error_callback,
            const pid_result_callback_t &pid_callback, const heater_autotune_fail_callback_t &autotune_fail_callback = nullptr);
+    Heater(const Heater &) = delete;
+    Heater &operator=(const Heater &) = delete;
     void setup();
     void loop();
 
@@ -63,7 +65,6 @@ class Heater {
 
     bool relayStatus = false;
     unsigned long windowStartTime = 0;
-    unsigned long nextSwitchTime = 0;
 
     // Autotune variables
     bool startup = true;

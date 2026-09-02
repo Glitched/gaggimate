@@ -88,7 +88,11 @@ class Endpoint {
 
   private:
     static constexpr size_t QUEUE_CAPACITY = 16;
-    static constexpr size_t MAX_KEYS = 256; // >= which_content_max * MAX_DEVICES
+    static constexpr size_t MAX_KEYS = 256;
+    // coalescingKey() = which_content * MAX_DEVICES + index, so the highest Payload oneof tag bounds the key
+    // space. error (26) is the highest tag today; move this to the new maximum when the proto grows past it.
+    static_assert((gaggimate_Payload_error_tag + 1) * gm_proto::MAX_DEVICES <= MAX_KEYS,
+                  "MAX_KEYS is too small for coalescingKey(); the queue would silently reject those payloads");
     static constexpr size_t BUFFER_SIZE = 256;
     static constexpr size_t MAX_PAYLOADS_PER_FRAME = 6; // matches Frame.payloads max_count
     static constexpr unsigned long ACK_TIMEOUT_MS = 150;

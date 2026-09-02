@@ -25,7 +25,6 @@ void DimmedPump::loop() {
 
 void DimmedPump::setPower(float setpoint) {
     ESP_LOGV(LOG_TAG, "Setting power to %2f", setpoint);
-    _ctrlPressure = setpoint > 0 ? 20.0f : 0.0f;
     _mode = ControlMode::POWER;
     _power = std::clamp(setpoint, 0.0f, 100.0f);
     _controllerPower = _power; // Feed manual control back into pressure controller
@@ -72,18 +71,20 @@ void DimmedPump::updatePower() {
     }
 }
 
+// The pump task reads these fields without a lock, so the targets are written first and _mode last: it must never
+// run a FLOW/PRESSURE cycle against the previous mode's targets.
 void DimmedPump::setFlowTarget(float targetFlow, float pressureLimit) {
-    _mode = ControlMode::FLOW;
     _ctrlFlow = targetFlow;
     _ctrlPressure = pressureLimit;
     _pressureController.setPressureLimit(pressureLimit);
+    _mode = ControlMode::FLOW;
 }
 
 void DimmedPump::setPressureTarget(float targetPressure, float flowLimit) {
-    _mode = ControlMode::PRESSURE;
     _ctrlFlow = flowLimit;
     _ctrlPressure = targetPressure;
     _pressureController.setFlowLimit(flowLimit);
+    _mode = ControlMode::PRESSURE;
 }
 
 void DimmedPump::setValveState(bool open) { _valveStatus = open; }

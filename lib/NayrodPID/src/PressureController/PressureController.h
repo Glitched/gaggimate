@@ -17,6 +17,8 @@ class PressureController {
     enum class ControlMode { POWER, PRESSURE, FLOW };
     PressureController(float dt, float *_rawPressureSetpoint, float *_rawFlowSetpoint, float *sensorOutput,
                        float *controllerOutput, int *valveStatus);
+    PressureController(const PressureController &) = delete;
+    PressureController &operator=(const PressureController &) = delete;
     void initSetpointFilter(float val = 0.0f);
 
     void setFlowLimit(float lim) { /* Flow limit not currently implemented */ };

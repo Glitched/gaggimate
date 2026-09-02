@@ -10,6 +10,8 @@ constexpr char CHARACTERISTIC_OTA_BL_UUID_RX[] = "fe590002-54ae-4a28-9f74-dfccb2
 constexpr char CHARACTERISTIC_OTA_BL_UUID_TX[] = "fe590003-54ae-4a28-9f74-dfccb248601d";
 
 constexpr uint16_t MTU = 120;
+// The controller buffers each part whole: PART_SIZE must stay <= UPDATER_SIZE (20000) in
+// lib/ble_ota_dfu/src/ble_ota_dfu.hpp. That header belongs to the controller firmware, so this cannot be a static_assert.
 constexpr uint16_t PART_SIZE = 19000;
 
 using ctr_progress_callback_t = std::function<void(int progress)>;

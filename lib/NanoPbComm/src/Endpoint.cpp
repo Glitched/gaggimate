@@ -1,4 +1,5 @@
 #include "Endpoint.h"
+#include <cassert>
 #include <cstring>
 #include <esp_log.h>
 #include <pb_decode.h>
@@ -185,6 +186,7 @@ void Endpoint::pump() {
         unlock();
         return;
     }
+    assert(_txLen <= BUFFER_SIZE); // pb_ostream_from_buffer bounds the encode; keep the send honest
 
     _transport.send(_txBuf, _txLen);
     _inFlight = true;

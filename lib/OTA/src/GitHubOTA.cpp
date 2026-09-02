@@ -7,14 +7,23 @@
 #include <Update.h>
 #include <WiFiClientSecure.h>
 
+// Release tags are "vX.Y.Z", but BUILD_GIT_VERSION is whatever `git describe` prints and a controller may report
+// either form; only drop a prefix that is actually there, or "1.2.3" turns into "2.3" and parses as 0.0.0.
+static String strip_version_prefix(const String &version) {
+    if (version.length() > 0 && (version.charAt(0) == 'v' || version.charAt(0) == 'V')) {
+        return version.substring(1);
+    }
+    return version;
+}
+
 GitHubOTA::GitHubOTA(const String &display_version, const String &controller_version, const String &release_url,
                      const phase_callback_t &phase_callback, const progress_callback_t &progress_callback,
                      const String &firmware_name, const String &filesystem_name, const String &controller_firmware_name) {
-    ESP_LOGV("GitHubOTA", "GitHubOTA(version: %s, firmware_name: %s, fetch_url_via_redirect: %d)\n", version.c_str(),
-             firmware_name.c_str(), fetch_url_via_redirect);
+    ESP_LOGV("GitHubOTA", "GitHubOTA(display_version: %s, controller_version: %s, firmware_name: %s)",
+             display_version.c_str(), controller_version.c_str(), firmware_name.c_str());
 
-    _version = from_string(display_version.substring(1).c_str());
-    _controller_version = from_string(controller_version.substring(1).c_str());
+    _version = from_string(strip_version_prefix(display_version).c_str());
+    _controller_version = from_string(strip_version_prefix(controller_version).c_str());
 
     _release_url = release_url;
     _firmware_name = firmware_name;
@@ -72,7 +81,7 @@ void GitHubOTA::checkForUpdates() {
             return;
         }
 
-        version = version.substring(1);
+        version = strip_version_prefix(version);
         _latest_version_string = version;
         semver_free(&_latest_version);
         _latest_version = from_string(version.c_str());
@@ -148,6 +157,6 @@ HTTPUpdateResult GitHubOTA::update_firmware(const String &url) {
 
 void GitHubOTA::setControllerVersion(const String &controller_version) {
     semver_free(&_controller_version);
-    _controller_version = from_string(controller_version.substring(1).c_str());
+    _controller_version = from_string(strip_version_prefix(controller_version).c_str());
     _controller_update_required = update_required(_latest_version, _controller_version);
 }

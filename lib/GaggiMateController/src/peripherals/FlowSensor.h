@@ -30,7 +30,7 @@ class FlowSensor {
     uint8_t _pin;
     flow_amount_callback_t _callback;
     int _ticks = 0;
-    xTaskHandle taskHandle;
+    xTaskHandle taskHandle = nullptr;
     float _currentFlow = 0.0f;
     int _lastRunTicks = 0;
 
