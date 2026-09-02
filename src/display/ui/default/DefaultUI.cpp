@@ -477,14 +477,29 @@ void DefaultUI::setupPanel() {
     applyTheme();
     ui_tick();
 
-    // Polished power-up: ui_init() makes standby active instantly, so stage a black screen and
-    // fade standby in over it (lv_scr_load_anim no-ops when the target is already the active screen).
-    lv_obj_t *standby = lv_scr_act();
-    lv_obj_t *black = lv_obj_create(nullptr);
+    // Polished power-up: ui_init() makes standby active instantly, so cover it with a black
+    // overlay on the top layer and fade that out. Deliberately NOT lv_scr_load_anim with
+    // auto_del: if anything switches screens while such a load is still animating (a wake
+    // inside the first STARTUP_FADE_MS — the controller connecting does it), LVGL 8's
+    // "other load in progress" path deletes act_scr, which the load's start callback has
+    // already pointed at the *incoming* screen, then dereferences it (lv_disp.c) —
+    // a heap use-after-free that killed standby and crashed the UI task.
+    lv_obj_t *black = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(black);
+    lv_obj_set_size(black, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(black, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(black, LV_OPA_COVER, LV_PART_MAIN);
-    lv_scr_load(black);
-    lv_scr_load_anim(standby, LV_SCR_LOAD_ANIM_FADE_ON, STARTUP_FADE_MS, 0, true);
+    lv_obj_clear_flag(black, LV_OBJ_FLAG_CLICKABLE); // early taps must reach the standby screen
+    lv_anim_t fade;
+    lv_anim_init(&fade);
+    lv_anim_set_var(&fade, black);
+    lv_anim_set_exec_cb(&fade, [](void *var, int32_t v) {
+        lv_obj_set_style_bg_opa(static_cast<lv_obj_t *>(var), static_cast<lv_opa_t>(v), LV_PART_MAIN);
+    });
+    lv_anim_set_values(&fade, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_time(&fade, STARTUP_FADE_MS);
+    lv_anim_set_ready_cb(&fade, [](lv_anim_t *a) { lv_obj_del(static_cast<lv_obj_t *>(a->var)); });
+    lv_anim_start(&fade);
 
     lv_task_handler();
 
