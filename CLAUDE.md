@@ -448,3 +448,23 @@ Core dumps: download from the device web UI (System & Updates → Download Core 
 ```
 
 Serial monitor has `esp32_exception_decoder` enabled by default at 115200.
+
+### Internal RAM
+
+Three views, cheapest first:
+
+- `python3 scripts/ram_budget.py` — the static side (IRAM mirror, `.data`, `.bss`) by
+  contributor, from the linker map. No device needed; see the hardware findings above for
+  what the numbers mean and which knobs remain.
+- `GET /api/debug/heap` — the runtime side: boot-stage and brew checkpoints, current internal
+  and PSRAM figures, every task with its stack headroom.
+- **`pio run -e display-heaptrace`** — the display build with ESP-IDF's standalone heap tracer
+  started from a global constructor, so every live allocation carries the call stack that
+  made it. OTA it, use the machine (pull a shot, open the web UI), then
+  `scripts/heap_trace_report.py --host 192.168.1.145 --elf .pio/build/display-heaptrace/firmware.elf`
+  fetches `GET /api/debug/heap/trace` and prints live internal and PSRAM bytes per owning
+  function and per source directory (`POST /api/debug/heap/trace/reset` clears the records to
+  trace a single shot from a clean baseline). The env's sdkconfig block differs from the
+  shared one, so alternating it with `display` re-triggers the ~3 min library compile each
+  way, and every malloc pays a 12-frame backtrace while it runs, so never leave it on a
+  device you judge UX with. It carries the same Origin check as every other write route.
