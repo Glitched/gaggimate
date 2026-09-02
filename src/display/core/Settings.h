@@ -73,6 +73,8 @@ class Settings {
 
     void batchUpdate(const SettingsCallback &callback);
     void save(bool noDelay = false);
+    // Re-read every property from NVS; false if the namespace could not be opened (values keep their defaults).
+    bool reload();
 
     // Getters and setters
     int getTargetSteamTemp() const { return targetSteamTemp.get(); }

@@ -44,6 +44,8 @@
 const String LOG_TAG = F("Controller");
 
 void Controller::setup() {
+    // NVS is initialized by now; the global constructor's read can run before that on Arduino core 3.
+    settings.reload();
     mode = MODE_STANDBY;
 
     // Web assets are served from this partition. LittleFS (not SPIFFS): SPIFFS
