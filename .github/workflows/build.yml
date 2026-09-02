@@ -35,6 +35,15 @@ jobs:
           python-version: '3.11'
       - name: Install PlatformIO Core
         run: pip install platformio==6.1.19
+      - name: Install platform and nanopb generator deps
+        # pioarduino creates ~/.platformio/penv with uv and no pip, so nanopb's own
+        # `python -m pip install protobuf grpcio-tools` silently fails and the build dies
+        # with "No module named 'google'". Install the platform first (creates the penv),
+        # then put the generator deps into that penv with uv.
+        run: |
+          pio pkg install -e controller
+          pip install uv
+          uv pip install --python ~/.platformio/penv/bin/python protobuf grpcio-tools
       - uses: actions/setup-node@v4
         with:
           node-version: 22

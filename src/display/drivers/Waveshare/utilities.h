@@ -13,7 +13,6 @@
 #define WS_BOARD_TFT_PCLK (41)
 
 // Backlight
-#define WS_PWM_CHANNEL 0      // PWM Channel
 #define WS_PWM_FREQ 20000     // PWM frequencyconst
 #define WS_PWM_RESOLUTION 4   // PWM resolution ratio     MAX:13
 #define WS_PWM_DUTYFACTOR 500 // PWM Dutyfactor

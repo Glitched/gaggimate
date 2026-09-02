@@ -18,7 +18,7 @@ void ControllerOTA::init(NimBLEClient *client, const ctr_progress_callback_t &pr
     }
 }
 
-void ControllerOTA::update(WiFiClientSecure &wifi_client, const String &release_url) {
+void ControllerOTA::update(NetworkClientSecure &wifi_client, const String &release_url) {
     if (LittleFS.exists("/board-firmware.bin")) {
         ESP_LOGI("ControllerOTA", "Removing previous update file");
         LittleFS.remove("/board-firmware.bin");
@@ -32,7 +32,7 @@ void ControllerOTA::update(WiFiClientSecure &wifi_client, const String &release_
     file.close();
 }
 
-bool ControllerOTA::downloadFile(WiFiClientSecure &wifi_client, const String &release_url) {
+bool ControllerOTA::downloadFile(NetworkClientSecure &wifi_client, const String &release_url) {
     HTTPClient http;
     if (!http.begin(wifi_client, release_url)) {
         ESP_LOGE("ControllerOTA", "Failed to start http client");
@@ -60,7 +60,7 @@ bool ControllerOTA::downloadFile(WiFiClientSecure &wifi_client, const String &re
         return false;
     }
 
-    WiFiClient *tcp = http.getStreamPtr();
+    NetworkClient *tcp = http.getStreamPtr();
     delay(100);
 
     if (tcp->peek() != 0xE9) {

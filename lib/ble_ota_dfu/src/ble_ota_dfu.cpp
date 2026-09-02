@@ -150,34 +150,12 @@ uint16_t BLEOverTheAirDeviceFirmwareUpdate::write_binary(fs::FS *file_system, co
     }
 }
 
-void BLEOverTheAirDeviceFirmwareUpdate::onNotify(BLECharacteristic *pCharacteristic) {
-#ifdef DEBUG_BLE_OTA_DFU_TX
-    // uint8_t *pData;
-    std::string value = pCharacteristic->getValue();
+
+void BLEOverTheAirDeviceFirmwareUpdate::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) {
+    (void)connInfo;
+    const NimBLEAttValue value = pCharacteristic->getValue();
     uint16_t len = value.length();
-    // pData = pCharacteristic->getData();
-    uint8_t *pData = (uint8_t *)value.data();
-
-    if (pData != NULL) {
-        ESP_LOGD(TAG, "Notify callback for characteristic %s  of data length %d", pCharacteristic->getUUID().toString().c_str(),
-                 len);
-
-        // Print transferred packets
-        Serial.print("TX  ");
-        for (uint16_t i = 0; i < len; i++) {
-            Serial.printf("%02X ", pData[i]);
-        }
-        Serial.println();
-    }
-#endif
-}
-
-void BLEOverTheAirDeviceFirmwareUpdate::onWrite(BLECharacteristic *pCharacteristic) {
-    // uint8_t *pData;
-    std::string value = pCharacteristic->getValue();
-    uint16_t len = value.length();
-    // pData = pCharacteristic->getData();
-    uint8_t *pData = (uint8_t *)value.data();
+    uint8_t *pData = const_cast<uint8_t *>(value.data());
 
     // Check that data have been received
     if (pData != NULL) {
@@ -332,7 +310,7 @@ bool BLE_OTA_DFU::configure_OTA(NimBLEServer *pServer) {
         return false;
     }
 
-    BLECharacteristic *pCharacteristic_BLE_OTA_DFU_RX =
+    NimBLECharacteristic *pCharacteristic_BLE_OTA_DFU_RX =
         pServiceOTA->createCharacteristic(CHARACTERISTIC_OTA_BL_UUID_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
 
     if (pCharacteristic_BLE_OTA_DFU_RX == nullptr) {
@@ -349,8 +327,6 @@ bool BLE_OTA_DFU::configure_OTA(NimBLEServer *pServer) {
         return false;
     }
 
-    // Start the BLE UART service
-    pServiceOTA->start();
     return true;
 }
 
@@ -375,12 +351,12 @@ void BLE_OTA_DFU::start_OTA() {
 
 bool BLE_OTA_DFU::begin(String local_name) {
     // Create the BLE Device
-    BLEDevice::init(local_name.c_str());
+    NimBLEDevice::init(local_name.c_str());
 
     ESP_LOGI(TAG, "Starting BLE UART services");
 
     // Create the BLE Server
-    pServer = BLEDevice::createServer();
+    pServer = NimBLEDevice::createServer();
 
     if (pServer == nullptr) {
         return false;

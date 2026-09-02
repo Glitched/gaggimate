@@ -162,10 +162,10 @@ void DefaultUI::init() {
             rerender = true;
         }
     });
-    pluginManager->on("controller:targetVolume:change", [=](Event const &event) { rerender = true; });
-    pluginManager->on("controller:targetDuration:change", [=](Event const &event) { rerender = true; });
-    pluginManager->on("controller:grindDuration:change", [=](Event const &event) { rerender = true; });
-    pluginManager->on("controller:grindVolume:change", [=](Event const &event) { rerender = true; });
+    pluginManager->on("controller:targetVolume:change", [=, this](Event const &event) { rerender = true; });
+    pluginManager->on("controller:targetDuration:change", [=, this](Event const &event) { rerender = true; });
+    pluginManager->on("controller:grindDuration:change", [=, this](Event const &event) { rerender = true; });
+    pluginManager->on("controller:grindVolume:change", [=, this](Event const &event) { rerender = true; });
     pluginManager->on("controller:process:end", triggerRender);
     pluginManager->on("controller:process:start", triggerRender);
     pluginManager->on("controller:mode:change", [this](Event const &event) {
@@ -512,7 +512,7 @@ void DefaultUI::setupState() {
     updateBrewProcess();
 
     effect_mgr.use_effect([this]() { return currentScreen == SCREEN_ID_INFO_SCREEN; },
-                          [=]() {
+                          [=, this]() {
                               String content = "";
                               if (apActiveUi) {
                                   // WIFI: QR syntax — escape \ ; , : " in the password per the spec.

@@ -7,7 +7,7 @@ static constexpr const char *NVS_PEER_KEY = "peer";
 
 void BleServerTransport::init(const String &deviceName) {
     NimBLEDevice::init(deviceName.c_str());
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setPower(9); // dBm
     NimBLEDevice::setMTU(256); // headroom for batched frames
 
     // Just Works bonding + LE Secure Connections (no IO -> no MITM); keys persist in NVS across reboots.
@@ -29,7 +29,6 @@ void BleServerTransport::init(const String &deviceName) {
     // INFO stays readable without encryption so legacy/pre-pairing readers work.
     _infoChar = service->createCharacteristic(gm_proto::INFO_CHAR_UUID, NIMBLE_PROPERTY::READ);
     _infoChar->setValue(std::string(_info.c_str()));
-    service->start();
 
     // OTA DFU shares the same server (separate service/UUIDs).
     _otaDfu.configure_OTA(_server);
@@ -37,7 +36,7 @@ void BleServerTransport::init(const String &deviceName) {
 
     _deviceName = deviceName;
     _advertising = NimBLEDevice::getAdvertising();
-    _advertising->setScanResponse(true);
+    _advertising->enableScanResponse(true);
     // First boot pairs openly; once a display has bonded, only it may connect.
     loadPairedPeer();
     if (_havePairedPeer) {
@@ -65,10 +64,10 @@ void BleServerTransport::startAdv() {
         return;
     if (_havePairedPeer) {
         // Low-duty directed adverts are LL-dropped by every radio except the paired display's -- invisible to other scanners.
-        _advertising->setAdvertisementType(BLE_GAP_CONN_MODE_DIR);
-        _advertising->start(0, nullptr, &_pairedPeer);
+        _advertising->setConnectableMode(BLE_GAP_CONN_MODE_DIR);
+        _advertising->start(0, &_pairedPeer);
     } else {
-        _advertising->setAdvertisementType(BLE_GAP_CONN_MODE_UND);
+        _advertising->setConnectableMode(BLE_GAP_CONN_MODE_UND);
         _advertising->start();
     }
 }
@@ -77,7 +76,7 @@ void BleServerTransport::applyAdvertisingData() {
     // Primary adv packet (31B): flags + service UUID + lock-owner mfg data; owner must be primary, displays scan passively.
     std::vector<uint8_t> mfg = {0xFF, 0xFF, 0, 0, 0, 0, 0, 0};
     if (_havePairedPeer)
-        memcpy(&mfg[2], _pairedPeer.getNative(), 6);
+        memcpy(&mfg[2], _pairedPeer.getVal(), 6);
     NimBLEAdvertisementData advData;
     advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
     advData.setCompleteServices(NimBLEUUID(gm_proto::SERVICE_UUID));
@@ -133,7 +132,7 @@ void BleServerTransport::loadPairedPeer() {
         return;
     uint8_t buf[7];
     if (prefs.getBytes(NVS_PEER_KEY, buf, sizeof(buf)) == sizeof(buf)) {
-        // Bytes are native order from getNative(); the uint8_t[6] ctor would reverse them, so restore via ble_addr_t.
+        // Bytes are native order from getVal(); the uint8_t[6] ctor would reverse them, so restore via ble_addr_t.
         ble_addr_t addr;
         memcpy(addr.val, buf, 6);
         addr.type = buf[6];
@@ -148,7 +147,7 @@ void BleServerTransport::savePairedPeer(const NimBLEAddress &address) {
     if (!prefs.begin(NVS_NAMESPACE, false))
         return;
     uint8_t buf[7];
-    memcpy(buf, address.getNative(), 6);
+    memcpy(buf, address.getVal(), 6);
     buf[6] = address.getType();
     prefs.putBytes(NVS_PEER_KEY, buf, sizeof(buf));
     prefs.end();
@@ -192,41 +191,36 @@ bool BleServerTransport::send(const uint8_t *data, size_t length) {
     if (!_connected || _txChar == nullptr)
         return false;
     _txChar->setValue(data, length);
-    _txChar->notify(); // NimBLE-Arduino 1.4.0: notify() returns void
+    _txChar->notify(); // false only means nobody is subscribed; the Endpoint's ACK timeout handles that
     return true;
 }
 
 bool BleServerTransport::isConnected() const { return _connected; }
 
-void BleServerTransport::onConnect(NimBLEServer *server) {
+void BleServerTransport::onConnect(NimBLEServer *server, NimBLEConnInfo &connInfo) {
     _connected = true;
+    // The conn handle is what an explicit disconnect() needs when the ping watchdog fires.
+    // Deliberately no startSecurity() here: the display is the sole initiator (dual initiation raced via EALREADY).
+    _connHandle = connInfo.getConnHandle();
     server->stopAdvertising();
     ESP_LOGI(LOG_TAG, "Client connected");
     emitConnection(true);
 }
 
-void BleServerTransport::onConnect(NimBLEServer *server, ble_gap_conn_desc *desc) {
-    // NimBLE 1.x dispatches both onConnect overloads; this one carries the conn
-    // handle we need for an explicit disconnect() when the ping watchdog fires.
-    // Deliberately no startSecurity() here: the display is the sole initiator (dual initiation raced via EALREADY).
-    if (desc)
-        _connHandle = desc->conn_handle;
-}
-
-void BleServerTransport::onAuthenticationComplete(ble_gap_conn_desc *desc) {
-    if (desc == nullptr)
-        return;
-    if (!desc->sec_state.encrypted) {
+void BleServerTransport::onAuthenticationComplete(NimBLEConnInfo &connInfo) {
+    if (!connInfo.isEncrypted()) {
         // Comms characteristics require encryption anyway; drop peers that cannot pair rather than keep a half-usable link.
         ESP_LOGW(LOG_TAG, "Pairing/encryption failed, dropping connection");
-        _server->disconnect(desc->conn_handle);
+        _server->disconnect(connInfo.getConnHandle());
         return;
     }
-    if (desc->sec_state.bonded)
-        adoptPeer(NimBLEAddress(desc->peer_id_addr));
+    if (connInfo.isBonded())
+        adoptPeer(connInfo.getIdAddress());
 }
 
-void BleServerTransport::onDisconnect(NimBLEServer *server) {
+void BleServerTransport::onDisconnect(NimBLEServer *server, NimBLEConnInfo &connInfo, int reason) {
+    (void)connInfo;
+    (void)reason;
     _connected = false;
     _connHandle = BLE_HS_CONN_HANDLE_NONE;
     ESP_LOGI(LOG_TAG, "Client disconnected");
@@ -241,7 +235,8 @@ void BleServerTransport::disconnect() {
     }
 }
 
-void BleServerTransport::onWrite(NimBLECharacteristic *characteristic) {
+void BleServerTransport::onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) {
+    (void)connInfo;
     if (characteristic != _rxChar)
         return;
     NimBLEAttValue value = characteristic->getValue();
@@ -249,6 +244,6 @@ void BleServerTransport::onWrite(NimBLECharacteristic *characteristic) {
         emitData(value.data(), value.length());
 }
 
-void BleServerTransport::onSubscribe(NimBLECharacteristic *pCharacteristic, ble_gap_conn_desc *desc, uint16_t subValue) {
+void BleServerTransport::onSubscribe(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo, uint16_t subValue) {
     emitConnection(true);
 }

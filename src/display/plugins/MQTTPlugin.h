@@ -18,7 +18,7 @@ class MQTTPlugin : public Plugin {
     void publishBrewState(const char *state);
     void publishDiscovery(Controller *controller);
     MQTTClient client;
-    WiFiClient net;
+    NetworkClient net;
 
     float lastTemperature = 0;
 };

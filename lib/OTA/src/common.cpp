@@ -1,13 +1,13 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
-#include <WiFiClientSecure.h>
+#include <NetworkClientSecure.h>
 
 #include "common.h"
 #include "semver.h"
 #include "semver_extensions.h"
 #include <ArduinoJson.h>
 
-String get_updated_base_url_via_redirect(WiFiClientSecure &wifi_client, String &release_url) {
+String get_updated_base_url_via_redirect(NetworkClientSecure &wifi_client, String &release_url) {
     const char *TAG = "get_updated_base_url_via_redirect";
 
     String location = get_redirect_location(wifi_client, release_url);
@@ -26,7 +26,7 @@ String get_updated_base_url_via_redirect(WiFiClientSecure &wifi_client, String &
     return base_url;
 }
 
-String get_redirect_location(WiFiClientSecure &wifi_client, String &initial_url) {
+String get_redirect_location(NetworkClientSecure &wifi_client, String &initial_url) {
     const char *TAG = "get_redirect_location";
     ESP_LOGV(TAG, "initial_url: %s\n", initial_url.c_str());
 
@@ -53,7 +53,7 @@ String get_redirect_location(WiFiClientSecure &wifi_client, String &initial_url)
     return redirect_url;
 }
 
-String get_updated_version_via_txt_file(WiFiClientSecure &wifi_client, String &_release_url) {
+String get_updated_version_via_txt_file(NetworkClientSecure &wifi_client, String &_release_url) {
     const char *TAG = "get_updated_version_via_txt_file";
     HTTPClient https;
     https.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);

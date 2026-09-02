@@ -3,7 +3,7 @@
 
 #include "ControllerOTA.h"
 #include <HTTPUpdate.h>
-#include <WiFiClientSecure.h>
+#include <NetworkClientSecure.h>
 
 #include "semver.h"
 
@@ -16,7 +16,9 @@ constexpr uint8_t PHASE_FINISHED = 4;
 using phase_callback_t = std::function<void(uint8_t phase)>;
 using progress_callback_t = std::function<void(uint8_t phase, int progress)>;
 
-extern const uint8_t x509_crt_imported_bundle_bin_start[] asm("_binary_x509_crt_bundle_start");
+// ESP-IDF's built-in root CA bundle (esp_crt_bundle); core 3 needs the size alongside the start.
+extern const uint8_t x509_crt_bundle_start[] asm("_binary_x509_crt_bundle_start");
+extern const uint8_t x509_crt_bundle_end[] asm("_binary_x509_crt_bundle_end");
 
 class GitHubOTA {
   public:
@@ -48,7 +50,7 @@ class GitHubOTA {
     String _firmware_name;
     String _filesystem_name;
     String _controller_firmware_name;
-    WiFiClientSecure _wifi_client;
+    NetworkClientSecure _wifi_client;
     ControllerOTA _controller_ota;
     phase_callback_t _phase_callback = nullptr;
     progress_callback_t _progress_callback = nullptr;
