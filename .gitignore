@@ -32,3 +32,5 @@ managed_components/
 sdkconfig.defaults
 sdkconfig.*
 /coredump.bin
+/CMakeLists.txt
+/dependencies.lock
