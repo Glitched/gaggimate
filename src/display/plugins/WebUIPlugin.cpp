@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <display/core/Controller.h>
 #include <display/core/HeapCheckpoints.h>
+#include <display/core/HeapTrace.h>
 #include <display/core/ProfileManager.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/GrindProcess.h>
@@ -522,6 +523,9 @@ void WebUIPlugin::setupServer() {
     server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
     server.on("/api/debug/heap", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHeapDebug(request); });
+#ifdef GM_HEAP_TRACE
+    heapTraceRegisterRoutes(server); // display-heaptrace env only: live-allocation dump for scripts/heap_trace_report.py
+#endif
 #ifndef GAGGIMATE_SIM
     // Direct firmware upload. The body handler streams straight into the
     // inactive OTA partition; the request handler runs once the body is done.

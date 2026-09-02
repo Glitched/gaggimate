@@ -289,6 +289,45 @@ paths:
                         core: { type: integer }
                         stackFree: { type: integer, description: Stack high-water mark, bytes never used. }
                         cpuPct: { type: number, description: Share of all run time since boot. }
+  /api/debug/heap/trace:
+    get:
+      summary: Live-allocation dump for scripts/heap_trace_report.py (display-heaptrace env only)
+      description: >
+        Exists only in firmware built from the `display-heaptrace` env, which compiles in ESP-IDF's
+        standalone heap tracer and starts it before initArduino(). Stock builds do not register the
+        route, so their catch-all serves the web app for it instead. Pauses
+        tracing, streams one line per live allocation and resumes tracing when the connection closes
+        (frees during the stream are not recorded, so their blocks linger until the next reset). The
+        first line is a header: `# count=N capacity=N high=N overflowed=0|1 allocs=N frees=N
+        internalFree=N uptimeMs=N`. Every other line is `<size> <address> <pc> ...`: decimal size, hex
+        address of the block, then the hex program counters of the allocating call stack, innermost
+        first, up to 12 frames. `scripts/heap_trace_report.py` symbolizes the frames against the ELF of
+        the same build and reports internal RAM and PSRAM by owner.
+      responses:
+        '200':
+          description: Header line followed by one line per live allocation.
+          content:
+            text/plain:
+              schema: { type: string }
+        '503':
+          description: Tracing could not start at boot (no PSRAM for the record buffer).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/debug/heap/trace/reset:
+    post:
+      summary: Clear the trace records (display-heaptrace env only)
+      description: >
+        Restarts tracing with an empty record buffer, so a dump taken afterwards lists only what was
+        allocated since: the way to see what a shot or a page load leaves behind. Stock builds do not
+        register the route.
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        '503':
+          description: Tracing is not running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /api/core-dump:
     get:
       summary: Download the last crash core dump, if any
