@@ -124,18 +124,20 @@ afterwards).** Read these before flashing it again:
   data cache sizes, cache line size, flash (80 MHz DIO) and PSRAM (80 MHz octal) clocks are
   identical between the old and new images, so the difference is in the traffic on the shared
   flash/PSRAM bus: the hybrid build keeps the Wi-Fi, LWIP, NimBLE host and TLS buffers in
-  PSRAM, and the LCD FIFO only has tens of microseconds of slack. Two 10-line bounce buffers
-  (`bounce_buffer_size_px = 480 * 10` in `LilyGo_RGBPanel.cpp`, 2 x 9.6 KB of internal RAM,
-  ~0.7 ms of slack) took the count to 0 in every window at rest. They cost exactly the heap
-  the PR #9 trims recovered: 35 KB free / 18 KB boot floor / 20 KB largest block (52 / 40 /
-  32 without), so the heap-trace session and the BLE init cost matter again. The refill is a
-  CPU copy from PSRAM in the driver's EOF interrupt, so `CONFIG_LCD_RGB_ISR_IRAM_SAFE` and
-  `CONFIG_GDMA_ISR_IRAM_SAFE` had to go: with the cache off during a flash write the copy
-  would fault instead of waiting. Untested and worth a try (C++ change only, 80 s build):
-  smaller bounce buffers (6 lines = 11.5 KB, 5 lines = 9.6 KB) if the counter still reads 0
-  at rest and through a shot. Shot-log writes still disable the cache for milliseconds, which
-  exceeds any bounce slack; that part needs `CONFIG_SPI_FLASH_AUTO_SUSPEND` (flash chip
-  permitting) or write scheduling. The UI loop itself is fine: `standby exit: 8 frames in
+  PSRAM, and the LCD FIFO only has tens of microseconds of slack. Two bounce buffers
+  (`PANEL_BOUNCE_LINES` in `LilyGo_RGBPanel.cpp`) took the count to 0 in every window at
+  rest, with 10 lines (2 x 9.6 KB, ~0.7 ms of slack: 35 KB free / 18 KB boot floor / 20 KB
+  largest) and with 5 lines (2 x 4.8 KB, ~0.34 ms: 45 / 23 / 32 KB; 52 / 40 / 32 without).
+  5 is the setting; Ryan confirmed the standby screen steady on 10 and the counter judged 5.
+  The refill is a CPU copy from PSRAM in the driver's EOF interrupt, so
+  `CONFIG_LCD_RGB_ISR_IRAM_SAFE` and `CONFIG_GDMA_ISR_IRAM_SAFE` had to go: with the cache
+  off during a flash write the copy would fault instead of waiting. While the cache is off
+  the buffers are not refilled and the panel shows repeating rows instead of a shifted
+  frame; an OTA write makes that continuous for a minute (Ryan saw it on 2026-09-02), and
+  blanking the backlight for the write phase is the cheap fix, not yet done. Shot-log writes
+  still disable the cache for milliseconds, which exceeds any bounce slack; that part needs
+  `CONFIG_SPI_FLASH_AUTO_SUSPEND` (flash chip permitting) or write scheduling. The UI loop
+  itself is fine: `standby exit: 8 frames in
   188 ms`, 40 fps, a full-screen flush ~27 ms. `GET /api/ota` reports `uiFps`, `flushAvgUs`,
   `flushMaxUs`, `panelVsyncHz`, `panelLateVsyncs`, `panelUnderruns` and `heapMinFree` (10 s
   window, also one `render:` line per 10 s over serial), so none of this needs a cable.
@@ -453,8 +455,8 @@ The panel itself is the ceiling: `RGB_MAX_PIXEL_CLOCK_HZ` is 7 MHz in
 `drivers/LilyGo-T-RGB/utilities.h`, and with the configured porches that is a
 **23.5 Hz** physical refresh — the UI's 40 Hz loop already outruns it. Smoother
 motion means a higher pixel clock (10 MHz ≈ 34 Hz, 12 ≈ 40), which risks drift
-and tearing because the framebuffer is in PSRAM; the two 10-line bounce buffers
-added on 2026-09-02 give the DMA ~0.7 ms of slack, not a faster panel. The device had ~57 KB free (largest block
+and tearing because the framebuffer is in PSRAM; the two 5-line bounce buffers
+added on 2026-09-02 give the DMA ~0.34 ms of slack, not a faster panel. The device had ~57 KB free (largest block
 39 KB) on 2026-08-31; removing the WebSocket request path raised that to ~82 KB
 (largest 71 KB) on 2026-09-01, with ~6.7 MB of PSRAM free — `GET /api/ota`
 reports all four figures. Untested.

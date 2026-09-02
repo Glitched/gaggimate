@@ -304,6 +304,10 @@ uint16_t LilyGo_RGBPanel::getBattVoltage() {
 
 // Counts panel refreshes; ISR context, so it only touches an atomic. A rate below the ~23.5 Hz nominal means the
 // RGB DMA is starving on PSRAM and restarting frames (CONFIG_LCD_RGB_RESTART_IN_VSYNC).
+// Lines per bounce buffer: 5 = 2 x 4.8 KB internal RAM, ~0.34 ms of DMA slack at 7 MHz. Judge a change by
+// `panelUnderruns` at rest and through a shot (0 is the target), not by eye.
+static constexpr int PANEL_BOUNCE_LINES = 5;
+
 static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
     // 1.5 refresh periods at the configured pixel clock; esp_timer_get_time() is IRAM-resident.
     panelStats().recordVsync(esp_timer_get_time(), 1500000 / PANEL_NOMINAL_VSYNC_HZ);
@@ -400,14 +404,14 @@ void LilyGo_RGBPanel::initBUS() {
                     },
             },
         .data_width = 16, // RGB565 in parallel mode, thus 16bit in width
-        // Two 10-line bounce buffers in internal RAM (2 x 9.6 KB). The DMA reads those, and the driver's EOF interrupt
-        // refills them from the PSRAM framebuffer, so a stall on the shared flash/PSRAM bus (Wi-Fi, BLE and LWIP
-        // buffers live in PSRAM since the hybrid build) has ~0.7 ms of slack instead of the LCD FIFO's tens of
-        // microseconds. Without them the standby screen jumped every 1-5 s at rest (panelUnderruns 4-5 per 10 s,
-        // 2026-09-02). The refill is a CPU copy from PSRAM, so the LCD/GDMA interrupts must not be IRAM-safe: with
-        // the cache off during a flash write they would fault instead of waiting. The frame size must be a multiple
-        // of the bounce size (480 * 480 / 4800 = 48 chunks).
-        .bounce_buffer_size_px = BOARD_TFT_WIDTH * 10,
+        // Two bounce buffers in internal RAM (2 x PANEL_BOUNCE_LINES lines). The DMA reads those, and the driver's EOF
+        // interrupt refills them from the PSRAM framebuffer, so a stall on the shared flash/PSRAM bus (Wi-Fi, BLE and
+        // LWIP buffers live in PSRAM since the hybrid build) has a few hundred microseconds of slack instead of the
+        // LCD FIFO's tens. Without them the standby screen jumped every 1-5 s at rest (panelUnderruns 4-5 per 10 s,
+        // 2026-09-02); 10 lines (19.2 KB) took that to 0. The refill is a CPU copy from PSRAM, so the LCD/GDMA
+        // interrupts must not be IRAM-safe: with the cache off during a flash write they would fault instead of
+        // waiting. The frame height must be a multiple of the line count.
+        .bounce_buffer_size_px = BOARD_TFT_WIDTH * PANEL_BOUNCE_LINES,
         .dma_burst_size = 64,
         .hsync_gpio_num = BOARD_TFT_HSYNC,
         .vsync_gpio_num = BOARD_TFT_VSYNC,
