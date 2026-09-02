@@ -1,5 +1,7 @@
 #include "WavesharePanel.h"
 #include <display/core/PanelStats.h>
+#include <esp_timer.h>
+static constexpr int64_t PANEL_NOMINAL_VSYNC_HZ = 23; // conservative: late only when a whole frame went missing
 #include <algorithm>
 #include "I2C_Driver.h"
 #include "TCA9554PWR.h"
@@ -274,7 +276,8 @@ uint16_t WavesharePanel::getBattVoltage() {
 // Counts panel refreshes; ISR context, so it only touches an atomic. A rate below the ~23.5 Hz nominal means the
 // RGB DMA is starving on PSRAM and restarting frames (CONFIG_LCD_RGB_RESTART_IN_VSYNC).
 static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
-    panelStats().vsyncs.fetch_add(1, std::memory_order_relaxed);
+    // 1.5 refresh periods at the configured pixel clock; esp_timer_get_time() is IRAM-resident.
+    panelStats().recordVsync(esp_timer_get_time(), 1500000 / PANEL_NOMINAL_VSYNC_HZ);
     return false;
 }
 

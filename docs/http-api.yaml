@@ -402,6 +402,7 @@ paths:
                   flushAvgUs: { type: integer, description: Mean LVGL flush (copy into the framebuffer) duration over the window, microseconds. }
                   flushMaxUs: { type: integer, description: Longest LVGL flush in the window, microseconds. }
                   panelVsyncHz: { type: number, description: RGB panel refresh rate over the window (~23.5 on the T-RGB); lower means the LCD DMA is starving and restarting frames. }
+                  panelLateVsyncs: { type: integer, description: Refreshes in the window that arrived more than 1.5 periods late, i.e. stalled or restarted frames (a flash write while the DMA reads PSRAM, or PSRAM contention). 0 is healthy. }
                   link:
                     type: object
                     description: >-

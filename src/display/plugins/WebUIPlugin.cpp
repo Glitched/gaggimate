@@ -194,9 +194,11 @@ void WebUIPlugin::loop() {
         panelSnapshot = panelStats().snapshot(lastPanelStats == 0 ? 0 : now - lastPanelStats);
         lastPanelStats = now;
         ESP_LOGI("WebUIPlugin",
-                 "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz; heap free %u min %u largest %u",
+                 "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz (%lu late); "
+                 "heap free %u min %u largest %u",
                  panelSnapshot.uiFps, panelSnapshot.flushHz, static_cast<unsigned long>(panelSnapshot.flushAvgUs),
                  static_cast<unsigned long>(panelSnapshot.flushMaxUs), panelSnapshot.vsyncHz,
+                 static_cast<unsigned long>(panelSnapshot.vsyncsLate),
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)));
@@ -1512,6 +1514,7 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
         doc["flushAvgUs"] = panelSnapshot.flushAvgUs;
         doc["flushMaxUs"] = panelSnapshot.flushMaxUs;
         doc["panelVsyncHz"] = panelSnapshot.vsyncHz;
+        doc["panelLateVsyncs"] = panelSnapshot.vsyncsLate;
     }
     doc["controllerTaskHealth"] = controller->isTaskHealthy();
 #ifndef GAGGIMATE_HEADLESS

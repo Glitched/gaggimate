@@ -9,6 +9,8 @@
  */
 #include "LilyGo_RGBPanel.h"
 #include <display/core/PanelStats.h>
+#include <esp_timer.h>
+static constexpr int64_t PANEL_NOMINAL_VSYNC_HZ = 23; // 7 MHz pclk with these porches refreshes at ~23.5 Hz
 #include <algorithm>
 #include "utilities.h"
 #include <display/drivers/common/RGBPanelInit.h>
@@ -303,7 +305,8 @@ uint16_t LilyGo_RGBPanel::getBattVoltage() {
 // Counts panel refreshes; ISR context, so it only touches an atomic. A rate below the ~23.5 Hz nominal means the
 // RGB DMA is starving on PSRAM and restarting frames (CONFIG_LCD_RGB_RESTART_IN_VSYNC).
 static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
-    panelStats().vsyncs.fetch_add(1, std::memory_order_relaxed);
+    // 1.5 refresh periods at the configured pixel clock; esp_timer_get_time() is IRAM-resident.
+    panelStats().recordVsync(esp_timer_get_time(), 1500000 / PANEL_NOMINAL_VSYNC_HZ);
     return false;
 }
 
@@ -389,6 +392,11 @@ void LilyGo_RGBPanel::initBUS() {
                     },
             },
         .data_width = 16, // RGB565 in parallel mode, thus 16bit in width
+        // Two internal-RAM bounce buffers (10 lines each, ~19 KB) feed the DMA instead of PSRAM directly. A flash
+        // write disables the cache and starves a PSRAM-fed DMA, which showed as brief tearing during shots (the
+        // shot log flushes to LittleFS); with bounce buffers the driver keeps streaming and only the refill stalls.
+        // Needs CONFIG_LCD_RGB_ISR_IRAM_SAFE (platformio.ini custom_sdkconfig) so the refill ISR survives flash ops.
+        .bounce_buffer_size_px = BOARD_TFT_WIDTH * 10,
         .dma_burst_size = 64,
         .hsync_gpio_num = BOARD_TFT_HSYNC,
         .vsync_gpio_num = BOARD_TFT_VSYNC,
