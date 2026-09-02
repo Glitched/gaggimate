@@ -4,7 +4,7 @@
 // 'coffee' theme with a light OS (or vice versa) got mismatched charts.
 
 // Matches the color-scheme declared per theme in style.css.
-const DARK_THEMES = new Set(['dark', 'coffee']);
+const DARK_THEMES = new Set(['dark', 'exhalation', 'coffee']);
 
 export function isDarkAppTheme() {
   return DARK_THEMES.has(document.documentElement.getAttribute('data-theme'));

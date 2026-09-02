@@ -10,7 +10,7 @@ export function downloadBlob(blob, filename) {
   document.body.appendChild(a);
   setTimeout(() => {
     a.click();
-    document.body.removeChild(a);
+    a.remove();
     URL.revokeObjectURL(url);
   }, 10);
 }
@@ -24,4 +24,13 @@ export function downloadJson(json, filename) {
 export function downloadText(text, filename, type = 'text/plain') {
   const blob = new Blob([text], { type: `${type};charset=utf-8` });
   downloadBlob(blob, filename);
+}
+
+export async function downloadJsonQueue(files, delayMs = 500) {
+  for (const [index, file] of files.entries()) {
+    downloadJson(file.json, file.filename);
+    if (index < files.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
 }

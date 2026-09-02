@@ -3,8 +3,6 @@ import { signal } from '@preact/signals';
 const DASHBOARD_LAYOUT_KEY = 'dashboardLayout';
 const DASHBOARD_CARD_MODE_KEY = 'dashboardCardMode';
 
-/* global globalThis */
-
 export const DASHBOARD_LAYOUTS = {
   ORDER_FIRST: 'order-first',
   ORDER_LAST: 'order-last',
@@ -538,14 +536,24 @@ const DASHBOARD_SETTING_BINDINGS = [
     get: getMetricsLastRowFill,
     set: setMetricsLastRowFill,
   },
-  { key: 'compactPanels', signal: compactPanelsSignal, get: getCompactPanels, set: setCompactPanels },
+  {
+    key: 'compactPanels',
+    signal: compactPanelsSignal,
+    get: getCompactPanels,
+    set: setCompactPanels,
+  },
   {
     key: 'profileChartHeight',
     signal: profileChartHeightSignal,
     get: getProfileChartHeight,
     set: setProfileChartHeight,
   },
-  { key: 'columnSpacing', signal: columnSpacingSignal, get: getColumnSpacing, set: setColumnSpacing },
+  {
+    key: 'columnSpacing',
+    signal: columnSpacingSignal,
+    get: getColumnSpacing,
+    set: setColumnSpacing,
+  },
   {
     key: 'shotMetricSlots',
     signal: shotMetricSlotsSignal,

@@ -1,7 +1,5 @@
 /** Coordinates analyzer navigation, import actions, status hints, and loading state. */
 
-/* global globalThis */
-
 import { useCallback, useEffect, useRef } from 'preact/hooks';
 import { getAnalyzerIconButtonClasses } from '../analyzerControlStyles';
 import { getShotNotesKey } from '../useShotNotesState';
@@ -71,6 +69,7 @@ export function AnalyzerActionBar({
         direction,
         listSnapshot: shotList,
         targetIndex,
+        debounceMs: 0,
       });
     },
     [onNavigate, shotList],

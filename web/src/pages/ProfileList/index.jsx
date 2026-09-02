@@ -16,12 +16,11 @@ import {
   PointElement,
   TimeScale,
 } from 'chart.js';
-import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 import { ExtendedProfileChart } from '../../components/ExtendedProfileChart.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
-import { ProfileAddCard } from './ProfileAddCard.jsx';
 import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useSearchHotkey } from '../../hooks/useSearchHotkey.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import Card from '../../components/Card.jsx';
@@ -43,6 +42,8 @@ import { Tooltip } from '../../components/Tooltip.jsx';
 import { faTemperatureFull } from '@fortawesome/free-solid-svg-icons/faTemperatureFull';
 import { faClock } from '@fortawesome/free-solid-svg-icons/faClock';
 import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanced';
+import { faEllipsis } from '@fortawesome/free-solid-svg-icons/faEllipsis';
+import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { faSearch } from '@fortawesome/free-solid-svg-icons/faSearch';
 // Deep imports keep the ~2000-icon pack index out of the bundle (matches every
 // other icon import in the codebase).
@@ -50,6 +51,7 @@ import { faAnglesDown } from '@fortawesome/free-solid-svg-icons/faAnglesDown';
 import { faAnglesUp } from '@fortawesome/free-solid-svg-icons/faAnglesUp';
 import { faGripVertical } from '@fortawesome/free-solid-svg-icons/faGripVertical';
 import { buildStatisticsProfileHref } from '../Statistics/utils/statisticsRoute.js';
+import { profilesApi } from '../../services/api.js';
 
 Chart.register(
   LineController,
@@ -596,6 +598,8 @@ export function ProfileList() {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // "/" focuses this field, Escape leaves it.
+  const searchRef = useSearchHotkey();
   const [activeTab, setActiveTab] = useState('extraction');
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef(null);
@@ -612,8 +616,7 @@ export function ProfileList() {
 
   const loadProfiles = async () => {
     try {
-      const response = await apiService.request({ tp: 'req:profiles:list' });
-      setProfiles(response.profiles);
+      setProfiles(await profilesApi.list());
     } catch (error) {
       // Keep whatever list we have; a failed refresh must not strand the page
       // on the loading spinner.
@@ -637,7 +640,7 @@ export function ProfileList() {
         const orderedIds = pendingOrderRef.current;
         if (!orderedIds) return;
         try {
-          await apiService.request({ tp: 'req:profiles:reorder', order: orderedIds });
+          await profilesApi.reorder(orderedIds);
         } catch (e) {
           // optional: log or surface error
         }
@@ -653,9 +656,7 @@ export function ProfileList() {
         clearTimeout(orderDebounceRef.current);
         if (pendingOrderRef.current) {
           // fire and forget; no await during unmount
-          apiService
-            .request({ tp: 'req:profiles:reorder', order: pendingOrderRef.current })
-            .catch(() => {});
+          profilesApi.reorder(pendingOrderRef.current).catch(() => {});
         }
       }
     };
@@ -841,7 +842,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.filter(p => p.id !== id));
       try {
-        await apiService.request({ tp: 'req:profiles:delete', id });
+        await profilesApi.remove(id);
       } catch (error) {
         console.error('Failed to delete profile:', error);
         showToast('Deleting the profile failed.', { type: 'error' });
@@ -856,7 +857,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => ({ ...p, selected: p.id === id })));
       try {
-        await apiService.request({ tp: 'req:profiles:select', id });
+        await profilesApi.select(id);
       } catch (error) {
         console.error('Failed to select profile:', error);
         showToast('Selecting the profile failed.', { type: 'error' });
@@ -871,7 +872,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: true } : p)));
       try {
-        await apiService.request({ tp: 'req:profiles:favorite', id });
+        await profilesApi.favorite(id);
       } catch (error) {
         console.error('Failed to favorite profile:', error);
         showToast('Updating the favorite failed.', { type: 'error' });
@@ -886,7 +887,7 @@ export function ProfileList() {
     async id => {
       setProfiles(prev => prev.map(p => (p.id === id ? { ...p, favorite: false } : p)));
       try {
-        await apiService.request({ tp: 'req:profiles:unfavorite', id });
+        await profilesApi.unfavorite(id);
       } catch (error) {
         console.error('Failed to unfavorite profile:', error);
         showToast('Updating the favorite failed.', { type: 'error' });
@@ -908,7 +909,7 @@ export function ProfileList() {
           delete copy.selected;
           delete copy.favorite;
           copy.label = `${original.label} Copy`;
-          await apiService.request({ tp: 'req:profiles:save', profile: copy });
+          await profilesApi.save(copy);
         }
       } catch (error) {
         console.error('Failed to duplicate profile:', error);
@@ -956,7 +957,7 @@ export function ProfileList() {
           let failed = 0;
           for (const p of parsed) {
             try {
-              await apiService.request({ tp: 'req:profiles:save', profile: p });
+              await profilesApi.save(p);
             } catch (error) {
               // Keep importing the remaining profiles even if one save fails.
               console.error('Failed to save imported profile:', error);
@@ -982,7 +983,7 @@ export function ProfileList() {
     for (const p of profiles) {
       if (!p.selected) {
         try {
-          await apiService.request({ tp: 'req:profiles:delete', id: p.id });
+          await profilesApi.remove(p.id);
         } catch (error) {
           // Keep deleting the rest; the reload below shows what remains.
           console.error('Failed to delete profile:', error);
@@ -1008,16 +1009,24 @@ export function ProfileList() {
   return (
     <>
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h1 className='flex-grow text-2xl font-bold sm:text-3xl'>Profiles</h1>
+        <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Profiles</h1>
       </div>
 
-      <div className='mb-4 flex flex-col items-center gap-2 sm:flex-row'>
+      {/* items-center is scoped to sm: -- unscoped it also applied in column
+          mode, centring the search box and action row on phones while the
+          page title stayed left-aligned. */}
+      <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center'>
         {/* Controls Row */}
-        <div className='flex flex-col items-start gap-3 sm:flex-row sm:items-center'>
+        {/* Grows to the same max-w-md cap as Shot History's search. sm:w-auto made
+            this shrink-to-fit, so .input's clamp(3rem, 20rem, 100%) resolved its
+            100% against a collapsed parent and the field came out content-sized
+            -- 206px against the other page's 448px. */}
+        <div className='flex w-full min-w-0 flex-col items-start gap-3 sm:max-w-md sm:flex-grow sm:flex-row sm:items-center'>
           {/* Search */}
           <label className='input w-full'>
             <FontAwesomeIcon icon={faSearch} />
             <input
+              ref={searchRef}
               type='text'
               placeholder='Search...'
               value={searchTerm}
@@ -1028,44 +1037,96 @@ export function ProfileList() {
             />
           </label>
         </div>
-        <div className='flex flex-grow items-center justify-end gap-2'>
-          <Tooltip content='Export all profiles'>
-            <button
-              id='export-profiles'
-              onClick={onExport}
+        {/* justify-between on phones so the primary action shares the left edge
+            with the title and search, with the overflow menu at the far edge;
+            from sm up the whole cluster sits right of the search field. */}
+        <div className='flex flex-grow items-center justify-between gap-2 sm:justify-end'>
+          {/* Utilities are inline from sm up and behind a ⋯ menu on phones:
+              export/import/delete-all are infrequent and one is destructive, so
+              they don't earn permanent width on a narrow screen. */}
+          {/* Creation is the primary action on this page, so it sits with the
+              other collection-level actions rather than taking a full-bleed row
+              of its own. Kept as a link so middle-click / open-in-new-tab work. */}
+          <a href='/profiles/new' className='btn btn-primary btn-sm' aria-label='Add new profile'>
+            <FontAwesomeIcon icon={faPlus} />
+            <span>New profile</span>
+          </a>
+          <div className='hidden items-center gap-2 sm:flex'>
+            <Tooltip content='Export all profiles'>
+              <button
+                id='export-profiles'
+                onClick={onExport}
+                className='btn btn-ghost btn-sm'
+                aria-label='Export all profiles'
+              >
+                <FontAwesomeIcon icon={faFileExport} />
+              </button>
+            </Tooltip>
+            <Tooltip content='Import profiles'>
+              <label
+                htmlFor='profileImport'
+                className='btn btn-ghost btn-sm cursor-pointer'
+                aria-label='Import profiles'
+              >
+                <FontAwesomeIcon icon={faFileImport} />
+              </label>
+            </Tooltip>
+            <input
+              onChange={onUpload}
+              className='hidden'
+              id='profileImport'
+              type='file'
+              accept='.json,application/json,.tcl'
+              aria-label='Select a JSON file containing profile data to import'
+            />
+            <ConfirmButton
+              onAction={onClear}
+              icon={faTrashCan}
+              tooltip='Delete all profiles'
+              confirmTooltip='Confirm deletion'
+            />
+          </div>
+
+          <div className='dropdown dropdown-end sm:hidden'>
+            <div
+              tabIndex={0}
+              role='button'
               className='btn btn-ghost btn-sm'
-              aria-label='Export all profiles'
+              aria-label='More profile actions'
             >
-              <FontAwesomeIcon icon={faFileExport} />
-            </button>
-          </Tooltip>
-          <Tooltip content='Import profiles'>
-            <label
-              htmlFor='profileImport'
-              className='btn btn-ghost btn-sm cursor-pointer'
-              aria-label='Import profiles'
+              <FontAwesomeIcon icon={faEllipsis} />
+            </div>
+            <ul
+              tabIndex={0}
+              className='dropdown-content menu bg-base-100 rounded-box border-base-300 z-10 mt-1 w-56 border p-2 shadow-lg'
             >
-              <FontAwesomeIcon icon={faFileImport} />
-            </label>
-          </Tooltip>
-          <input
-            onChange={onUpload}
-            className='hidden'
-            id='profileImport'
-            type='file'
-            accept='.json,application/json,.tcl'
-            aria-label='Select a JSON file containing profile data to import'
-          />
-          <ConfirmButton
-            onAction={onClear}
-            icon={faTrashCan}
-            tooltip='Delete all profiles'
-            confirmTooltip='Confirm deletion'
-          />
+              <li>
+                <button onClick={onExport} className='justify-start'>
+                  <FontAwesomeIcon icon={faFileExport} />
+                  <span>Export all profiles</span>
+                </button>
+              </li>
+              <li>
+                <label htmlFor='profileImport' className='cursor-pointer justify-start'>
+                  <FontAwesomeIcon icon={faFileImport} />
+                  <span>Import profiles</span>
+                </label>
+              </li>
+              <li>
+                {/* label= so the two-step confirm is legible here; the icon-only
+                    form relies on a tooltip, which a touch device never shows. */}
+                <ConfirmButton
+                  onAction={onClear}
+                  icon={faTrashCan}
+                  tooltip='Delete all profiles'
+                  confirmTooltip='Confirm deletion'
+                  label='Delete all profiles'
+                  className='w-full justify-start'
+                />
+              </li>
+            </ul>
+          </div>
         </div>
-      </div>
-      <div className='mb-4' aria-label='Add profile'>
-        <ProfileAddCard />
       </div>
       {hasUtilityProfiles && (
         <div role='tablist' className='tabs tabs-border mb-4'>

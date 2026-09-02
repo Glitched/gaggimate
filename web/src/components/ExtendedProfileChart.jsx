@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useMemo, useRef } from 'preact/hooks';
 import { Chart } from 'chart.js';
 import { ChartComponent } from './Chart';
 import { isDarkAppTheme } from '../utils/chartTheme.js';
@@ -199,7 +199,7 @@ function makeChartData(
           title: {},
           ticks: {
             source: 'auto',
-            callback: (value, index, ticks) => {
+            callback: value => {
               return `${value?.toFixed()}s`;
             },
             font: {
@@ -353,13 +353,6 @@ function buildPhaseRanges(phases) {
     start += duration;
   }
   return ranges;
-}
-
-function getPhaseIndexForX(phaseRanges, xValue) {
-  for (let i = 0; i < phaseRanges.length; i++) {
-    if (xValue <= phaseRanges[i].end) return i;
-  }
-  return -1;
 }
 
 export function ExtendedProfileChart({

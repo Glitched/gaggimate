@@ -52,7 +52,8 @@ function getChartData(shot) {
   if (shot.version >= 5 && shot.phaseTransitions) {
     // Use phase transitions directly from header
     phaseTransitions = shot.phaseTransitions.map(t => ({
-      time: (t.sampleIndex * (shot.sampleInterval || 250)) / 1000.0,
+      // v6 logs record real elapsed time per sample; index x interval only holds for v1-v5.
+      time: (data[t.sampleIndex]?.t ?? t.sampleIndex * (shot.sampleInterval || 250)) / 1000.0,
       phaseNumber: t.phaseNumber,
       phaseDisplayNumber: t.phaseNumber + 1,
       phaseName: t.phaseName,
@@ -247,7 +248,7 @@ function getChartData(shot) {
             font: {
               size: window.innerWidth < 640 ? 10 : 12,
             },
-            generateLabels: function (chart) {
+            generateLabels(chart) {
               const original = Chart.defaults.plugins.legend.labels.generateLabels;
               const labels = original.call(this, chart);
 

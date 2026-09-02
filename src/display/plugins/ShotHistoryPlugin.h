@@ -22,7 +22,9 @@ class ShotHistoryPlugin : public Plugin {
 
     void record();
 
-    void handleRequest(JsonDocument &request, JsonDocument &response);
+    // Behind DELETE /api/history/{id} and PUT /api/history/{id}.json (WebUIPlugin).
+    void deleteShot(const String &id);
+    void saveShotNotes(const String &id, const JsonDocument &notes);
 
     // Index management methods
     bool appendToIndex(const ShotIndexEntry &entry);
@@ -42,10 +44,7 @@ class ShotHistoryPlugin : public Plugin {
     int findEntryPosition(File &indexFile, const ShotIndexHeader &header, uint32_t shotId);
     bool readEntryAtPosition(File &indexFile, size_t position, ShotIndexEntry &entry);
     bool writeEntryAtPosition(File &indexFile, size_t position, const ShotIndexEntry &entry);
-    bool createEarlyIndexEntry();
-
     void saveNotes(const String &id, const JsonDocument &notes);
-    void loadNotes(const String &id, JsonDocument &notes);
     void startRecording();
 
     uint16_t getSystemInfo(); // Helper to pack system state bits
@@ -73,7 +72,6 @@ class ShotHistoryPlugin : public Plugin {
 
     bool recording = false;
     bool extendedRecording = false;
-    bool indexEntryCreated = false;     // Track if early index entry was created
     bool shotStartedVolumetric = false; // Track initial volumetric mode
     double currentBrewDelay = 0.0;      // Brew delay (ms) the active shot was started with
     unsigned long shotStart = 0;

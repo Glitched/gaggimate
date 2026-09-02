@@ -18,6 +18,8 @@ class Max31855Thermocouple : public TemperatureSensor {
   public:
     Max31855Thermocouple(int csPin, int misoPin, int sckPin, const temperature_callback_t &callback,
                          const temperature_error_callback_t &error_callback);
+    Max31855Thermocouple(const Max31855Thermocouple &) = delete;
+    Max31855Thermocouple &operator=(const Max31855Thermocouple &) = delete;
     float read() override;
     bool isErrorState() override;
 
@@ -43,7 +45,7 @@ class Max31855Thermocouple : public TemperatureSensor {
     temperature_error_callback_t error_callback;
 
     const char *LOG_TAG = "Max31855Thermocouple";
-    static void monitorTask(void *arg);
+    [[noreturn]] static void monitorTask(void *arg);
 };
 
 #endif // MAX31855THERMOCOUPLE_H

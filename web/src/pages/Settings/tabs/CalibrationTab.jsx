@@ -7,6 +7,7 @@ import Section from '../../../components/Card.jsx';
 import PumpFlowCalibration from '../../../components/PumpFlowCalibration/index.jsx';
 import { SettingsFormField } from '../../../components/SettingsFormField.jsx';
 import { showToast } from '../../../services/toast.js';
+import { machineApi } from '../../../services/api.js';
 
 // An autotune runs on the machine for minutes while the user may browse other
 // tabs. Keep the run state and its event listeners at module level so
@@ -39,17 +40,16 @@ export function CalibrationTab({ formData, setField }) {
   const [autotuneSamples, setAutotuneSamples] = useState(6);
   const [autotuneWattage, setAutotuneWattage] = useState(1360);
 
-  const onStartAutotune = useCallback(() => {
+  const onStartAutotune = useCallback(async () => {
     try {
-      apiService.send({
-        tp: 'req:autotune-start',
+      await machineApi.autotune({
         time: autotuneTime,
         samples: autotuneSamples,
         wattage: autotuneWattage,
       });
     } catch (error) {
       console.error('Failed to start autotune:', error);
-      showToast('Machine not connected — could not start the autotune.', { type: 'error' });
+      showToast(`Could not start the autotune: ${error.message}`, { type: 'error' });
       return;
     }
     autotuneFailed.value = false;

@@ -1,7 +1,5 @@
 /** Coordinates analyzer state, loading, matching, and compare workflows. */
 
-/* global globalThis */
-
 import { useState, useEffect, useContext, useRef, useCallback } from 'preact/hooks';
 import { useRoute } from 'preact-iso';
 import { LibraryPanel } from '../components/LibraryPanel';
@@ -32,7 +30,6 @@ import {
   getNextDirectionalSelection,
   getShotSelectionProfileName,
   hasLoadedShotPayload,
-  isAlreadyLoadedDeepLink,
   loadPreferredAutoMatchedProfile,
   loadShotSelection,
   normalizeMatchedProfileSource,
@@ -93,6 +90,10 @@ export function ShotAnalyzer() {
   const compareSelectionTimerRef = useRef(null);
   const primarySelectionRequestIdRef = useRef(0);
   const compareSelectionRequestIdRef = useRef(0);
+  const primarySelectionAbortRef = useRef(null);
+  const handledDeepLinkKeyRef = useRef('');
+  const clearPendingPrimarySelectionRef = useRef(null);
+  const handleShotSelectRef = useRef(null);
   const currentShotRef = useRef(currentShot);
   const compareShotsRef = useRef(compareShots);
   const pendingPrimarySelectionRef = useRef(pendingPrimarySelection);
@@ -114,6 +115,16 @@ export function ShotAnalyzer() {
     pendingCompareSelectionRef.current = pendingCompareSelection;
   }, [pendingCompareSelection]);
 
+  const updateCurrentShot = useCallback(nextShot => {
+    currentShotRef.current = nextShot;
+    setCurrentShot(nextShot);
+  }, []);
+
+  const updatePendingPrimarySelection = useCallback(nextSelection => {
+    pendingPrimarySelectionRef.current = nextSelection;
+    setPendingPrimarySelection(nextSelection);
+  }, []);
+
   const clearPrimarySelectionTimer = useCallback(() => {
     if (primarySelectionTimerRef.current) {
       clearTimeout(primarySelectionTimerRef.current);
@@ -126,6 +137,16 @@ export function ShotAnalyzer() {
       clearTimeout(compareSelectionTimerRef.current);
       compareSelectionTimerRef.current = null;
     }
+  }, []);
+
+  const abortPrimarySelectionLoad = useCallback(requestId => {
+    const activeRequest = primarySelectionAbortRef.current;
+    if (!activeRequest) return false;
+    if (requestId != null && activeRequest.requestId !== requestId) return false;
+
+    primarySelectionAbortRef.current = null;
+    activeRequest.controller?.abort();
+    return true;
   }, []);
 
   const cancelPrimaryProfileSearch = useCallback(() => {
@@ -146,10 +167,11 @@ export function ShotAnalyzer() {
 
   const clearPendingPrimarySelection = useCallback(() => {
     clearPrimarySelectionTimer();
+    abortPrimarySelectionLoad();
     primarySelectionRequestIdRef.current += 1;
-    setPendingPrimarySelection(null);
+    updatePendingPrimarySelection(null);
     setLoading(false);
-  }, [clearPrimarySelectionTimer]);
+  }, [abortPrimarySelectionLoad, clearPrimarySelectionTimer, updatePendingPrimarySelection]);
 
   const clearPendingCompareSelection = useCallback(() => {
     clearCompareSelectionTimer();
@@ -182,12 +204,20 @@ export function ShotAnalyzer() {
 
   // Cleanup pending profile search on unmount
   useEffect(() => {
+    const handleBeforeUnload = () => {
+      abortPrimarySelectionLoad();
+    };
+    globalThis.addEventListener?.('beforeunload', handleBeforeUnload);
+
     return () => {
+      globalThis.removeEventListener?.('beforeunload', handleBeforeUnload);
+      primarySelectionRequestIdRef.current += 1;
+      abortPrimarySelectionLoad();
       if (profileSearchTimerRef.current) clearTimeout(profileSearchTimerRef.current);
       if (primarySelectionTimerRef.current) clearTimeout(primarySelectionTimerRef.current);
       if (compareSelectionTimerRef.current) clearTimeout(compareSelectionTimerRef.current);
     };
-  }, []);
+  }, [abortPrimarySelectionLoad]);
 
   // --- Effects ---
   useEffect(() => {
@@ -300,13 +330,13 @@ export function ShotAnalyzer() {
       const currentShotKey = previousShot ? getShotIdentityKey(previousShot) : '';
 
       clearPrimarySelectionTimer();
-      setPendingPrimarySelection(null);
+      updatePendingPrimarySelection(null);
 
       if (!preserveCompare && currentShotKey && nextShotKey && currentShotKey !== nextShotKey) {
         resetCompareState();
       }
 
-      setCurrentShot(shotWithMetadata);
+      updateCurrentShot(shotWithMetadata);
       setCurrentShotName(name);
 
       cancelPrimaryProfileSearch();
@@ -398,59 +428,20 @@ export function ShotAnalyzer() {
 
       setLoading(false);
     },
-    [cancelPrimaryProfileSearch, clearPrimarySelectionTimer, importMode, resetCompareState],
+    [
+      cancelPrimaryProfileSearch,
+      clearPrimarySelectionTimer,
+      importMode,
+      resetCompareState,
+      updateCurrentShot,
+      updatePendingPrimarySelection,
+    ],
   );
 
-  const handledDeepLinkRef = useRef(null);
-
-  useEffect(() => {
-    const loadDeepLink = async () => {
-      if (!params.source || !params.id) return;
-
-      // Handle each deep link exactly once. This effect used to depend on
-      // currentShot, so every later library selection re-ran it and re-loaded
-      // the URL's shot — reverting whatever the user had just picked.
-      const deepLinkKey = `${params.source}/${params.id}`;
-      if (handledDeepLinkRef.current === deepLinkKey) return;
-      handledDeepLinkRef.current = deepLinkKey;
-
-      let serviceSource = params.source;
-      if (params.source === 'internal') serviceSource = 'gaggimate';
-      if (params.source === 'external') serviceSource = 'browser';
-
-      if (
-        isAlreadyLoadedDeepLink({
-          currentShot: currentShotRef.current,
-          params: { id: params.id },
-          serviceSource,
-        })
-      )
-        return;
-
-      try {
-        setLoading(true);
-        const shot = await libraryService.loadShot(params.id, serviceSource);
-
-        if (shot) {
-          // URL sources are aliases; normalize them before the analyzer stores the shot.
-          shot.source = serviceSource;
-          commitPrimaryShotLoad(shot, shot.name || params.id);
-        } else {
-          setLoading(false);
-        }
-      } catch (e) {
-        console.error('Deep Link Load Failed:', e);
-        setLoading(false);
-      }
-    };
-
-    if (apiService) {
-      loadDeepLink();
-    }
-  }, [apiService, commitPrimaryShotLoad, params.id, params.source]);
-
   const tryLoadPrimarySelection = useCallback(
-    async (requestId, selectionRequest) => {
+    async (requestId, selectionRequest, signal) => {
+      if (requestId !== primarySelectionRequestIdRef.current) return false;
+
       const { item, name, preserveCompare } = selectionRequest;
       const targetShotKey = getShotIdentityKey(item);
       const activeCompareShot =
@@ -458,7 +449,7 @@ export function ShotAnalyzer() {
       const activeCompareShotKey = activeCompareShot ? getShotIdentityKey(activeCompareShot) : '';
 
       if (!targetShotKey) {
-        setPendingPrimarySelection(null);
+        updatePendingPrimarySelection(null);
         setLoading(false);
         return false;
       }
@@ -466,50 +457,63 @@ export function ShotAnalyzer() {
       if (preserveCompare && activeCompareShotKey && targetShotKey === activeCompareShotKey) {
         const nextSelection = getNextDirectionalSelection(selectionRequest);
         if (nextSelection) {
-          setPendingPrimarySelection({
+          updatePendingPrimarySelection({
             shot: nextSelection.item,
             name: nextSelection.name,
           });
-          return tryLoadPrimarySelection(requestId, nextSelection);
+          return tryLoadPrimarySelection(requestId, nextSelection, signal);
         }
 
-        setPendingPrimarySelection(null);
+        abortPrimarySelectionLoad(requestId);
+        updatePendingPrimarySelection(null);
         setLoading(false);
         return false;
       }
 
       try {
         setLoading(true);
-        const { shotWithMetadata, shotName } = await loadShotSelection({ item, importMode });
+        const { shotWithMetadata, shotName } = await loadShotSelection({
+          item,
+          importMode,
+          signal,
+        });
         if (requestId !== primarySelectionRequestIdRef.current) return false;
 
+        abortPrimarySelectionLoad(requestId);
         commitPrimaryShotLoad(shotWithMetadata, name || shotName, selectionRequest);
         return true;
       } catch (error) {
         if (requestId !== primarySelectionRequestIdRef.current) return false;
+        if (error?.name === 'AbortError') {
+          abortPrimarySelectionLoad(requestId);
+          updatePendingPrimarySelection(null);
+          setLoading(false);
+          return false;
+        }
 
         console.warn('Failed to load shot:', error);
 
         const nextSelection = getNextDirectionalSelection(selectionRequest);
         if (nextSelection) {
-          setPendingPrimarySelection({
+          updatePendingPrimarySelection({
             shot: nextSelection.item,
             name: nextSelection.name,
           });
-          return tryLoadPrimarySelection(requestId, nextSelection);
+          return tryLoadPrimarySelection(requestId, nextSelection, signal);
         }
 
-        setPendingPrimarySelection(null);
+        abortPrimarySelectionLoad(requestId);
+        updatePendingPrimarySelection(null);
         setLoading(false);
         return false;
       }
     },
-    [commitPrimaryShotLoad, importMode],
+    [abortPrimarySelectionLoad, commitPrimaryShotLoad, importMode, updatePendingPrimarySelection],
   );
 
   const launchPrimarySelectionLoad = useCallback(
-    (requestId, selectionRequest) => {
-      tryLoadPrimarySelection(requestId, selectionRequest).catch(error => {
+    (requestId, selectionRequest, signal) => {
+      tryLoadPrimarySelection(requestId, selectionRequest, signal).catch(error => {
         console.error('Primary selection load failed:', error);
       });
     },
@@ -529,35 +533,81 @@ export function ShotAnalyzer() {
 
       if (targetShotKey === currentShotKey) {
         clearPrimarySelectionTimer();
+        abortPrimarySelectionLoad();
         primarySelectionRequestIdRef.current += 1;
-        setPendingPrimarySelection(null);
+        updatePendingPrimarySelection(null);
         setLoading(false);
         return;
       }
 
+      abortPrimarySelectionLoad();
       const requestId = ++primarySelectionRequestIdRef.current;
       clearPrimarySelectionTimer();
-      setPendingPrimarySelection({
+      updatePendingPrimarySelection({
         shot: selectionRequest.item,
         name: selectionRequest.name,
       });
+      const controller =
+        typeof globalThis.AbortController === 'function' ? new globalThis.AbortController() : null;
+      primarySelectionAbortRef.current = { requestId, controller };
+      const signal = controller?.signal;
 
       if (
         hasLoadedShotPayload(selectionRequest.item) ||
         !currentCommittedShot ||
         selectionRequest.debounceMs <= 0
       ) {
-        launchPrimarySelectionLoad(requestId, selectionRequest);
-        return;
+        launchPrimarySelectionLoad(requestId, selectionRequest, signal);
+        return requestId;
       }
 
       primarySelectionTimerRef.current = setTimeout(() => {
         primarySelectionTimerRef.current = null;
-        launchPrimarySelectionLoad(requestId, selectionRequest);
+        launchPrimarySelectionLoad(requestId, selectionRequest, signal);
       }, selectionRequest.debounceMs);
+      return requestId;
     },
-    [clearPrimarySelectionTimer, launchPrimarySelectionLoad, normalizePrimarySelectionRequest],
+    [
+      abortPrimarySelectionLoad,
+      clearPrimarySelectionTimer,
+      launchPrimarySelectionLoad,
+      normalizePrimarySelectionRequest,
+      updatePendingPrimarySelection,
+    ],
   );
+
+  clearPendingPrimarySelectionRef.current = clearPendingPrimarySelection;
+  handleShotSelectRef.current = handleShotSelect;
+
+  useEffect(() => {
+    if (!params.source || !params.id) {
+      handledDeepLinkKeyRef.current = '';
+      return undefined;
+    }
+    if (!apiService) return undefined;
+
+    let serviceSource = params.source;
+    if (params.source === 'internal') serviceSource = 'gaggimate';
+    if (params.source === 'external') serviceSource = 'browser';
+
+    const deepLinkKey = `${serviceSource}:${params.id}`;
+    if (handledDeepLinkKeyRef.current === deepLinkKey) return undefined;
+    handledDeepLinkKeyRef.current = deepLinkKey;
+
+    const requestId = handleShotSelectRef.current({
+      item: {
+        id: params.id,
+        source: serviceSource,
+      },
+      name: params.id,
+      debounceMs: 0,
+    });
+
+    return () => {
+      if (requestId == null || requestId !== primarySelectionRequestIdRef.current) return;
+      clearPendingPrimarySelectionRef.current();
+    };
+  }, [apiService, params.id, params.source]);
 
   const handleProfileLoad = (data, name, source) => {
     cancelPrimaryProfileSearch();
@@ -842,7 +892,7 @@ export function ShotAnalyzer() {
     const previousPrimaryProfileName = currentProfileName;
     const previousPrimaryProfileSelectionMode = currentProfileSelectionMode;
 
-    setCurrentShot(secondaryEntry.shot);
+    updateCurrentShot(secondaryEntry.shot);
     setCurrentShotName(secondaryEntry.shotName || getShotDisplayName(secondaryEntry.shot));
     setCurrentProfile(secondaryEntry.profile || null);
     setCurrentProfileName(secondaryEntry.profileName || 'No Profile Loaded');
@@ -907,7 +957,7 @@ export function ShotAnalyzer() {
     <div className='shot-analyzer-page pb-20'>
       {/* Header */}
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Deep Dive Shot Analyzer</h2>
+        <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Deep Dive Shot Analyzer</h1>
       </div>
 
       <div className='w-full'>
@@ -926,7 +976,7 @@ export function ShotAnalyzer() {
               clearPendingCompareSelection();
               resetCompareState({ disableMode: true });
               cancelPrimaryProfileSearch();
-              setCurrentShot(null);
+              updateCurrentShot(null);
               setCurrentShotName('No Shot Loaded');
               setCurrentProfile(null);
               setCurrentProfileName('No Profile Loaded');
@@ -982,6 +1032,7 @@ export function ShotAnalyzer() {
             compareCollectionWithAccents={compareCollectionWithAccents}
             compareTargetDisplayMode={compareTargetDisplayMode}
             currentShot={currentShot}
+            currentProfile={currentProfile}
             handleSwapCompareSlots={handleSwapCompareSlots}
             isCompareActive={isCompareActive}
             mobileSubpageNavigation={mobileSubpageNavigation}

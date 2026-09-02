@@ -1,4 +1,5 @@
 #include "Endpoint.h"
+#include <cassert>
 #include <cstring>
 #include <esp_log.h>
 #include <pb_decode.h>
@@ -125,8 +126,8 @@ void Endpoint::sendAck(uint32_t id) {
     frame.payloads_count = 0;
     uint8_t buf[16];
     size_t len = 0;
-    if (encodeFrame(frame, buf, sizeof(buf), &len))
-        _transport.send(buf, len);
+    if (encodeFrame(frame, buf, sizeof(buf), &len) && !_transport.send(buf, len))
+        _stats.sendFailures++;
 }
 
 void Endpoint::pump() {
@@ -143,10 +144,16 @@ void Endpoint::pump() {
         }
         if (_retries >= MAX_RETRIES) {
             // Give up; coalesced fresh values (or the next periodic update) will
-            // resend. The in-flight slot frees up for new traffic.
+            // resend. The in-flight slot frees up for new traffic. Counted and
+            // logged: a give-up is a command the peer never received.
+            _stats.giveUps++;
+            ESP_LOGW(ENDPOINT_TAG, "Gave up on frame %u after %u retries", static_cast<unsigned>(_inFlightId),
+                     static_cast<unsigned>(_retries));
             _inFlight = false;
         } else {
-            _transport.send(_txBuf, _txLen);
+            if (!_transport.send(_txBuf, _txLen))
+                _stats.sendFailures++;
+            _stats.retransmits++;
             _sentAt = now;
             _retries++;
             unlock();
@@ -176,6 +183,7 @@ void Endpoint::pump() {
 
     if (!encodeFrame(_txFrame, _txBuf, BUFFER_SIZE, &_txLen)) {
         ESP_LOGE(ENDPOINT_TAG, "Failed to encode outbound frame (%u payloads); re-queuing", count);
+        _stats.encodeFailures++;
         // The payloads were already popped -- put them back (coalescing keeps the
         // latest value if a newer one arrived) so nothing is silently lost. The
         // reserved id is simply skipped; the receiver only needs monotonic ids.
@@ -185,8 +193,11 @@ void Endpoint::pump() {
         unlock();
         return;
     }
+    assert(_txLen <= BUFFER_SIZE); // pb_ostream_from_buffer bounds the encode; keep the send honest
 
-    _transport.send(_txBuf, _txLen);
+    if (!_transport.send(_txBuf, _txLen))
+        _stats.sendFailures++;
+    _stats.txFrames++;
     _inFlight = true;
     _inFlightId = _txFrame.id;
     _sentAt = now;
@@ -204,6 +215,7 @@ void Endpoint::handleData(const uint8_t *data, size_t length) {
 
     const uint32_t id = _rxFrame.id;
     const uint32_t ack = _rxFrame.ack;
+    _stats.rxFrames++;
 
     bool duplicate = false;
     lock();
@@ -215,11 +227,15 @@ void Endpoint::handleData(const uint8_t *data, size_t length) {
             _lastRttMs = rtt;
             _smoothedRttMs = _rttValid ? (_smoothedRttMs * 7 + rtt) / 8 : rtt;
             _rttValid = true;
+            if (rtt > _stats.rttMaxMs)
+                _stats.rttMaxMs = rtt;
         }
         _inFlight = false;
     }
-    if (id != 0 && id <= _lastRxId)
+    if (id != 0 && id <= _lastRxId) {
         duplicate = true; // retransmit of an already-processed frame
+        _stats.duplicates++;
+    }
     unlock();
 
     if (id != 0 && duplicate) {
@@ -237,6 +253,7 @@ void Endpoint::handleData(const uint8_t *data, size_t length) {
     if (n > 0) {
         if (static_cast<pb_size_t>(uxQueueSpacesAvailable(_rxQueue)) < n) {
             accepted = false;
+            _stats.rxBackpressure++;
         } else {
             for (pb_size_t i = 0; i < n; i++) {
                 DispatchEvent event;

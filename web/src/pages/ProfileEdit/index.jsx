@@ -19,6 +19,7 @@ import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
 import { showToast } from '../../services/toast.js';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
+import { ApiError, profilesApi } from '../../services/api.js';
 
 Chart.register(
   LineController,
@@ -104,10 +105,10 @@ export function ProfileEdit() {
         setLoading(false);
       } else if (connected.value) {
         try {
-          const response = await apiService.request({ tp: 'req:profiles:load', id: params.id });
+          const profile = await profilesApi.load(params.id);
           setInitialData({
-            ...response.profile,
-            phases: Array.isArray(response.profile?.phases) ? response.profile.phases : [],
+            ...profile,
+            phases: Array.isArray(profile?.phases) ? profile.phases : [],
           });
         } catch (error) {
           console.error('Failed to load profile:', error);
@@ -122,15 +123,21 @@ export function ProfileEdit() {
     async data => {
       setSaving(true);
       try {
-        const response = await apiService.request({ tp: 'req:profiles:save', profile: data });
-        setInitialData(response.profile);
+        const saved = await profilesApi.save(data);
+        setInitialData(saved);
         location.route('/profiles');
       } catch (error) {
         // Leave the form intact so the user's edits survive a failed save.
         console.error('Failed to save profile:', error);
-        showToast('Saving the profile failed — check the machine connection and try again.', {
-          type: 'error',
-        });
+        // A 4xx carries the device's reason (422 on validation); anything else
+        // is a connectivity problem the reason wouldn't help with.
+        const reason = error instanceof ApiError && error.status < 500 ? error.message : null;
+        showToast(
+          reason
+            ? `Saving the profile failed: ${reason}`
+            : 'Saving the profile failed — check the machine connection and try again.',
+          { type: 'error' },
+        );
       } finally {
         setSaving(false);
       }
@@ -161,7 +168,10 @@ export function ProfileEdit() {
         <div className='alert alert-error max-w-md'>
           <span>This profile could not be loaded from the machine.</span>
         </div>
-        <a href='/profiles' className='btn btn-outline'>
+        <a
+          href='/profiles'
+          className='btn btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none'
+        >
           Back to Profiles
         </a>
       </div>
@@ -171,9 +181,9 @@ export function ProfileEdit() {
   return (
     <>
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>
+        <h1 className='flex-grow text-2xl font-light sm:text-3xl'>
           {params.id === 'new' ? 'Create Profile' : `Edit ${data.label}`}
-        </h2>
+        </h1>
         {data?.type === 'standard' && pressureAvailable.value && (
           <button
             onClick={() => onConvert()}

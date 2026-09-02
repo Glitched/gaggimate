@@ -86,9 +86,29 @@ class Endpoint {
     uint32_t lastLatencyMs() const { return _lastRttMs; }
     bool hasLatency() const { return _rttValid; }
 
+    // Link health counters since boot, for the device's status endpoint. Written on
+    // the transport thread next to the state they describe; read lock-free (each is
+    // an aligned 32-bit value, and a snapshot one frame stale is fine).
+    struct LinkStats {
+        uint32_t txFrames = 0;       // reliable frames handed to the transport
+        uint32_t rxFrames = 0;       // frames decoded from the transport
+        uint32_t retransmits = 0;    // in-flight frame re-sent after ACK_TIMEOUT_MS
+        uint32_t giveUps = 0;        // in-flight frame abandoned after MAX_RETRIES -- a lost command
+        uint32_t sendFailures = 0;   // the transport refused a write (e.g. BLE buffers exhausted)
+        uint32_t encodeFailures = 0; // frame did not fit the buffer; payloads re-queued
+        uint32_t duplicates = 0;     // peer retransmit of a frame we had already processed
+        uint32_t rxBackpressure = 0; // inbound frame left un-ACKed because the dispatch queue was full
+        uint32_t rttMaxMs = 0;       // worst RTT sample
+    };
+    LinkStats stats() const { return _stats; }
+
   private:
     static constexpr size_t QUEUE_CAPACITY = 16;
-    static constexpr size_t MAX_KEYS = 256; // >= which_content_max * MAX_DEVICES
+    static constexpr size_t MAX_KEYS = 256;
+    // coalescingKey() = which_content * MAX_DEVICES + index, so the highest Payload oneof tag bounds the key
+    // space. error (26) is the highest tag today; move this to the new maximum when the proto grows past it.
+    static_assert((gaggimate_Payload_error_tag + 1) * gm_proto::MAX_DEVICES <= MAX_KEYS,
+                  "MAX_KEYS is too small for coalescingKey(); the queue would silently reject those payloads");
     static constexpr size_t BUFFER_SIZE = 256;
     static constexpr size_t MAX_PAYLOADS_PER_FRAME = 6; // matches Frame.payloads max_count
     static constexpr unsigned long ACK_TIMEOUT_MS = 150;
@@ -118,6 +138,7 @@ class Endpoint {
     uint32_t _lastRttMs = 0;
     uint32_t _smoothedRttMs = 0;
     bool _rttValid = false;
+    LinkStats _stats{};
 
     uint32_t _nextId = 1; // next outbound frame id (0 is reserved for ACKs)
     uint32_t _lastRxId = 0;

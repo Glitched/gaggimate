@@ -43,7 +43,7 @@ export function EmptyState({ loading }) {
         <div className='app-card-surface w-full space-y-6 rounded-xl p-8 text-left'>
           <div className='border-base-content/10 space-y-2 border-b pb-4 text-center'>
             <h2 className='text-base-content text-2xl font-bold'>No Shot Loaded</h2>
-            <p className='text-base-content text-sm opacity-70'>
+            <p className='text-base-content/70 text-base'>
               Import a shot file or select one from your library to start analyzing.
             </p>
           </div>
@@ -56,15 +56,15 @@ export function EmptyState({ loading }) {
 
             <div className='flex-1'>
               {/* REMOVED HOVER EFFECT */}
-              <h3 className='text-base-content mb-1 text-sm font-bold'>GaggiMate (GM)</h3>
-              <p className='text-base-content text-xs leading-relaxed'>
+              <h3 className='text-base-content mb-1 text-base font-semibold'>GaggiMate (GM)</h3>
+              <p className='text-base-content/70 text-sm leading-relaxed'>
                 Your saved shots and profiles directly from the GaggiMate internal storage.
               </p>
             </div>
           </div>
 
           {/* Divider - Subtle */}
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
           {/* VIEW Section */}
           <div className='flex items-start gap-4'>
@@ -73,8 +73,10 @@ export function EmptyState({ loading }) {
             </div>
 
             <div className='flex-1'>
-              <h3 className='text-base-content mb-1 text-sm font-bold'>Temporary View (VIEW)</h3>
-              <p className='text-base-content text-xs leading-relaxed'>
+              <h3 className='text-base-content mb-1 text-base font-semibold'>
+                Temporary View (VIEW)
+              </h3>
+              <p className='text-base-content/70 text-sm leading-relaxed'>
                 Opens imported external shots and profiles temporarily without saving them to the
                 browser library.
               </p>
@@ -82,7 +84,7 @@ export function EmptyState({ loading }) {
           </div>
 
           {/* Divider - Subtle */}
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
           {/* WEB Section */}
           <div className='flex items-start gap-4'>
@@ -92,25 +94,25 @@ export function EmptyState({ loading }) {
 
             <div className='flex-1'>
               {/* REMOVED HOVER EFFECT */}
-              <h3 className='text-base-content mb-1 text-sm font-bold'>
+              <h3 className='text-base-content mb-1 text-base font-semibold'>
                 Local Browser Storage (WEB)
               </h3>
-              <div className='text-base-content text-xs leading-relaxed'>
+              <div className='text-base-content/70 text-sm leading-relaxed'>
                 Stores imported external shots and profiles locally in this browser on this device.
                 They are not automatically available in other browsers or on other devices.
               </div>
             </div>
           </div>
 
-          <div className='text-base-content text-xs leading-relaxed'>
+          <div className='text-base-content/70 text-sm leading-relaxed'>
             <span className='block'>
               Drag and drop files onto the status bar or use the import icons in the shot and
               profile badges.
             </span>
             <span className='mt-1 block'>
               Use the status bar toggle to switch between{' '}
-              <span className='text-base-content font-bold'>View temporarily</span> and{' '}
-              <span className='font-bold' style={{ color: analyzerUiColors.sourceBadgeWebText }}>
+              <span className='text-base-content font-medium'>View temporarily</span> and{' '}
+              <span className='font-medium' style={{ color: analyzerUiColors.sourceBadgeWebText }}>
                 Save to Browser
               </span>{' '}
               before importing.
@@ -118,9 +120,9 @@ export function EmptyState({ loading }) {
             <span className='mt-1 block'>Bulk upload and download are supported.</span>
           </div>
 
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
-          <div className='grid gap-2 text-xs leading-relaxed sm:grid-cols-3'>
+          <div className='text-base-content/70 grid gap-2 text-sm leading-relaxed sm:grid-cols-3'>
             <div className='text-base-content'>
               <span className='bg-base-content/8 border-base-content/10 mr-2 inline-flex min-w-6 items-center justify-center rounded-md border px-1.5 py-0.5 font-bold'>
                 X

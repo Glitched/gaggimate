@@ -7,6 +7,7 @@
 #include <cmath>
 #include <ctime>
 #include <display/config.h>
+#include <display/core/HeapCheckpoints.h>
 #include <display/core/constants.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/GrindProcess.h>
@@ -44,6 +45,9 @@
 const String LOG_TAG = F("Controller");
 
 void Controller::setup() {
+    // NVS is initialized by now; the global constructor's read can run before that on Arduino core 3.
+    settings.reload();
+    heapCheckpoint("setup:start");
     mode = MODE_STANDBY;
 
     // Web assets are served from this partition. LittleFS (not SPIFFS): SPIFFS
@@ -52,12 +56,36 @@ void Controller::setup() {
     // async_tcp task for every request, which under a multi-tab load burst
     // pegged CPU0 for >5s and tripped the task watchdog (reboot). LittleFS
     // lookups are O(path). maxOpenFiles 16 for concurrent asset serving. [GM-90]
-    if (!LittleFS.begin(true, "/littlefs", 16)) {
-        Serial.println(F("An Error has occurred while mounting LittleFS"));
+    //
+    // Mounted with formatOnFail=false. It used to be true, which meant any mount
+    // failure silently reformatted the partition and took every profile and shot
+    // with it -- and because the branch below only runs when the *format* also
+    // fails, a successful wipe printed nothing at all. Users lost their history
+    // with no indication anything had happened.
+    //
+    // An unmountable LittleFS usually still holds readable data; formatting is
+    // the one action that makes it unrecoverable. So refuse to, say so loudly,
+    // and carry on unmounted: the machine still heats and brews, since that runs
+    // off NVS and the controller, and the flash can be dumped for recovery.
+    filesystemMounted = LittleFS.begin(false, "/littlefs", 16);
+    if (!filesystemMounted) {
+        // Retried once: a transient failure here would otherwise strand the
+        // filesystem for the whole session.
+        filesystemMounted = LittleFS.begin(false, "/littlefs", 16);
+    }
+    if (!filesystemMounted) {
+        ESP_LOGE(LOG_TAG, "**********************************************************");
+        ESP_LOGE(LOG_TAG, "LittleFS would not mount. NOT reformatting.");
+        ESP_LOGE(LOG_TAG, "Profiles and shot history are unavailable this session.");
+        ESP_LOGE(LOG_TAG, "The data is likely still on flash -- dump the partition");
+        ESP_LOGE(LOG_TAG, "before reformatting if you want any chance of recovery.");
+        ESP_LOGE(LOG_TAG, "**********************************************************");
     }
 
 #ifndef GAGGIMATE_HEADLESS
+    heapCheckpoint("fs");
     setupPanel();
+    heapCheckpoint("panel");
 #endif
 
     pluginManager = new PluginManager();
@@ -75,6 +103,7 @@ void Controller::setup() {
     }
     profileManager = new ProfileManager(fs, "/p", settings, pluginManager);
     profileManager->setup();
+    heapCheckpoint("ui+profiles");
 #ifndef GAGGIMATE_SIM // mDNS/HomeKit are device-only
     if (settings.isHomekit())
         pluginManager->registerPlugin(new HomekitPlugin(settings.getWifiSsid(), settings.getWifiPassword()));
@@ -105,6 +134,7 @@ void Controller::setup() {
     pluginManager->registerPlugin(new LedControlPlugin());
     pluginManager->registerPlugin(new AutoWakeupPlugin());
     pluginManager->setup(this);
+    heapCheckpoint("plugins");
 
     pluginManager->on("profiles:profile:save", [this](Event const &event) {
         String id = event.getString("id");
@@ -114,13 +144,17 @@ void Controller::setup() {
     });
 
     pluginManager->on("profiles:profile:select", [this](Event const &event) { this->handleProfileUpdate(); });
+    pluginManager->on("controller:brew:start", [](Event const &) { heapCheckpoint("brew:start"); });
+    pluginManager->on("controller:brew:end", [](Event const &) { heapCheckpoint("brew:end"); });
 
 #ifndef GAGGIMATE_HEADLESS
     ui->init();
+    heapCheckpoint("ui:init");
 #endif
     this->onScreenReady();
 
     updateLastAction();
+    heapCheckpoint("setup:end");
     xTaskCreatePinnedToCore(loopLogicTask, "Controller::loopLogic", configMINIMAL_STACK_SIZE * 6, this, 3, &logicTaskHandle, 0);
 }
 
@@ -136,7 +170,9 @@ void Controller::connect() {
     pluginManager->trigger("controller:startup");
 
     setupWifi();
+    heapCheckpoint("wifi");
     setupBluetooth();
+    heapCheckpoint("ble");
     pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
     pluginManager->on("ota:update:end", [this](Event const &) { this->updating = false; });
 
@@ -222,6 +258,25 @@ static void parseFloatCsv(const String &csv, float *out, size_t count, float def
 void Controller::setupBluetooth() {
     comms.init("GPBLC");
     comms.onConnectionChanged([this](bool connected) {
+        // Link health counters: how often the link drops and for how long. The
+        // status endpoint reports them so a flaky link shows up as numbers, not
+        // as a hunch about what happened mid-shot.
+        const unsigned long now = millis();
+        if (connected) {
+            if (linkDisconnectedAt != 0) {
+                const auto gap = static_cast<uint32_t>(now - linkDisconnectedAt);
+                linkLastGapMs = gap;
+                if (gap > linkMaxGapMs)
+                    linkMaxGapMs = gap;
+                ESP_LOGW(LOG_TAG, "Controller link back after %u ms (drop %u since boot)", static_cast<unsigned>(gap),
+                         static_cast<unsigned>(linkDisconnects.load()));
+            }
+            linkConnectedAt = now;
+        } else {
+            linkDisconnects++;
+            linkDisconnectedAt = now;
+            linkConnectedAt = 0;
+        }
         // Force a full control resend after any (re)connect -- the controller
         // starts with no state and updateControl() otherwise only sends deltas.
         controlStateSent = false;
@@ -236,7 +291,7 @@ void Controller::setupBluetooth() {
         }
     });
     comms.onSystemInfo([this](const char *hardware, const char *version, uint32_t protocolVersion, bool dimming, bool pressure,
-                              bool ledControl, bool tof, vector<uint32_t> addons) {
+                              bool ledControl, bool tof, std::vector<uint32_t> addons) {
         onSystemInfo(hardware, version, protocolVersion, dimming, pressure, ledControl, tof, addons);
     });
     comms.onIncompatibleController([this](const String &info) { onIncompatibleController(info); });
@@ -273,7 +328,7 @@ void Controller::setupBluetooth() {
     comms.onButtonState([this](uint8_t index, bool pressed) {
         const int status = pressed ? 1 : 0;
         String behavior = settings.getButtonBehavior(index);
-        ESP_LOGV("Controller", "Button %d changed to %d, behavior: %s", index, status, behavior);
+        ESP_LOGV("Controller", "Button %d changed to %d, behavior: %s", index, status, behavior.c_str());
         if (behavior == "" || behavior == "none") {
             return;
         }
@@ -363,7 +418,7 @@ void Controller::setupBluetooth() {
 }
 
 void Controller::onSystemInfo(const char *hardware, const char *version, uint32_t protocolVersion, bool dimming, bool pressure,
-                              bool ledControl, bool tof, vector<uint32_t> addons) {
+                              bool ledControl, bool tof, std::vector<uint32_t> addons) {
     const bool mismatch = protocolVersion != gm_proto::PROTOCOL_VERSION;
     systemInfo = SystemInfo{.hardware = String(hardware),
                             .version = String(version),
@@ -387,8 +442,8 @@ void Controller::onSystemInfo(const char *hardware, const char *version, uint32_
         setPressureScale();
         setPidSettings();
         setPumpModelCoeffs();
-        configResendUntil = millis() + CONFIG_RESEND_WINDOW_MS;
-        lastConfigResend = millis();
+        configResendStart = millis();
+        lastConfigResend = configResendStart;
     }
 
     if (!loaded) {
@@ -487,9 +542,9 @@ void Controller::setupWifi() {
             configTzTime(resolve_timezone(settings.getTimezone()), NTP_SERVER);
             setenv("TZ", resolve_timezone(settings.getTimezone()), 1);
             tzset();
-            sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
-            sntp_setservername(0, NTP_SERVER);
-            sntp_init();
+            esp_sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+            esp_sntp_setservername(0, NTP_SERVER);
+            esp_sntp_init();
         } else {
             WiFi.disconnect(true, true);
             ESP_LOGI(LOG_TAG, "Timed out while connecting to WiFi");
@@ -518,9 +573,6 @@ void Controller::setupWifi() {
         ESP_LOGI(LOG_TAG, "========================================");
     }
 
-    pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
-    pluginManager->on("ota:update:end", [this](Event const &) { this->updating = false; });
-
     // STA path: STA_GOT_IP handler already set wifiConnectedPending; loop()
     // dispatches controller:wifi:connect from there. AP path has no STA_GOT_IP,
     // so it needs the explicit trigger here.
@@ -539,6 +591,7 @@ void Controller::loop() {
     if (wifiConnectedPending) {
         wifiConnectedPending = false;
         pluginManager->trigger("controller:wifi:connect", "AP", isApConnection ? 1 : 0);
+        heapCheckpoint("wifi:connect"); // web server, mDNS, HomeKit/MQTT start inside the handlers above
     }
 
     pluginManager->loop();
@@ -555,7 +608,8 @@ void Controller::loop() {
 
     // A config burst right after a reconnect can be lost in the unstable BLE window,
     // and a spurious ACK then stops the reliable layer retrying. Re-send until it lands.
-    if (comms.isConnected() && now < configResendUntil && (now - lastConfigResend) >= CONFIG_RESEND_INTERVAL_MS) {
+    if (comms.isConnected() && configResendStart != 0 && (now - configResendStart) < CONFIG_RESEND_WINDOW_MS &&
+        (now - lastConfigResend) >= CONFIG_RESEND_INTERVAL_MS) {
         setPressureScale();
         setPidSettings();
         setPumpModelCoeffs();
@@ -584,7 +638,7 @@ void Controller::loopLogic() {
     // Check if steam is ready
     if (mode == MODE_STEAM && !steamReady && currentTemp + 5.f > getTargetTemp()) {
         activate();
-        steamReady = true;
+        steamReady = isActive(); // activate() is a no-op until the controller is ready; retry next tick
     }
 
     // Process lifecycle under the lock (GM-147); events and NVS writes deferred past unlock.
@@ -627,6 +681,11 @@ void Controller::loopLogic() {
             }
         }
     }
+    // Queue the pump/valve-off frame before the end handlers run: they publish MQTT,
+    // write the shot log and broadcast over the socket synchronously, and the frame
+    // used to wait behind all of that. updateControl() only sends deltas, so the
+    // second call at the end of this function is free when nothing changed.
+    loopControl();
     dispatchEvents(events);
     if (newBrewDelay >= 0) {
         settings.setBrewDelay(newBrewDelay);
@@ -637,9 +696,8 @@ void Controller::loopLogic() {
 
     unsigned long now = millis();
 
-    if (grindActiveUntil != 0 && now > grindActiveUntil)
-        deactivateGrind();
-    if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 && now > lastAction + settings.getStandbyTimeout())
+    if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 &&
+        (now - lastAction) > static_cast<unsigned long>(settings.getStandbyTimeout()))
         activateStandby();
 
     loopControl();
@@ -697,16 +755,17 @@ void Controller::startProcess(Process *process) {
     dispatchEvents(events);
 }
 
-void Controller::startProcessLocked(Process *process, std::vector<const char *> &events) {
+bool Controller::startProcessLocked(Process *process, std::vector<const char *> &events) {
     if (isActiveLocked() || !isReady()) {
         delete process;
-        return;
+        return false;
     }
     processCompleted = false;
     this->currentProcess = process;
     applyConnectionPriority(); // shot started -> tight BLE interval
     events.push_back("controller:process:start");
     updateLastAction();
+    return true;
 }
 
 void Controller::dispatchEvents(const std::vector<const char *> &events) {
@@ -1036,6 +1095,12 @@ void Controller::deactivateLocked(std::vector<const char *> &events) {
     if (currentProcess == nullptr) {
         return;
     }
+    if (currentProcess->isActive()) {
+        // Aborted, not finished: the delay-adjust block in loopLogic() must not learn
+        // from a volumetric shot that never reached its target. A natural completion
+        // arrives here with the process already inactive and leaves this untouched.
+        processCompleted = true;
+    }
     delete lastProcess;
     lastProcess = currentProcess;
     currentProcess = nullptr;
@@ -1069,17 +1134,28 @@ void Controller::clearLocked(std::vector<const char *> &events) {
 }
 
 void Controller::activateGrind() {
-    pluginManager->trigger("controller:grind:start");
     if (isGrindActive())
         return;
     clear();
+    // Allocate outside the lock (GM-147).
+    GrindProcess *grind;
     if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
         currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
-        startProcess(new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay()));
+        grind = new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay());
     } else {
-        startProcess(
-            new GrindProcess(ProcessTarget::TIME, settings.getTargetGrindDuration(), settings.getTargetGrindVolume(), 0.0));
+        grind = new GrindProcess(ProcessTarget::TIME, settings.getTargetGrindDuration(), settings.getTargetGrindVolume(), 0.0);
     }
+    // controller:grind:start switches SmartGrindPlugin's relay on, and only grind:end
+    // switches it off again -- so it must fire only once the process is actually
+    // running, not when startProcessLocked refused it (busy or not ready).
+    std::vector<const char *> events;
+    {
+        std::lock_guard<std::recursive_mutex> guard(processMutex);
+        if (startProcessLocked(grind, events)) {
+            events.push_back("controller:grind:start");
+        }
+    }
+    dispatchEvents(events);
 }
 
 void Controller::deactivateGrind() {
@@ -1109,7 +1185,20 @@ bool Controller::isGrindActive() const {
 
 int Controller::getMode() const { return mode; }
 
+Controller::LinkHealth Controller::getLinkHealth() const {
+    LinkHealth h;
+    h.disconnects = linkDisconnects;
+    h.lastGapMs = linkLastGapMs;
+    h.maxGapMs = linkMaxGapMs;
+    h.connectedAt = linkConnectedAt;
+    return h;
+}
+
 void Controller::setMode(int newMode) {
+    if (newMode < MODE_STANDBY || newMode > MODE_GRIND) {
+        ESP_LOGW(LOG_TAG, "Ignoring invalid mode %d", newMode);
+        return;
+    }
     Event modeEvent = pluginManager->trigger("controller:mode:change", "value", newMode);
     mode = modeEvent.getInt("value");
     steamReady = false;
@@ -1186,8 +1275,9 @@ void Controller::onFlush() {
             return;
         }
         clearLocked(events);
-        startProcessLocked(flush, events);
-        events.push_back("controller:brew:start");
+        if (startProcessLocked(flush, events)) {
+            events.push_back("controller:brew:start");
+        }
     }
     dispatchEvents(events);
 }
@@ -1283,8 +1373,7 @@ void Controller::handleProfileButton(int buttonStatus, String id) {
             clear();
             return;
         }
-        std::vector<String> profileIds = profileManager->listProfiles();
-        if (std::find(profileIds.begin(), profileIds.end(), id) != profileIds.end()) {
+        if (profileManager->profileExists(id)) {
             profileManager->selectProfile(id);
             activate();
         }

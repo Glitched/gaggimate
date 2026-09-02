@@ -527,6 +527,7 @@ bool AsyncWebServer::handleHttp(Conn &c) {
     parseArgs(query);
     const std::string ctype = headers.count("content-type") ? headers["content-type"] : "";
     req._contentType = String(ctype.c_str());
+    req._headers = headers;
     if (ctype.find("x-www-form-urlencoded") != std::string::npos) {
         parseArgs(body);
     } else if (ctype.find("multipart/form-data") != std::string::npos) {
@@ -551,7 +552,7 @@ void AsyncWebServer::dispatch(Conn &c, AsyncWebServerRequest &req) {
             if (r.onBody && !req._body.empty()) {
                 r.onBody(&req, (uint8_t *)req._body.data(), req._body.size(), 0, req._body.size());
             }
-            r.handler(&req);
+            runChain(&req, 0, [&]() { r.handler(&req); });
             return;
         }
     }
@@ -563,9 +564,19 @@ void AsyncWebServer::dispatch(Conn &c, AsyncWebServerRequest &req) {
         }
     }
     if (_notFound)
-        _notFound(&req);
+        runChain(&req, 0, [&]() { _notFound(&req); });
     else
         req.send(404, "text/plain", "Not found");
+}
+
+// Middleware chain, like the real library's _runMiddlewareChain: each callback
+// either calls next() or answers the request itself.
+void AsyncWebServer::runChain(AsyncWebServerRequest *req, size_t i, const std::function<void()> &handler) {
+    if (i >= _middleware.size()) {
+        handler();
+        return;
+    }
+    _middleware[i](req, [&]() { runChain(req, i + 1, handler); });
 }
 
 void AsyncWebServer::handleWsFrames(Conn &c) {

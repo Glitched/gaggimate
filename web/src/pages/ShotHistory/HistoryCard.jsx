@@ -15,6 +15,7 @@ import { faMinus } from '@fortawesome/free-solid-svg-icons/faMinus';
 import { faMagnifyingGlassChart } from '@fortawesome/free-solid-svg-icons/faMagnifyingGlassChart';
 import { faRobot } from '@fortawesome/free-solid-svg-icons/faRobot';
 import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
+import { faEllipsis } from '@fortawesome/free-solid-svg-icons/faEllipsis';
 import { buildShotText } from '../ShotAnalyzer/services/shotTextExport.js';
 import ShotNotesCard from './ShotNotesCard.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
@@ -23,6 +24,7 @@ import VisualizerUploadModal from '../../components/VisualizerUploadModal.jsx';
 import { visualizerService } from '../../services/VisualizerService.js';
 import { ApiServiceContext } from '../../services/ApiService.js';
 import { Tooltip } from '../../components/Tooltip.jsx';
+import { profilesApi } from '../../services/api.js';
 
 function round2(v) {
   if (v == null || Number.isNaN(v)) return v;
@@ -36,15 +38,35 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const { armed: confirmDelete, armOrRun: confirmOrDelete } = useConfirmAction(4000);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [copiedForLlm, setCopiedForLlm] = useState(false);
+  // True while an action is fetching the shot it needs.
+  const [loading, setLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const copiedTimerRef = useRef(null);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
 
   const date = new Date(shot.timestamp * 1000);
 
-  const onExport = useCallback(() => {
-    if (!shot.loaded) return; // Only export loaded data
-    const exportData = { ...shot, notes: shotNotes };
+  // Clicking an action used to be refused until you had expanded the row to
+  // load the shot -- the button sat disabled behind a "Load first" tooltip,
+  // making you run an errand before the thing you asked for. Now the action
+  // does the errand itself: expand, fetch if needed, then carry on with the
+  // freshly loaded shot (which the parent hands back, since our own `shot` prop
+  // is still the unloaded one until the re-render lands).
+  const ensureLoaded = useCallback(async () => {
+    if (shot.loaded) return shot;
+    setExpanded(true);
+    setLoading(true);
+    try {
+      return (await onLoad?.(shot.id)) || null;
+    } finally {
+      setLoading(false);
+    }
+  }, [shot, onLoad]);
+
+  const onExport = useCallback(async () => {
+    const loaded = await ensureLoaded();
+    if (!loaded) return;
+    const exportData = { ...loaded, notes: shotNotes };
     if (Array.isArray(exportData.samples)) {
       exportData.samples = exportData.samples.map(s => ({
         t: s.t,
@@ -66,35 +88,73 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     }
     exportData.volume = round2(exportData.volume);
     // duration left as integer ms
-    downloadJson(exportData, 'shot-' + shot.id + '.json');
-  }, [shot, shotNotes]);
+    downloadJson(exportData, `shot-${loaded.id}.json`);
+  }, [ensureLoaded, shotNotes]);
 
   // Compact text export (YAML frontmatter + CSV) sized for pasting into an LLM.
   // ~6% the tokens of the JSON export with no samples dropped; see shotTextExport.js.
-  const onCopyForLlm = useCallback(async () => {
-    if (!shot.loaded) return;
+  // Builds the export. May fetch the shot and its profile, so it can take a
+  // moment -- which is the whole problem below.
+  const buildLlmText = useCallback(async () => {
+    const loaded = await ensureLoaded();
+    if (!loaded) return null;
     let profileData = null;
-    if (shot.profileId && apiService) {
+    if (loaded.profileId && apiService) {
       try {
-        const res = await apiService.request({ tp: 'req:profiles:load', id: shot.profileId });
-        if (res.profile) profileData = res.profile;
+        profileData = await profilesApi.load(loaded.profileId);
       } catch (error) {
         // Planned-vs-actual is then omitted; the rest of the export is unaffected.
         console.warn('Failed to fetch profile for LLM export:', error);
       }
     }
-    const text = buildShotText(shot, profileData, { notes: shotNotes });
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
+    const text = buildShotText(loaded, profileData, { notes: shotNotes });
+    return text ? { text, id: loaded.id } : null;
+  }, [ensureLoaded, shotNotes, apiService]);
+
+  const onCopyForLlm = useCallback(async () => {
+    const markCopied = () => {
       setCopiedForLlm(true);
       clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = setTimeout(() => setCopiedForLlm(false), 2000);
-    } catch (error) {
-      console.error('Clipboard write failed, falling back to download:', error);
-      downloadText(text, 'shot-' + shot.id + '.md');
+    };
+
+    // navigator.clipboard.writeText() needs transient user activation, and the
+    // activation from this click does not survive fetching the shot and its
+    // profile first. Awaiting the text and then writing therefore fails with
+    // NotAllowedError on a shot that is not already loaded, and we silently fell
+    // back to downloading a file.
+    //
+    // ClipboardItem accepts a Promise, so the write is *started* inside the
+    // click -- while activation is still live -- and the browser waits on the
+    // payload itself. Not every engine supports that, hence the ladder below.
+    const pending = buildLlmText();
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': pending.then(
+              result => new Blob([result?.text ?? ''], { type: 'text/plain' }),
+            ),
+          }),
+        ]);
+        if (await pending) markCopied();
+        return;
+      } catch (error) {
+        console.warn('Async clipboard write unavailable, trying writeText:', error);
+      }
     }
-  }, [shot, shotNotes, apiService]);
+
+    const result = await pending;
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.text);
+      markCopied();
+    } catch (error) {
+      // Last resort: hand it over as a file rather than losing the export.
+      console.error('Clipboard write failed, falling back to download:', error);
+      downloadText(result.text, `shot-${result.id}.md`);
+    }
+  }, [buildLlmText]);
 
   const handleNotesLoaded = useCallback(notes => {
     setShotNotes(notes);
@@ -111,14 +171,16 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   const profileTitle = shot.profile || 'Unknown Profile';
   let formattedDate = 'No timestamp available';
   if (date.getFullYear() > 1970) {
-    formattedDate =
-      date.toLocaleDateString() +
-      ' ' +
-      date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    formattedDate = `${date.toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+    })}, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
 
   const handleUpload = useCallback(
-    async (username, password, rememberCredentials) => {
+    async (username, password) => {
       setIsUploading(true);
       try {
         // Validate shot data
@@ -130,13 +192,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
         let profileData = null;
         if (shot.profileId && apiService) {
           try {
-            const profileResponse = await apiService.request({
-              tp: 'req:profiles:load',
-              id: shot.profileId,
-            });
-            if (profileResponse.profile) {
-              profileData = profileResponse.profile;
-            }
+            profileData = await profilesApi.load(shot.profileId);
           } catch (error) {
             console.warn('Failed to fetch profile data:', error);
             // Continue without profile data
@@ -164,14 +220,67 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     [shot, shotNotes, apiService],
   );
 
-  const canUpload = visualizerService.validateShot(shot);
+  // validateShot needs the samples, which only exist once the shot is fetched,
+  // so this is always false beforehand -- gating the button on it made this the
+  // same errand as the other actions. Load first, then judge.
+  const onUploadClick = useCallback(async () => {
+    const loaded = await ensureLoaded();
+    if (!loaded) return;
+    if (!visualizerService.validateShot(loaded)) {
+      showToast('This shot has no data to upload', { type: 'error' });
+      return;
+    }
+    setShowUploadModal(true);
+  }, [ensureLoaded]);
+
+  // Rendered in two places (inline with the title from sm up, on its own row
+  // below it on a phone), so it lives here rather than being duplicated.
+  // Fixed widths from sm up so the metrics line up as columns down the list --
+  // otherwise the group's width follows its content ("0.2g" vs "64.3g") and
+  // every row starts at a slightly different x. tabular-nums keeps the digits
+  // themselves on a grid. Left unconstrained on phones, where they wrap under
+  // the title and a fixed width would only waste space.
+  const metrics = (
+    <>
+      <div className='flex items-center gap-1 sm:w-20'>
+        <FontAwesomeIcon icon={faClock} className='h-4 w-4 shrink-0' />
+        <span className='tabular-nums'>{(shot.duration / 1000).toFixed(1)}s</span>
+      </div>
+
+      <div className='flex items-center gap-1 sm:w-20'>
+        {shot.volume && shot.volume > 0 ? (
+          <>
+            <FontAwesomeIcon icon={faWeightScale} className='h-4 w-4 shrink-0' />
+            <span className='tabular-nums'>{round2(shot.volume)}g</span>
+          </>
+        ) : null}
+      </div>
+
+      {shot.rating && shot.rating > 0 ? (
+        <div className='flex items-center gap-1 sm:w-24'>
+          <FontAwesomeIcon icon={faStar} className='h-4 w-4 shrink-0 text-yellow-500' />
+          <span className='font-medium tabular-nums'>{shot.rating}/5</span>
+        </div>
+      ) : (
+        <div className='text-base-content/50 flex items-center gap-1 sm:w-24'>
+          <FontAwesomeIcon icon={faStar} className='h-4 w-4 shrink-0' />
+          <span>Not rated</span>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <Card sm={12} className='[&>.card-body]:p-2'>
       <div className='flex flex-col gap-2'>
         <div className='flex flex-row items-start gap-2'>
+          {/* No border: an outlined box against the card's own outline was two
+              competing frames, and it never quite agreed with the card's corner.
+              The radius still matters for the hover fill -- rounded-lg (8px) is
+              the card's --radius-box (16px) less its p-2 body padding, which is
+              what makes a nested corner look concentric. */}
           <button
-            className='border-base-content/20 text-base-content/60 hover:text-base-content hover:bg-base-content/10 hover:border-base-content/40 cursor-pointer rounded-md border p-2 transition-all duration-200'
+            className='text-base-content/60 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg p-2 transition-colors'
             onClick={() => {
               const next = !expanded;
               setExpanded(next);
@@ -184,12 +293,15 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
 
           <div className='min-w-0 flex-grow'>
             {/* Header Row */}
-            <div className='mb-1 flex flex-row items-start justify-between gap-3'>
+            {/* items-start on phones keeps the ⋯ level with the title; from sm
+                up everything centres against the two-line title block so the
+                metrics sit in the middle of the row rather than on its top line. */}
+            <div className='mb-1 flex flex-row items-start justify-between gap-3 sm:items-center'>
               <div className='min-w-0 flex-grow'>
                 <h3 className='text-base-content truncate text-base font-semibold'>
                   {profileTitle}
                 </h3>
-                <p className='text-base-content/70 text-sm'>
+                <p className='text-base-content/70 text-sm whitespace-nowrap'>
                   #{shot.id} • {formattedDate}
                 </p>
                 {expanded &&
@@ -204,6 +316,12 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   )}
               </div>
 
+              {/* From sm up the metrics sit on the title line, which is what
+                  fills the empty middle the stacked layout left across the card. */}
+              <div className='text-base-content/80 hidden shrink-0 flex-row items-center gap-4 text-sm sm:flex'>
+                {metrics}
+              </div>
+
               <div className='flex shrink-0 flex-row items-center gap-2'>
                 {shot.incomplete && (
                   <span className='inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800'>
@@ -211,10 +329,10 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   </span>
                 )}
 
-                <div className='flex flex-row gap-1'>
-                  <Tooltip content={shot.loaded ? 'Export' : 'Load first'}>
+                <div className='hidden flex-row gap-1 sm:flex'>
+                  <Tooltip content='Export'>
                     <button
-                      disabled={!shot.loaded}
+                      disabled={loading}
                       onClick={onExport}
                       className='text-base-content/50 hover:text-info hover:bg-info/10 cursor-pointer rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40'
                       aria-label='Export shot data'
@@ -224,9 +342,9 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                   </Tooltip>
 
                   {/* Copy for LLM */}
-                  <Tooltip content={shot.loaded ? 'Copy for LLM' : 'Load first'}>
+                  <Tooltip content='Copy for LLM'>
                     <button
-                      disabled={!shot.loaded}
+                      disabled={loading}
                       onClick={onCopyForLlm}
                       className='text-base-content/50 hover:text-success hover:bg-success/10 cursor-pointer rounded-md p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-40'
                       aria-label='Copy shot summary for an LLM'
@@ -249,21 +367,11 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                     </a>
                   </Tooltip>
 
-                  <Tooltip
-                    content={
-                      canUpload
-                        ? 'Upload to Visualizer.coffee'
-                        : 'Load shot data first by expanding the shot'
-                    }
-                  >
+                  <Tooltip content='Upload to Visualizer.coffee'>
                     <button
-                      onClick={() => setShowUploadModal(true)}
-                      disabled={!canUpload}
-                      className={`group inline-block cursor-pointer items-center justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-sm font-semibold ${
-                        canUpload
-                          ? 'text-success hover:bg-success/10 active:border-success/20'
-                          : 'cursor-not-allowed text-gray-400'
-                      }`}
+                      onClick={onUploadClick}
+                      disabled={loading}
+                      className='text-success/70 hover:text-success hover:bg-success/10 cursor-pointer rounded-md px-2.5 py-2 text-sm transition-colors disabled:opacity-40'
                       aria-label='Upload to visualizer.coffee'
                     >
                       <FontAwesomeIcon icon={faUpload} />
@@ -282,34 +390,68 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
                     </button>
                   </Tooltip>
                 </div>
+
+                {/* Five icon buttons took a whole row on a phone and squeezed
+                    the title until it truncated. Behind a menu they cost one
+                    button, and each gets a name instead of a tooltip a touch
+                    device never shows. */}
+                <div className='dropdown dropdown-end sm:hidden'>
+                  <div
+                    tabIndex={0}
+                    role='button'
+                    className='text-base-content/50 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg p-2 transition-colors'
+                    aria-label='More actions for this shot'
+                  >
+                    <FontAwesomeIcon icon={faEllipsis} className='h-4 w-4' />
+                  </div>
+                  <ul
+                    tabIndex={0}
+                    className='dropdown-content menu bg-base-100 rounded-box border-base-300 z-10 mt-1 w-56 border p-2 shadow-lg'
+                  >
+                    <li>
+                      <a href={`/analyzer/internal/${shot.id}`} className='justify-start'>
+                        <FontAwesomeIcon icon={faMagnifyingGlassChart} className='h-4 w-4' />
+                        <span>Open in Analyzer</span>
+                      </a>
+                    </li>
+                    <li>
+                      <button onClick={onExport} disabled={loading} className='justify-start'>
+                        <FontAwesomeIcon icon={faFileExport} className='h-4 w-4' />
+                        <span>Export</span>
+                      </button>
+                    </li>
+                    <li>
+                      <button onClick={onCopyForLlm} disabled={loading} className='justify-start'>
+                        <FontAwesomeIcon
+                          icon={copiedForLlm ? faCheck : faRobot}
+                          className={`h-4 w-4 ${copiedForLlm ? 'text-success' : ''}`}
+                        />
+                        <span>{copiedForLlm ? 'Copied' : 'Copy for LLM'}</span>
+                      </button>
+                    </li>
+                    <li>
+                      <button onClick={onUploadClick} disabled={loading} className='justify-start'>
+                        <FontAwesomeIcon icon={faUpload} className='h-4 w-4' />
+                        <span>Upload to Visualizer</span>
+                      </button>
+                    </li>
+                    <li>
+                      <button
+                        onClick={() => confirmOrDelete(() => onDelete(shot.id))}
+                        className={`justify-start ${confirmDelete ? 'bg-error text-error-content font-semibold' : 'text-error'}`}
+                      >
+                        <FontAwesomeIcon icon={faTrashCan} className='h-4 w-4' />
+                        <span>{confirmDelete ? 'Tap again to confirm' : 'Delete shot'}</span>
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
 
-            {/* Stats Row */}
-            <div className='text-base-content/80 mb-1 flex flex-row items-center gap-4 text-sm'>
-              <div className='flex items-center gap-1'>
-                <FontAwesomeIcon icon={faClock} className='h-4 w-4' />
-                <span>{(shot.duration / 1000).toFixed(1)}s</span>
-              </div>
-
-              {shot.volume && shot.volume > 0 && (
-                <div className='flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faWeightScale} className='h-4 w-4' />
-                  <span>{round2(shot.volume)}g</span>
-                </div>
-              )}
-
-              {shot.rating && shot.rating > 0 ? (
-                <div className='flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faStar} className='h-4 w-4 text-yellow-500' />
-                  <span className='font-medium'>{shot.rating}/5</span>
-                </div>
-              ) : (
-                <div className='text-base-content/50 flex items-center gap-1'>
-                  <FontAwesomeIcon icon={faStar} className='h-4 w-4' />
-                  <span>Not rated</span>
-                </div>
-              )}
+            {/* Phone-only: from sm up these sit on the title line above. */}
+            <div className='text-base-content/80 mb-1 flex flex-row items-center gap-4 text-sm sm:hidden'>
+              {metrics}
             </div>
 
             {expanded && (

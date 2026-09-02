@@ -12,7 +12,6 @@ export function ActionCard({
   isFinished,
   isBrewing,
   isGrinding,
-  isGrindAvailable,
   isFlushing,
   activate,
   deactivate,
@@ -72,7 +71,7 @@ export function ActionCard({
           />
         </div>
       )}
-      <div className='flex justify-start'></div>
+      <div className='flex justify-start' />
       {showPrimary && (
         <button
           type='button'
@@ -115,7 +114,6 @@ ActionCard.propTypes = {
   isFinished: PropTypes.bool.isRequired,
   isBrewing: PropTypes.bool.isRequired,
   isGrinding: PropTypes.bool.isRequired,
-  isGrindAvailable: PropTypes.bool.isRequired,
   isFlushing: PropTypes.bool.isRequired,
   activate: PropTypes.func.isRequired,
   deactivate: PropTypes.func.isRequired,

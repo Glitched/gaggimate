@@ -26,6 +26,7 @@ static int s_mouseX = 0;
 static int s_mouseY = 0;
 static bool s_mousePressed = false;
 static bool s_quit = false;
+static bool s_scripted = false; // hidden window, real mouse ignored (see SdlDriver::setScripted)
 
 static void disp_flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
     SDL_Rect r{area->x1, area->y1, area->x2 - area->x1 + 1, area->y2 - area->y1 + 1};
@@ -45,9 +46,12 @@ void SdlDriver::init() {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         exit(1);
     }
-    s_window =
-        SDL_CreateWindow("GaggiMate Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, DISP_W, DISP_H, SDL_WINDOW_SHOWN);
-    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    s_window = SDL_CreateWindow("GaggiMate Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, DISP_W, DISP_H,
+                                s_scripted ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN);
+    // Scripted runs render to a hidden window, so there is nothing to sync to: a vsync'd
+    // present on a hidden window waits for a vblank the compositor may never deliver (it
+    // does not while the display is asleep), which hung two unattended runs.
+    s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_ACCELERATED | (s_scripted ? 0 : SDL_RENDERER_PRESENTVSYNC));
     s_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, DISP_W, DISP_H);
 
     // Build the round-display mask: the device panel is a 480px circle, so paint
@@ -95,10 +99,14 @@ void SdlDriver::pumpAndRender() {
             s_quit = true;
             break;
         case SDL_MOUSEMOTION:
+            if (s_scripted)
+                break;
             s_mouseX = e.motion.x;
             s_mouseY = e.motion.y;
             break;
         case SDL_MOUSEBUTTONDOWN:
+            if (s_scripted)
+                break;
             if (e.button.button == SDL_BUTTON_LEFT) {
                 s_mousePressed = true;
                 s_mouseX = e.button.x;
@@ -106,13 +114,31 @@ void SdlDriver::pumpAndRender() {
             }
             break;
         case SDL_MOUSEBUTTONUP:
+            if (s_scripted)
+                break;
             if (e.button.button == SDL_BUTTON_LEFT)
                 s_mousePressed = false;
+            break;
+        case SDL_KEYDOWN:
+            // `s` dumps the frame being shown right now. The --screenshot flag can
+            // only capture a fixed time after boot, and macOS will not let a
+            // terminal capture another app's window without screen-recording
+            // permission, so this is how to get honest pixels of a state you
+            // reached interactively.
+            if (e.key.keysym.sym == SDLK_s && e.key.repeat == 0) {
+                static int shotIndex = 0;
+                char path[64];
+                snprintf(path, sizeof(path), "sim_shot_%d.bmp", shotIndex++);
+                screenshot(path);
+                fprintf(stderr, "[sim] screenshot written to %s\n", path);
+            }
             break;
         default:
             break;
         }
     }
+    if (s_scripted)
+        return; // nothing is watching; screenshot() composes the frame itself when asked
     SDL_SetRenderDrawColor(s_renderer, BEZEL_R, BEZEL_G, BEZEL_B, 0xFF);
     SDL_RenderClear(s_renderer);
     SDL_RenderCopy(s_renderer, s_texture, nullptr, nullptr);
@@ -133,5 +159,14 @@ void SdlDriver::screenshot(const char *path) {
         SDL_SaveBMP(surface, path);
         SDL_FreeSurface(surface);
     }
-    SDL_RenderPresent(s_renderer);
+    if (!s_scripted)
+        SDL_RenderPresent(s_renderer);
 }
+
+void SdlDriver::injectPointer(int x, int y, bool pressed) {
+    s_mouseX = x;
+    s_mouseY = y;
+    s_mousePressed = pressed;
+}
+
+void SdlDriver::setScripted(bool scripted) { s_scripted = scripted; }

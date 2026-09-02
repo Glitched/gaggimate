@@ -1,6 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Shot History Schema",
+  "description": "The JSON export produced by the web app's shot history page (one shot per document). The device itself does not write this format: it records each shot as a binary `.slog` file under `/h`, served as `GET /api/history/{id}.slog` and parsed by `web/src/pages/ShotHistory/parseBinaryShot.js`, which is the reference for the on-device layout.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

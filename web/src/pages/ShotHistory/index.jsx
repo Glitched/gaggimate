@@ -9,7 +9,6 @@ import {
   Filler,
   CategoryScale,
 } from 'chart.js';
-import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 Chart.register(LineController);
 Chart.register(TimeScale);
 Chart.register(LinearScale);
@@ -21,6 +20,7 @@ Chart.register(Legend);
 
 import { ApiServiceContext, machine } from '../../services/ApiService.js';
 import { useCallback, useEffect, useRef, useState, useContext, useMemo } from 'preact/hooks';
+import { useSearchHotkey } from '../../hooks/useSearchHotkey.js';
 import { computed } from '@preact/signals';
 import { Spinner } from '../../components/Spinner.jsx';
 import HistoryCard from './HistoryCard.jsx';
@@ -30,6 +30,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faSearch } from '@fortawesome/free-solid-svg-icons/faSearch';
 import { faSort } from '@fortawesome/free-solid-svg-icons/faSort';
 import { faFilter } from '@fortawesome/free-solid-svg-icons/faFilter';
+import { historyApi } from '../../services/api.js';
 
 const connected = computed(() => machine.value.connected);
 
@@ -38,6 +39,8 @@ export function ShotHistory() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  // "/" focuses this field, Escape leaves it.
+  const searchRef = useSearchHotkey();
   const [sortBy, setSortBy] = useState('date'); // date, rating, profile, duration, volume
   const [sortOrder, setSortOrder] = useState('desc'); // asc, desc
   const [filterBy, setFilterBy] = useState('all'); // all, rated, unrated
@@ -114,7 +117,7 @@ export function ShotHistory() {
     async id => {
       setLoading(true);
       try {
-        await apiService.request({ tp: 'req:history:delete', id });
+        await historyApi.remove(id);
         // Reload the index after deletion
         await loadHistory();
       } catch (error) {
@@ -173,7 +176,7 @@ export function ShotHistory() {
           comparison = (a.volume || 0) - (b.volume || 0);
           break;
         case 'id':
-          comparison = parseInt(a.id) - parseInt(b.id);
+          comparison = parseInt(a.id, 10) - parseInt(b.id, 10);
           break;
         case 'date':
         default:
@@ -184,7 +187,7 @@ export function ShotHistory() {
           } else if (b.timestamp >= 10000) {
             comparison = -1;
           } else {
-            comparison = parseInt(a.id) - parseInt(b.id);
+            comparison = parseInt(a.id, 10) - parseInt(b.id, 10);
           }
       }
 
@@ -226,7 +229,7 @@ export function ShotHistory() {
     <>
       <div className='mb-6'>
         <div className='mb-4 flex flex-row items-center gap-2'>
-          <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Shot History</h2>
+          <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Shot History</h1>
           <span className='text-base-content/70 text-sm'>
             {totalFilteredItems} of {history.length} shots{' '}
             {totalPages > 1 && `(Page ${currentPage} of ${totalPages})`}
@@ -236,12 +239,16 @@ export function ShotHistory() {
         {/* Controls Row */}
         <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
           {/* Search */}
-          <div className='relative max-w-md flex-grow'>
-            <FontAwesomeIcon
-              icon={faSearch}
-              className='text-base-content/50 absolute top-1/2 left-3 -translate-y-1/2 transform text-sm'
-            />
+          {/* daisyUI 5's .input is a flex *wrapper* (display:inline-flex;
+              position:relative), not a style for the <input> itself. Applied to
+              the input directly it became a positioned element later in DOM
+              order than the icon, so its background painted over the magnifier,
+              and inline-flex centred the placeholder. Same markup as
+              ProfileList now. */}
+          <label className='input max-w-md min-w-0 flex-grow'>
+            <FontAwesomeIcon icon={faSearch} className='text-base-content/50 text-sm' />
             <input
+              ref={searchRef}
               type='text'
               placeholder='Search...'
               value={searchTerm}
@@ -249,12 +256,14 @@ export function ShotHistory() {
                 setSearchTerm(e.target.value);
                 setCurrentPage(1); // Reset to page 1 when searching
               }}
-              className='input input-bordered w-full pr-4 pl-10 text-sm'
+              className='grow text-sm'
             />
-          </div>
+          </label>
 
           {/* Sort */}
-          <div className='flex items-center gap-2'>
+          {/* shrink-0: without it the search field's flex-grow compresses these
+              and the select labels clip mid-word. */}
+          <div className='flex shrink-0 items-center gap-2'>
             <FontAwesomeIcon icon={faSort} className='text-base-content/50' />
             <select
               value={`${sortBy}-${sortOrder}`}
@@ -282,7 +291,7 @@ export function ShotHistory() {
           </div>
 
           {/* Filter */}
-          <div className='flex items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-2'>
             <FontAwesomeIcon icon={faFilter} className='text-base-content/50' />
             <select
               value={filterBy}
@@ -301,16 +310,20 @@ export function ShotHistory() {
       </div>
 
       <div className='grid grid-cols-1 gap-3 lg:grid-cols-12'>
-        {paginatedHistory.map((item, idx) => (
+        {paginatedHistory.map(item => (
           <HistoryCard
             key={item.id}
             shot={item}
             onDelete={id => onDelete(id)}
             onNotesChanged={onNotesChanged}
             onLoad={async id => {
-              // Fetch binary only if not loaded
+              // Returns the loaded shot so a caller can act on it immediately.
+              // setHistory only schedules a re-render, so a handler that awaited
+              // this and then read its own `shot` prop would still see the
+              // unloaded one.
               const target = history.find(h => h.id === id);
-              if (!target || target.loaded) return;
+              if (!target) return null;
+              if (target.loaded) return target;
               try {
                 // Pad ID to 6 digits with zeros to match backend filename format
                 const paddedId = id.padStart(6, '0');
@@ -322,23 +335,20 @@ export function ShotHistory() {
                 const parsed = parseBinaryShot(buf, id);
                 parsed.incomplete = (target?.incomplete ?? false) || parsed.incomplete;
                 if (target?.notes) parsed.notes = target.notes;
-                setHistory(prev =>
-                  prev.map(h =>
-                    h.id === id
-                      ? {
-                          ...h,
-                          ...parsed,
-                          // Preserve index metadata over shot file data
-                          volume: h.volume ?? parsed.volume, // Use index volume if available, fallback to shot volume
-                          rating: h.rating ?? parsed.rating, // Use index rating if available
-                          incomplete: h.incomplete ?? parsed.incomplete,
-                          loaded: true,
-                        }
-                      : h,
-                  ),
-                );
+                // Index metadata wins over what the shot file says.
+                const merge = h => ({
+                  ...h,
+                  ...parsed,
+                  volume: h.volume ?? parsed.volume,
+                  rating: h.rating ?? parsed.rating,
+                  incomplete: h.incomplete ?? parsed.incomplete,
+                  loaded: true,
+                });
+                setHistory(prev => prev.map(h => (h.id === id ? merge(h) : h)));
+                return merge(target);
               } catch (e) {
                 if (e.name !== 'AbortError') console.error('Failed loading shot', e);
+                return null;
               }
             }}
           />
@@ -354,11 +364,13 @@ export function ShotHistory() {
         )}
       </div>
 
-      {/* Pagination Controls */}
+      {/* Pagination Controls. Tints rather than outlines: a row of bordered
+          boxes reads as six competing objects. pb-8 keeps the controls clear of
+          the viewport edge -- the page's p-4 alone left them flush against it. */}
       {totalPages > 1 && (
-        <div className='mt-6 flex items-center justify-center gap-2'>
+        <div className='mt-6 flex items-center justify-center gap-1 pb-8'>
           <button
-            className='btn btn-sm btn-outline'
+            className='btn btn-sm btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none disabled:bg-transparent disabled:opacity-35'
             disabled={currentPage === 1}
             onClick={() => setCurrentPage(currentPage - 1)}
           >
@@ -382,7 +394,12 @@ export function ShotHistory() {
               return (
                 <button
                   key={pageNum}
-                  className={`btn btn-sm ${currentPage === pageNum ? 'btn-primary' : 'btn-outline'}`}
+                  aria-current={currentPage === pageNum ? 'page' : undefined}
+                  className={`btn btn-sm border-none font-medium ${
+                    currentPage === pageNum
+                      ? 'bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary'
+                      : 'btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10'
+                  }`}
                   onClick={() => setCurrentPage(pageNum)}
                 >
                   {pageNum}
@@ -392,7 +409,7 @@ export function ShotHistory() {
           </div>
 
           <button
-            className='btn btn-sm btn-outline'
+            className='btn btn-sm btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none disabled:bg-transparent disabled:opacity-35'
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage(currentPage + 1)}
           >

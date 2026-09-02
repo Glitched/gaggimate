@@ -222,12 +222,14 @@ void GaggiMateController::setup() {
 
 void GaggiMateController::loop() {
     unsigned long now = millis();
-    if (lastPingTime < now && (now - lastPingTime) / 1000 > PING_TIMEOUT_SECONDS) {
+    // Unsigned subtraction stays correct across the millis() wrap; the old `lastPingTime < now` guard did not, and
+    // setup() seeds lastPingTime so this still cannot fire before the first ping.
+    if (now - lastPingTime.load() > PING_TIMEOUT_MS) {
         handlePingTimeout();
     }
     sendSensorData();
     if (errorState != ERROR_CODE_NONE) {
-        ESP_LOGW("GaggiMateController", "Error state: %d", errorState);
+        ESP_LOGW("GaggiMateController", "Error state: %d", static_cast<int>(errorState.load()));
     }
     delay(250);
     if (Serial.available()) {
@@ -358,7 +360,7 @@ void GaggiMateController::handleSerialCommand(char c) {
         ESP_LOGI("Controller", "╠════════════════╝");
         ESP_LOGI("Controller", "║");
         ESP_LOGI("Controller", "╠═ Error codes");
-        ESP_LOGI("Controller", "║  ├─ Controller Error: %d", errorState);
+        ESP_LOGI("Controller", "║  ├─ Controller Error: %d", static_cast<int>(errorState.load()));
         ESP_LOGI("Controller", "║  └─ Thermocouple Error: %d", thermocouple->isErrorState());
         ESP_LOGI("Controller", "║");
         ESP_LOGI("Controller", "╠═ Readings");

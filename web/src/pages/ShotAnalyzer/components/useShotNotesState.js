@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { notesService } from '../services/NotesService';
 import { cleanName, detectDoseFromProfileName, getShotStorageKey } from '../utils/analyzerUtils';
+import { calculateRatio } from '../../../utils/shotNotes.js';
 
 let notesStateOriginCounter = 0;
 
@@ -25,13 +26,6 @@ export function getAnalyzerShotDisplayName(currentShot, currentShotName = '') {
   return cleanName(
     currentShotName || currentShot.name || currentShot.storageKey || currentShot.id || '-',
   );
-}
-
-function calculateRatio(doseIn, doseOut) {
-  if (doseIn && doseOut && Number.parseFloat(doseIn) > 0 && Number.parseFloat(doseOut) > 0) {
-    return (Number.parseFloat(doseOut) / Number.parseFloat(doseIn)).toFixed(2);
-  }
-  return '';
 }
 
 function hydrateLoadedShotNotes({ loaded, currentShot }) {

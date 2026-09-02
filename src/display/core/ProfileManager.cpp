@@ -48,7 +48,30 @@ bool ProfileManager::ensureDirectory() const {
 
 String ProfileManager::profilePath(const String &uuid) const { return _dir + "/" + uuid + ".json"; }
 
+// A profile id becomes a filename: _dir + "/" + id + ".json". An id carrying a
+// path separator or ".." climbs out of _dir, letting an unauthenticated caller
+// create, overwrite or delete arbitrary .json files elsewhere on the
+// filesystem -- shot notes (/h/<id>.json) included. Reachable from the REST
+// profile API and req:profiles:{save,delete}, neither of which authenticates.
+// Real ids come from generateShortID() or are seed names like "9bar", so
+// restricting to [A-Za-z0-9_-] costs nothing.
+bool ProfileManager::isValidProfileId(const String &uuid) {
+    if (uuid.isEmpty() || uuid.length() > MAX_PROFILE_ID_LENGTH) {
+        return false;
+    }
+    for (unsigned int i = 0; i < uuid.length(); i++) {
+        const char c = uuid[i];
+        const bool allowed =
+            (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void ProfileManager::migrate(const std::vector<String> &existingProfiles) {
+    bumpRevision();
     // Reuse an already-loaded Default if present so we don't accumulate one per
     // boot when a transient SD read fails. Without this guard, every
     // intermittent loadSelectedProfile() failure (e.g. SD pull-up jitter)
@@ -155,6 +178,8 @@ std::vector<String> ProfileManager::listProfiles() {
 }
 
 bool ProfileManager::loadProfile(const String &uuid, Profile &outProfile) {
+    if (!isValidProfileId(uuid))
+        return false;
     File file = _fs->open(profilePath(uuid), "r");
     if (!file)
         return false;
@@ -175,13 +200,19 @@ bool ProfileManager::loadProfile(const String &uuid, Profile &outProfile) {
 }
 
 bool ProfileManager::saveProfile(Profile &profile) {
+    bumpRevision();
     if (!ensureDirectory())
         return false;
     bool isNew = false;
 
-    if (profile.id == nullptr || profile.id.isEmpty()) {
+    if (profile.id.isEmpty()) {
         profile.id = generateShortID();
         isNew = true;
+    }
+
+    if (!isValidProfileId(profile.id)) {
+        ESP_LOGW("ProfileManager", "Refusing profile with unsafe id '%s'", profile.id.c_str());
+        return false;
     }
 
     ESP_LOGI("ProfileManager", "Saving profile %s", profile.id.c_str());
@@ -197,10 +228,13 @@ bool ProfileManager::saveProfile(Profile &profile) {
     bool ok = serializeJson(doc, file) > 0;
     file.close();
     if (profile.id == selectedProfile.id) {
+        // Refresh the in-memory copy; profiles:profile:save below covers the listeners
+        // (Controller re-applies the targets, the UI reloads and re-renders). It used to
+        // also call selectProfile(), which reloaded a second time and fired
+        // profiles:profile:select on every save.
         selectedProfile = Profile{};
         loadSelectedProfile(selectedProfile);
     }
-    selectProfile(_settings.getSelectedProfile());
     _plugin_manager->trigger("profiles:profile:save", "id", profile.id);
     if (isNew) {
         addFavoritedProfile(profile.id);
@@ -209,6 +243,9 @@ bool ProfileManager::saveProfile(Profile &profile) {
 }
 
 bool ProfileManager::deleteProfile(const String &uuid) {
+    bumpRevision();
+    if (!isValidProfileId(uuid))
+        return false;
     removeFavoritedProfile(uuid);
     if (_settings.getStartupProfile() == uuid) {
         _settings.setStartupProfile("");
@@ -216,9 +253,12 @@ bool ProfileManager::deleteProfile(const String &uuid) {
     return _fs->remove(profilePath(uuid));
 }
 
-bool ProfileManager::profileExists(const String &uuid) { return _fs->exists(profilePath(uuid)); }
+bool ProfileManager::profileExists(const String &uuid) {
+    return isValidProfileId(uuid) && _fs->exists(profilePath(uuid));
+}
 
 void ProfileManager::selectProfile(const String &uuid) {
+    bumpRevision();
     ESP_LOGI("ProfileManager", "Selecting profile %s", uuid.c_str());
     _settings.setSelectedProfile(uuid);
     selectedProfile = Profile{};
@@ -265,11 +305,13 @@ std::vector<String> ProfileManager::getFavoritedProfiles(bool validate) {
 }
 
 void ProfileManager::removeFavoritedProfile(String id) {
+    bumpRevision();
     _settings.removeFavoritedProfile(id);
     _plugin_manager->trigger("profiles:profile:unfavorite", "id", id);
 }
 
 void ProfileManager::addFavoritedProfile(String id) {
+    bumpRevision();
     _settings.addFavoritedProfile(id);
     _plugin_manager->trigger("profiles:profile:favorite", "id", id);
 }

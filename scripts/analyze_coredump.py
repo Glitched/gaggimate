@@ -71,9 +71,10 @@ def find_gdb_executable():
         "xtensa-esp32-elf-gdb",    # Generic ESP32 GDB (fallback)
         os.path.expanduser("~/.espressif/tools/xtensa-esp-elf-gdb/*/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb"),
         os.path.expanduser("~/.espressif/tools/xtensa-esp-elf-gdb/*/xtensa-esp-elf-gdb/bin/xtensa-esp32-elf-gdb"),
-        # PlatformIO paths
-        os.path.expanduser("~/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gdb"),
-        os.path.expanduser("~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-gdb"),
+        # PlatformIO paths (pioarduino / Arduino core 3 ships GDB as its own package)
+        os.path.expanduser("~/.platformio/packages/tool-xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb"),
+        os.path.expanduser("~/.platformio/packages/tool-xtensa-esp-elf-gdb/*/bin/xtensa-esp32s3-elf-gdb"),
+        os.path.expanduser("~/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32s3-elf-gdb"),
     ]
     
     for gdb_path in gdb_paths:

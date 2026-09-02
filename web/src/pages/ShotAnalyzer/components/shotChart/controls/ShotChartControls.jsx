@@ -1,5 +1,3 @@
-/* global globalThis */
-
 /** Composes responsive legend, replay/export, and compare controls for shot charts. */
 
 import { useEffect, useState } from 'preact/hooks';
@@ -86,6 +84,7 @@ export function ShotChartControls({
   onCloseExportMenu,
   onExportAction,
   onExportMenuToggle,
+  profileExportAvailable,
   onExportTypeChange,
   onExportFormatChange,
   onExportFormatInfoToggle,
@@ -155,6 +154,7 @@ export function ShotChartControls({
             onCloseExportMenu={onCloseExportMenu}
             onExportAction={onExportAction}
             onExportMenuToggle={onExportMenuToggle}
+            profileExportAvailable={profileExportAvailable}
             onExportTypeChange={onExportTypeChange}
             onExportFormatChange={onExportFormatChange}
             onExportFormatInfoToggle={onExportFormatInfoToggle}

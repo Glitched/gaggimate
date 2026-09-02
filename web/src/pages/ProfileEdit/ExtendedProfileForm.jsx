@@ -17,6 +17,16 @@ import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 export function ExtendedProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
+  // The device rejects a nameless or empty profile (422), so don't offer Save for one.
+  const saveBlockedReason = !data.label?.trim()
+    ? 'Give the profile a name before saving'
+    : phases.length === 0
+      ? 'Add at least one phase before saving'
+      : null;
+
+  // Shared by the header's icon buttons so they cannot drift apart again.
+  const iconButton =
+    'text-base-content/60 hover:text-base-content hover:bg-base-content/10 cursor-pointer rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-30 disabled:hover:bg-transparent';
   const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
   const { armed: removeArmed, armOrRun: confirmOrRemove } = useConfirmAction(4000);
 
@@ -89,6 +99,7 @@ export function ExtendedProfileForm(props) {
     <form
       onSubmit={e => {
         e.preventDefault();
+        if (saveBlockedReason) return;
         onSave(data);
       }}
     >
@@ -109,37 +120,46 @@ export function ExtendedProfileForm(props) {
           />
         </Card>
         <Card sm={10}>
-          <div className='card-header flex items-center gap-4'>
-            <h2 className='card-title flex-grow text-lg sm:text-xl'>Phases</h2>
-            <h5 className='card-subtitle text-sm sm:text-base'>
-              {phases.length > 0 ? `${currentPhaseIndex + 1} / ${phases.length}` : '0 / 0'}
-            </h5>
-            <div>
-              <div className='join' role='group' aria-label='Phase navigation'>
-                <button
-                  type='button'
-                  className={`join-item btn btn-outline max-sm:btn-sm`}
-                  aria-label='Previous'
-                  disabled={currentPhaseIndex === 0}
-                  onClick={() => setCurrentPhaseIndex(currentPhaseIndex - 1)}
-                >
-                  <FontAwesomeIcon icon={faChevronLeft} />
-                </button>
-                <button
-                  type='button'
-                  className={`join-item btn btn-outline max-sm:btn-sm`}
-                  aria-label='Next'
-                  disabled={phases.length === 0 || currentPhaseIndex === phases.length - 1}
-                  onClick={() => setCurrentPhaseIndex(currentPhaseIndex + 1)}
-                >
-                  <FontAwesomeIcon icon={faChevronRight} />
-                </button>
-              </div>
-            </div>
-            <div className='join' role='group' aria-label='Reorder phase'>
+          {/* Was six btn-outline buttons across two join groups plus two loose
+              ones -- four treatments in one row, and the two arrow pairs looked
+              identical while meaning different things (move between phases vs.
+              reorder this phase). Now: a pager reading "‹ 1 / 3 ›" as one unit,
+              then the actions that change the list, all borderless. */}
+          <div className='card-header flex flex-wrap items-center gap-2'>
+            <h2 className='card-title flex-grow text-lg font-light sm:text-xl'>Phases</h2>
+
+            <div className='flex items-center gap-1' role='group' aria-label='Phase navigation'>
               <button
                 type='button'
-                className={`join-item btn btn-outline max-sm:btn-sm`}
+                className={iconButton}
+                aria-label='Previous phase'
+                disabled={currentPhaseIndex === 0}
+                onClick={() => setCurrentPhaseIndex(currentPhaseIndex - 1)}
+              >
+                <FontAwesomeIcon icon={faChevronLeft} />
+              </button>
+              <span className='text-base-content/70 min-w-14 text-center text-sm tabular-nums'>
+                {phases.length > 0 ? `${currentPhaseIndex + 1} / ${phases.length}` : '0 / 0'}
+              </span>
+              <button
+                type='button'
+                className={iconButton}
+                aria-label='Next phase'
+                disabled={phases.length === 0 || currentPhaseIndex === phases.length - 1}
+                onClick={() => setCurrentPhaseIndex(currentPhaseIndex + 1)}
+              >
+                <FontAwesomeIcon icon={faChevronRight} />
+              </button>
+            </div>
+
+            <div
+              className='border-base-content/10 flex items-center gap-1 border-l pl-2'
+              role='group'
+              aria-label='Edit phase list'
+            >
+              <button
+                type='button'
+                className={iconButton}
                 aria-label='Move phase earlier'
                 title='Move phase earlier'
                 disabled={phases.length === 0 || currentPhaseIndex === 0}
@@ -149,7 +169,7 @@ export function ExtendedProfileForm(props) {
               </button>
               <button
                 type='button'
-                className={`join-item btn btn-outline max-sm:btn-sm`}
+                className={iconButton}
                 aria-label='Move phase later'
                 title='Move phase later'
                 disabled={phases.length === 0 || currentPhaseIndex === phases.length - 1}
@@ -157,25 +177,30 @@ export function ExtendedProfileForm(props) {
               >
                 <FontAwesomeIcon icon={faArrowRight} />
               </button>
+              <button
+                type='button'
+                className={iconButton}
+                aria-label='Add phase'
+                title='Add phase'
+                onClick={() => onPhaseAdd()}
+              >
+                <FontAwesomeIcon icon={faPlus} />
+              </button>
+              <button
+                type='button'
+                className={`cursor-pointer rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-30 ${
+                  removeArmed
+                    ? 'bg-error text-error-content'
+                    : 'text-error/70 hover:text-error hover:bg-error/10'
+                }`}
+                aria-label={removeArmed ? 'Click again to remove phase' : 'Remove phase'}
+                title={removeArmed ? 'Click again to confirm' : 'Remove phase'}
+                disabled={phases.length <= 1}
+                onClick={() => confirmOrRemove(() => onPhaseRemove(currentPhaseIndex))}
+              >
+                <FontAwesomeIcon icon={faTrashCan} />
+              </button>
             </div>
-            <button
-              type='button'
-              className={`join-item btn btn-outline max-sm:btn-sm`}
-              aria-label='Add phase'
-              onClick={() => onPhaseAdd()}
-            >
-              <FontAwesomeIcon icon={faPlus} />
-            </button>
-            <button
-              type='button'
-              className={`join-item btn max-sm:btn-sm ${removeArmed ? 'btn-error' : 'btn-outline text-error'}`}
-              aria-label={removeArmed ? 'Click again to remove phase' : 'Remove phase'}
-              title={removeArmed ? 'Click again to confirm' : 'Remove phase'}
-              disabled={phases.length === 0}
-              onClick={() => confirmOrRemove(() => onPhaseRemove(currentPhaseIndex))}
-            >
-              <FontAwesomeIcon icon={faTrashCan} />
-            </button>
           </div>
           <div className='space-y-4' role='group' aria-label='Brew phases configuration'>
             {currentPhase ? (
@@ -183,7 +208,6 @@ export function ExtendedProfileForm(props) {
                 phase={currentPhase}
                 index={currentPhaseIndex}
                 onChange={phase => onPhaseChange(currentPhaseIndex, phase)}
-                onRemove={() => onPhaseRemove(currentPhaseIndex)}
                 pressureAvailable={pressureAvailable}
               />
             ) : (
@@ -195,15 +219,21 @@ export function ExtendedProfileForm(props) {
         </Card>
       </div>
 
-      <div className='pt-4 lg:col-span-10'>
+      {/* pb-8 so Save clears the viewport edge instead of sitting flush against
+          it -- the page's own p-4 was all that stood below it. */}
+      <div className='pt-4 pb-8 lg:col-span-10'>
         <div className='flex flex-col gap-2 sm:flex-row'>
-          <a href='/profiles' className='btn btn-outline'>
+          <a
+            href='/profiles'
+            className='btn btn-ghost text-base-content/70 hover:text-base-content hover:bg-base-content/10 border-none'
+          >
             Back
           </a>
           <button
             type='submit'
             className='btn btn-primary gap-2'
-            disabled={saving}
+            disabled={saving || !!saveBlockedReason}
+            title={saveBlockedReason ?? undefined}
             aria-label={saving ? 'Saving profile...' : 'Save profile'}
           >
             <span>Save</span>

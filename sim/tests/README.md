@@ -8,6 +8,7 @@ pio run -e display-sim
 SDL_VIDEODRIVER=dummy ./.pio/build/display-sim/program &   # headless
 ./sim/tests/test-settings-api.sh
 ./sim/tests/test-profiles-api.sh
+./sim/tests/test-machine-api.sh     # mode, process, targets, ota, history, reorder
 ```
 
 Each script prints PASS/FAIL per assertion and exits non-zero on any failure.

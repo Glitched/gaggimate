@@ -30,19 +30,15 @@ void SimplePump::loop() {
         windowStartTime = msNow;
     }
 
-    // PWM relay output
+    // PWM relay output. No minimum-interval guard between switches: the 25 ms task period already spaces them, and
+    // the old absolute-timestamp guard (msNow > nextSwitchTime) stalled every switch for 49.7 days after millis()
+    // wrapped, leaving the relay stuck in whatever state it was in.
     if (!relayStatus && static_cast<unsigned long>(output) > (msNow - windowStartTime)) {
-        if (msNow > nextSwitchTime) {
-            nextSwitchTime = msNow;
-            relayStatus = true;
-            digitalWrite(_pin, _pumpOn);
-        }
+        relayStatus = true;
+        digitalWrite(_pin, _pumpOn);
     } else if (relayStatus && static_cast<unsigned long>(output) < (msNow - windowStartTime)) {
-        if (msNow > nextSwitchTime) {
-            nextSwitchTime = msNow;
-            relayStatus = false;
-            digitalWrite(_pin, !_pumpOn);
-        }
+        relayStatus = false;
+        digitalWrite(_pin, !_pumpOn);
     }
 }
 

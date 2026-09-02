@@ -166,6 +166,22 @@
             "Accelerates at start, decelerates at end."
           ]
         },
+        "target": {
+          "type": "string",
+          "default": "time",
+          "description": "What `duration` is measured in: elapsed seconds (`time`), grams on the scale (`volumetric`) or millilitres pumped in this phase (`pumped`). The firmware always writes this field when it saves a profile (`src/display/models/profile.h`, `Profile::toJson`); omitting it means `time`.",
+          "oneOf": [
+            { "const": "time",       "title": "Time",       "description": "Ramp over `duration` seconds." },
+            { "const": "volumetric", "title": "Volumetric", "description": "Ramp over `duration` grams measured by the scale." },
+            { "const": "pumped",     "title": "Pumped",     "description": "Ramp over `duration` millilitres pumped in this phase." }
+          ],
+          "enum": ["time", "volumetric", "pumped"],
+          "enumDescriptions": [
+            "Elapsed seconds.",
+            "Grams on the scale.",
+            "Millilitres pumped in this phase."
+          ]
+        },
         "duration": {
           "type": "number",
           "minimum": 0,

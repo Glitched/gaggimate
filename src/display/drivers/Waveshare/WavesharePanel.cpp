@@ -1,15 +1,18 @@
 #include "WavesharePanel.h"
+#include <display/core/PanelStats.h>
+#include <esp_timer.h>
+static constexpr int64_t PANEL_NOMINAL_VSYNC_HZ = 23; // conservative: late only when a whole frame went missing
+#include <algorithm>
 #include "I2C_Driver.h"
 #include "TCA9554PWR.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "utilities.h"
 #include <display/drivers/common/RGBPanelInit.h>
-#include <esp_adc_cal.h>
 
-static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level);
-static int TouchDrvDigitalRead(uint32_t gpio);
-static void TouchDrvPinMode(uint32_t gpio, uint8_t mode);
+static void TouchDrvDigitalWrite(uint8_t gpio, uint8_t level);
+static uint8_t TouchDrvDigitalRead(uint8_t gpio);
+static void TouchDrvPinMode(uint8_t gpio, uint8_t mode);
 
 void ST7701_CS_EN() {
     Set_EXIO(EXIO_PIN3, Low);
@@ -50,8 +53,7 @@ bool WavesharePanel::begin(WS_RGBPanel_Color_Order order) {
 
     _order = order;
 
-    ledcSetup(WS_PWM_CHANNEL, WS_PWM_FREQ, WS_PWM_RESOLUTION);
-    ledcAttachPin(WS_BOARD_TFT_BL, WS_PWM_CHANNEL);
+    ledcAttach(WS_BOARD_TFT_BL, WS_PWM_FREQ, WS_PWM_RESOLUTION);
 
     initExtension();
     Set_EXIO(EXIO_PIN8, Low);
@@ -115,7 +117,7 @@ void WavesharePanel::uninstallSD() {
 void WavesharePanel::setBrightness(uint8_t value) {
     value = constrain(value, 0, WS_BACKLIGHT_MAX);
     _brightness = value;
-    ledcWrite(WS_PWM_CHANNEL, _brightness);
+    ledcWrite(WS_BOARD_TFT_BL, _brightness);
 }
 
 uint8_t WavesharePanel::getBrightness() const { return _brightness; }
@@ -205,7 +207,7 @@ void WavesharePanel::sleep() {
     }
 
     if (_panelDrv) {
-        esp_lcd_panel_disp_off(_panelDrv, true);
+        esp_lcd_panel_disp_on_off(_panelDrv, false);
         esp_lcd_panel_del(_panelDrv);
     }
 
@@ -242,7 +244,12 @@ uint8_t WavesharePanel::getPoint(int16_t *x_array, int16_t *y_array, uint8_t get
                 return 0;
             }
         }
-        uint8_t touched = _touchDrv->getPoint(x_array, y_array, get_point);
+        const TouchPoints points = _touchDrv->getTouchPoints();
+        const uint8_t touched = std::min<uint8_t>(points.getPointCount(), get_point);
+        for (uint8_t i = 0; i < touched; i++) {
+            x_array[i] = points.getPoint(i).x;
+            y_array[i] = points.getPoint(i).y;
+        }
         return touched;
     }
     return 0;
@@ -256,22 +263,22 @@ bool WavesharePanel::isPressed() const {
 }
 
 uint16_t WavesharePanel::getBattVoltage() {
-    esp_adc_cal_characteristics_t adc_chars;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-
+    // analogReadMilliVolts() applies the eFuse calibration the legacy esp_adc_cal path used to do by hand.
     const int number_of_samples = 20;
     uint32_t sum = 0;
-    uint16_t raw_buffer[number_of_samples] = {0};
     for (int i = 0; i < number_of_samples; i++) {
-        raw_buffer[i] = analogRead(WS_BOARD_ADC_DET);
+        sum += analogReadMilliVolts(WS_BOARD_ADC_DET);
         delay(2);
     }
-    for (int i = 0; i < number_of_samples; i++) {
-        sum += raw_buffer[i];
-    }
-    sum = sum / number_of_samples;
+    return static_cast<uint16_t>(sum / number_of_samples * 2); // 1:1 divider on the battery sense line
+}
 
-    return esp_adc_cal_raw_to_voltage(sum, &adc_chars) * 2;
+// Counts panel refreshes; ISR context, so it only touches an atomic. A rate below the ~23.5 Hz nominal means the
+// RGB DMA is starving on PSRAM and restarting frames (CONFIG_LCD_RGB_RESTART_IN_VSYNC).
+static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+    // 1.5 refresh periods at the configured pixel clock; esp_timer_get_time() is IRAM-resident.
+    panelStats().recordVsync(esp_timer_get_time(), 1500000 / PANEL_NOMINAL_VSYNC_HZ);
+    return false;
 }
 
 void WavesharePanel::initBUS() {
@@ -843,11 +850,12 @@ void WavesharePanel::initBUS() {
                     },
             },
         .data_width = 16, // RGB565 in parallel mode, thus 16bit in width
-        .psram_trans_align = 64,
+        .dma_burst_size = 64,
         .hsync_gpio_num = WS_BOARD_TFT_HSYNC,
         .vsync_gpio_num = WS_BOARD_TFT_VSYNC,
         .de_gpio_num = WS_BOARD_TFT_DE,
         .pclk_gpio_num = WS_BOARD_TFT_PCLK,
+        .disp_gpio_num = GPIO_NUM_NC,
         .data_gpio_nums =
             {
                 ESP_PANEL_LCD_PIN_NUM_RGB_DATA0,
@@ -867,9 +875,6 @@ void WavesharePanel::initBUS() {
                 ESP_PANEL_LCD_PIN_NUM_RGB_DATA14,
                 ESP_PANEL_LCD_PIN_NUM_RGB_DATA15,
             },
-        .disp_gpio_num = GPIO_NUM_NC,
-        .on_frame_trans_done = NULL,
-        .user_ctx = NULL,
         .flags =
             {
                 .fb_in_psram = 1, // allocate frame buffer in PSRAM
@@ -877,6 +882,8 @@ void WavesharePanel::initBUS() {
     };
 
     ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_config, &_panelDrv));
+    const esp_lcd_rgb_panel_event_callbacks_t panelCallbacks = {.on_vsync = onPanelVsync};
+    ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(_panelDrv, &panelCallbacks, nullptr));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(_panelDrv));
     ESP_ERROR_CHECK(esp_lcd_panel_init(_panelDrv));
 }
@@ -907,7 +914,7 @@ bool WavesharePanel::initTouch() {
     result = _touchDrv->begin(Wire, GT911_SLAVE_ADDRESS_L, WS_BOARD_I2C_SDA, WS_BOARD_I2C_SCL);
     if (result) {
         TouchDrvGT911 *tmp = static_cast<TouchDrvGT911 *>(_touchDrv);
-        tmp->setInterruptMode(FALLING);
+        tmp->setInterruptMode(TouchDrvGT911::FALLING_EDGE);
 
         log_i("Successfully initialized GT911, using GT911 Driver!");
         return true;
@@ -946,7 +953,7 @@ void WavesharePanel::pushColors(uint16_t x, uint16_t y, uint16_t width, uint16_t
     esp_lcd_panel_draw_bitmap(_panelDrv, x, y, width, hight, data);
 }
 
-static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level) {
+static void TouchDrvDigitalWrite(uint8_t gpio, uint8_t level) {
     if (gpio == 0) {
         Set_EXIO(EXIO_PIN2, level);
     } else {
@@ -954,7 +961,7 @@ static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level) {
     }
 }
 
-static int TouchDrvDigitalRead(uint32_t gpio) {
+static uint8_t TouchDrvDigitalRead(uint8_t gpio) {
     if (gpio == 0) {
         return Read_EXIO(EXIO_PIN2);
     } else {
@@ -962,7 +969,7 @@ static int TouchDrvDigitalRead(uint32_t gpio) {
     }
 }
 
-static void TouchDrvPinMode(uint32_t gpio, uint8_t mode) {
+static void TouchDrvPinMode(uint8_t gpio, uint8_t mode) {
     if (gpio == 0) {
         Mode_EXIO(EXIO_PIN2, mode);
     } else {

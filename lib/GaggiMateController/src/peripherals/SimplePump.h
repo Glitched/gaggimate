@@ -22,7 +22,6 @@ class SimplePump : public Pump {
     bool relayStatus = false;
     float _windowSize = 5000.0f;
     unsigned long windowStartTime = 0;
-    unsigned long nextSwitchTime = 0;
     xTaskHandle taskHandle;
 
     const char *LOG_TAG = "SimplePump";

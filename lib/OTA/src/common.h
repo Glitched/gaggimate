@@ -5,13 +5,13 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Update.h>
-#include <WiFiClientSecure.h>
+#include <NetworkClientSecure.h>
 
 using Updater = HTTPUpdate;
 
-String get_updated_base_url_via_redirect(WiFiClientSecure &wifi_client, String &release_url);
-String get_redirect_location(WiFiClientSecure &wifi_client, String &initial_url);
-String get_updated_version_via_txt_file(WiFiClientSecure &wifi_client, String &_release_url);
+String get_updated_base_url_via_redirect(NetworkClientSecure &wifi_client, String &release_url);
+String get_redirect_location(NetworkClientSecure &wifi_client, String &initial_url);
+String get_updated_version_via_txt_file(NetworkClientSecure &wifi_client, String &_release_url);
 
 void print_update_result(Updater updater, HTTPUpdateResult result, const char *TAG);
 

@@ -96,7 +96,7 @@ export function DashboardSettings() {
   return (
     <>
       <div className='mb-4 flex flex-row items-center gap-2'>
-        <h2 className='flex-grow text-2xl font-bold sm:text-3xl'>Dashboard Settings</h2>
+        <h1 className='flex-grow text-2xl font-light sm:text-3xl'>Dashboard Settings</h1>
       </div>
 
       {/* The capture handler runs before each control's own onChange persists

@@ -8,6 +8,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons/faCheck';
 import { Spinner } from '../../../components/Spinner.jsx';
 import Section from '../../../components/Card.jsx';
+import { historyApi, otaApi } from '../../../services/api.js';
 
 const imageUrlToBase64 = async blob => {
   return new Promise((onSuccess, onError) => {
@@ -145,6 +146,229 @@ function StorageAndMemorySection({ formData }) {
   );
 }
 
+// Reliable-link telemetry for the display<->controller BLE session, reported by
+// GET /api/ota next to the memory and storage figures. Firmware without it omits
+// the object, and the card renders nothing rather than an empty shell.
+const formatCount = n => (Number.isFinite(n) ? n.toLocaleString() : '—');
+
+// Gaps and round trips: milliseconds below a second, otherwise seconds to one decimal.
+const formatGap = ms => {
+  if (!Number.isFinite(ms)) return '—';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+};
+
+// h:mm:ss — the tab has no other uptime figure to match.
+const formatLinkUptime = ms => {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+};
+
+function LinkCounterGroup({ title, rows }) {
+  return (
+    <div className='flex flex-col space-y-2'>
+      <span className='text-base-content/70 text-sm font-medium'>{title}</span>
+      <dl className='space-y-1 text-sm'>
+        {rows.map(({ label, value }) => (
+          <div key={label} className='flex items-center justify-between gap-4'>
+            <dt className='text-base-content/60'>{label}</dt>
+            <dd className='text-base-content font-semibold tabular-nums'>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function ControllerLinkSection({ link }) {
+  if (!link) return null;
+  // A give-up is a frame abandoned after every retry: that command never reached
+  // the controller. Retransmits and duplicates are the link doing its job.
+  const lost = link.giveUps > 0;
+  return (
+    <Section title='Controller Link' className='h-full'>
+      <div className='grid grid-cols-2 gap-6'>
+        <div className='flex flex-col space-y-1'>
+          <span className='text-base-content/70 text-sm font-medium'>Round Trip</span>
+          <span className='text-base-content text-lg font-semibold tabular-nums'>
+            {link.rttMs < 0 ? '—' : `${link.rttMs} ms`}
+          </span>
+          <span className='text-base-content/60 text-xs'>worst {formatGap(link.rttMaxMs)}</span>
+        </div>
+        <div className='flex flex-col space-y-1'>
+          <span className='text-base-content/70 text-sm font-medium'>Give-ups</span>
+          <span
+            className={`text-lg font-semibold tabular-nums ${lost ? 'text-error' : 'text-base-content'}`}
+          >
+            {formatCount(link.giveUps)}
+          </span>
+          <span className={`text-xs ${lost ? 'text-error' : 'text-base-content/60'}`}>
+            {lost ? 'commands lost' : 'no commands lost'}
+          </span>
+        </div>
+      </div>
+
+      <div className='border-base-content/5 mt-6 grid grid-cols-1 gap-6 border-t pt-6 sm:grid-cols-3'>
+        <LinkCounterGroup
+          title='Sends'
+          rows={[
+            { label: 'Frames', value: formatCount(link.txFrames) },
+            { label: 'Retransmits', value: formatCount(link.retransmits) },
+            { label: 'Send failures', value: formatCount(link.sendFailures) },
+            { label: 'Encode failures', value: formatCount(link.encodeFailures) },
+          ]}
+        />
+        <LinkCounterGroup
+          title='Receives'
+          rows={[
+            { label: 'Frames', value: formatCount(link.rxFrames) },
+            { label: 'Duplicates', value: formatCount(link.duplicates) },
+            { label: 'Backpressure', value: formatCount(link.rxBackpressure) },
+          ]}
+        />
+        <LinkCounterGroup
+          title='Link'
+          rows={[
+            {
+              label: 'State',
+              value: (
+                <span
+                  className={`badge badge-sm ${link.connected ? 'badge-success' : 'badge-error'}`}
+                >
+                  {link.connected ? 'Connected' : 'Disconnected'}
+                </span>
+              ),
+            },
+            { label: 'Disconnects', value: formatCount(link.disconnects) },
+            { label: 'Last gap', value: link.lastGapMs > 0 ? formatGap(link.lastGapMs) : '—' },
+            { label: 'Max gap', value: link.maxGapMs > 0 ? formatGap(link.maxGapMs) : '—' },
+            { label: 'Uptime', value: formatLinkUptime(link.linkUptimeMs) },
+          ]}
+        />
+      </div>
+
+      <p className='text-base-content/60 mt-4 text-xs'>
+        Counters since boot. Retransmits are normal under Wi-Fi load; give-ups mean a command was
+        lost.
+      </p>
+    </Section>
+  );
+}
+
+// Direct firmware upload. The device writes the image into its inactive OTA
+// slot, so an interrupted upload leaves it running the current firmware; it
+// only switches banks once the whole image has been received and verified.
+// Requires an upload token to be set in Settings -> General (the endpoint
+// rejects everything when no token is configured).
+function FirmwareUploadSection({ uploadEnabled }) {
+  const [file, setFile] = useState(null);
+  const [token, setToken] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  const upload = useCallback(() => {
+    if (!file || !token) return;
+    setError('');
+    setDone(false);
+    setProgress(0);
+    // XHR rather than fetch: it is the only way to get upload progress events.
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/ota/upload');
+    xhr.setRequestHeader('X-OTA-Token', token);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        setProgress(100);
+        setDone(true);
+      } else {
+        setProgress(null);
+        let msg = `Upload failed (HTTP ${xhr.status})`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body.error) msg = body.error;
+        } catch {
+          /* non-JSON error body */
+        }
+        setError(xhr.status === 401 ? 'Rejected: wrong or missing upload token.' : msg);
+      }
+    };
+    xhr.onerror = () => {
+      setProgress(null);
+      setError('Connection lost during upload.');
+    };
+    // The file goes as the raw body. Multipart went through the device's
+    // byte-at-a-time form parser and took minutes for a firmware image.
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.send(file);
+  }, [file, token]);
+
+  return (
+    <Section title='Upload Firmware' className='h-full'>
+      {!uploadEnabled && (
+        <div className='alert alert-warning mb-4 text-sm'>
+          Firmware upload is disabled. Set an upload token in Settings &rarr; General to enable it.
+        </div>
+      )}
+      <div className='flex flex-col gap-3'>
+        <input
+          type='file'
+          accept='.bin'
+          className='file-input file-input-bordered w-full'
+          disabled={!uploadEnabled || progress !== null}
+          onChange={e => {
+            setFile(e.target.files?.[0] ?? null);
+            setError('');
+            setDone(false);
+          }}
+        />
+        <input
+          type='password'
+          className='input input-bordered w-full'
+          placeholder='Upload token'
+          autoComplete='off'
+          disabled={!uploadEnabled || progress !== null}
+          value={token}
+          onInput={e => setToken(e.target.value)}
+        />
+        <button
+          type='button'
+          className='btn btn-warning btn-sm self-start'
+          disabled={!uploadEnabled || !file || !token || progress !== null}
+          onClick={upload}
+        >
+          {progress !== null && !done ? 'Uploading…' : 'Upload & Restart'}
+        </button>
+
+        {progress !== null && (
+          <div className='bg-base-300 h-2 w-full overflow-hidden rounded-full'>
+            <div
+              className='bg-warning h-2 rounded-full transition-all'
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
+        {done && (
+          <div className='alert alert-success text-sm'>
+            <FontAwesomeIcon icon={faCheck} />
+            Firmware accepted. The machine is restarting — reload this page in a few seconds.
+          </div>
+        )}
+        {error && <div className='alert alert-error text-sm'>{error}</div>}
+        <p className='text-base-content/60 text-xs'>
+          Upload <code>firmware.bin</code> only. The image is written to the spare partition and
+          verified before the machine switches to it; a failed upload changes nothing. Profiles and
+          shot history are untouched.
+        </p>
+      </div>
+    </Section>
+  );
+}
+
 function MaintenanceSection({
   downloadSupportData,
   onHistoryRebuild,
@@ -178,7 +402,7 @@ function MaintenanceSection({
           )}
           {rebuilt && (
             <span className='text-success ml-2'>
-              <FontAwesomeIcon icon={faCheck}></FontAwesomeIcon>
+              <FontAwesomeIcon icon={faCheck} />
             </span>
           )}
         </button>
@@ -246,14 +470,14 @@ export function SystemTab() {
   }, [formData]);
 
   useEffect(() => {
-    const listenerId = apiService.on('res:ota-settings', msg => {
+    const listenerId = apiService.on('evt:ota-status', msg => {
       setFormData(msg);
       setChannel(current => current ?? msg.channel);
       setIsLoading(false);
       setSubmitting(false);
     });
     return () => {
-      apiService.off('res:ota-settings', listenerId);
+      apiService.off('evt:ota-status', listenerId);
     };
   }, [apiService]);
 
@@ -285,26 +509,50 @@ export function SystemTab() {
     };
   }, [apiService]);
 
-  // Request OTA settings as soon as the socket is up, and again on every
-  // reconnect while still loading — the previous fixed 500 ms timer threw when
-  // the socket wasn't open yet and left the tab wedged on the skeleton.
+  // The link counters and memory figures only move if something re-reads them:
+  // evt:ota-status arrives after an update check or a channel change, not on a
+  // timer. Poll while this tab is visible; the call costs the device about as
+  // much as one status broadcast.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.hidden || isLoading) return;
+      otaApi
+        .status()
+        .then(data => setFormData(data))
+        .catch(() => {});
+    }, 10000);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
+  // Load the OTA/system status over HTTP; retried on each reconnect only while
+  // the first load has not landed. Later refreshes arrive as evt:ota-status
+  // broadcasts (the device re-sends after a check or a channel change).
   useEffect(() => {
     if (!connected.value || !isLoading) return;
-    try {
-      apiService.send({ tp: 'req:ota-settings' });
-    } catch (error) {
-      console.error('Failed to request OTA settings:', error);
-    }
+    let cancelled = false;
+    otaApi
+      .status()
+      .then(data => {
+        if (cancelled) return;
+        setFormData(data);
+        setChannel(current => current ?? data.channel);
+        setIsLoading(false);
+      })
+      .catch(error => console.error('Failed to load OTA settings:', error));
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- connected.value is a signal read; the render-time read subscribes this component
-  }, [connected.value, isLoading, apiService]);
+  }, [connected.value, isLoading]);
 
   const onSubmit = useCallback(
     async e => {
       e.preventDefault();
       try {
-        apiService.send({ tp: 'req:ota-settings', update: true, channel });
         setSubmitting(true);
+        await otaApi.check(channel); // the refreshed status arrives as evt:ota-status
       } catch (error) {
+        setSubmitting(false);
         console.error('Failed to save update channel:', error);
         showToast('Machine not connected — could not save the update channel.', { type: 'error' });
       }
@@ -322,17 +570,12 @@ export function SystemTab() {
     return () => clearTimeout(timeoutId);
   }, [submitting]);
 
-  const onUpdate = useCallback(
-    component => {
-      try {
-        apiService.send({ tp: 'req:ota-start', cp: component });
-      } catch (error) {
-        console.error('Failed to start update:', error);
-        showToast('Machine not connected — could not start the update.', { type: 'error' });
-      }
-    },
-    [apiService],
-  );
+  const onUpdate = useCallback(component => {
+    otaApi.start(component).catch(error => {
+      console.error('Failed to start update:', error);
+      showToast(`Could not start the update: ${error.message}`, { type: 'error' });
+    });
+  }, []);
 
   // Firmware flashes are disruptive — require a second click to confirm.
   const [pendingUpdate, setPendingUpdate] = useState(null);
@@ -363,8 +606,11 @@ export function SystemTab() {
     setRebuilt(false);
     setRebuilding(true);
     setRebuildProgress({ total: 0, current: 0, status: 'starting' });
-    apiService.send({ tp: 'req:history:rebuild' });
-  }, [apiService]);
+    historyApi.rebuild().catch(error => {
+      console.error('Failed to start the history rebuild:', error);
+      setRebuilding(false);
+    });
+  }, []);
 
   if (phase > 0) {
     return <OtaProgressView phase={phase} progress={progress} />;
@@ -468,6 +714,8 @@ export function SystemTab() {
 
       <StorageAndMemorySection formData={formData} />
 
+      <ControllerLinkSection link={formData.link} />
+
       <MaintenanceSection
         downloadSupportData={downloadSupportData}
         onHistoryRebuild={onHistoryRebuild}
@@ -475,6 +723,8 @@ export function SystemTab() {
         rebuilt={rebuilt}
         rebuildProgress={rebuildProgress}
       />
+
+      <FirmwareUploadSection uploadEnabled={formData.otaUploadEnabled === true} />
     </div>
   );
 }

@@ -29,7 +29,7 @@ void FlowSensor::loop() {
 void FlowSensor::tare() { updateValue(0.0f); }
 
 void FlowSensor::updateValue(int ticks) {
-    ESP_LOGV("FlowSensor", "Updating ticks: %d", ticks);
+    // No logging here: addValue() calls this from the pin-change ISR.
     _ticks = ticks;
 }
 

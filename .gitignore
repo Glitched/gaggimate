@@ -2,6 +2,10 @@
 env/
 pcb/**/Gaggimate-backups
 pcb/**/*.kicad_sch_old
+# KiCad's footprint-library cache, regenerated whenever a project is opened.
+# Two copies are still tracked (pcb/fp-info-cache, pcb/expansion-template/fp-info-cache)
+# and need `git rm --cached` before this rule stops their churn.
+pcb/**/fp-info-cache
 .vscode
 .idea
 node_modules/
@@ -15,3 +19,15 @@ src/display/webassets/
 # Desktop simulator runtime data (settings/profiles/shots) and screenshots
 sim_data/
 *.bmp
+
+# macOS Finder metadata
+.DS_Store
+
+# written by the simulator's `s` hotkey (live-window screenshots)
+sim_shot_*.bmp
+
+# pioarduino hybrid build (custom_sdkconfig) residue: dummy lib-compile project, IDF managed components, generated sdkconfigs
+.dummy/
+managed_components/
+sdkconfig.defaults
+sdkconfig.*

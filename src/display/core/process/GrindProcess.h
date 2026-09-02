@@ -42,7 +42,7 @@ class GrindProcess : public Process {
             active = millis() - started < time;
         } else {
             double currentRate = volumetricRateCalculator.getRate();
-            ESP_LOGI("GrindProcess", "Current rate: %f, Current volume: %f, Expected Offset: %f", currentRate, currentVolume,
+            ESP_LOGD("GrindProcess", "Current rate: %f, Current volume: %f, Expected Offset: %f", currentRate, currentVolume,
                      currentRate * grindDelay);
             if (currentVolume + currentRate * grindDelay > grindVolume && active) {
                 active = false;
@@ -71,7 +71,9 @@ class GrindProcess : public Process {
     bool isComplete() override {
         if (target == ProcessTarget::TIME)
             return !isActive();
-        return millis() - finished > PREDICTIVE_TIME;
+        // `finished` is only stamped when the target is reached; an aborted grind
+        // (still active) must not read as complete just because it is 0 (as BrewProcess).
+        return !active && millis() - finished > PREDICTIVE_TIME;
     }
 
     int getType() override { return MODE_GRIND; }

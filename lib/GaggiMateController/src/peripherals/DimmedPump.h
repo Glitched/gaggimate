@@ -34,8 +34,6 @@ class DimmedPump : public Pump {
     void setPumpFlowPolyCoeffs(float a, float b, float c, float d);
     void setPumpSlipPolyCoeffs(float a, float b, float c, float d);
     void setGains(float commutationGain, float convergenceGain, float integralGain);
-    void stop();
-    void fullPower();
     void setValveState(bool open);
     void setBinaryMode(bool binaryMode);
 
@@ -44,9 +42,8 @@ class DimmedPump : public Pump {
     uint8_t _sense_pin;
     PSM _psm;
     PressureSensor *_pressureSensor;
-    PressureController _pressureController;
 
-    xTaskHandle taskHandle;
+    xTaskHandle taskHandle = nullptr;
 
     ControlMode _mode = ControlMode::POWER;
     float _power = 0.0f;
@@ -55,15 +52,14 @@ class DimmedPump : public Pump {
     float _ctrlFlow = 0.0f;
     float _currentPressure = 0.0f;
     float _currentFlow = 0.0f;
-    float _lastPressure = 0.0f;
     int _valveStatus = 0;
     int _cps = MAX_FREQ;
     bool _binaryMode = false;
 
-    float _opvPressure = 0.0f;
+    // Declared after the state it points at: members initialise in declaration order, and the PressureController
+    // constructor reads *sensorOutput (_currentPressure), which would otherwise still be indeterminate.
+    PressureController _pressureController;
 
-    static constexpr float BASE_FLOW_RATE = 0.25f;
-    static constexpr float MAX_PRESSURE = 15.0f;
     static constexpr float MAX_FREQ = 60.0f;
 
     void updatePower();

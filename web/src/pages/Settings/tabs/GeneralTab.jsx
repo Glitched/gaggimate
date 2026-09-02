@@ -322,6 +322,7 @@ export function GeneralTab({
               <option value='system'>System</option>
               <option value='light'>Light</option>
               <option value='dark'>Dark</option>
+              <option value='exhalation'>Exhalation</option>
               <option value='coffee'>Coffee</option>
               <option value='nord'>Nord</option>
             </select>
@@ -394,6 +395,22 @@ export function GeneralTab({
               value={formData.mdnsName}
               onChange={onChange('mdnsName')}
             />
+          </SettingsFormField>
+          <SettingsFormField label='Firmware Upload Token' htmlFor='otaUploadToken' noMargin>
+            <input
+              id='otaUploadToken'
+              name='otaUploadToken'
+              type='password'
+              autoComplete='new-password'
+              className='input input-bordered w-full'
+              placeholder='Leave empty to disable firmware upload'
+              value={formData.otaUploadToken ?? ''}
+              onChange={onChange('otaUploadToken')}
+            />
+            <p className='text-base-content/60 mt-1 text-xs'>
+              Required by System &rarr; Upload Firmware. While empty, firmware upload is refused.
+              Anyone who knows this token and can reach the machine can replace its firmware.
+            </p>
           </SettingsFormField>
           <SettingsFormField label='Time Zone' htmlFor='timezone' noMargin>
             <select

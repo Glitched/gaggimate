@@ -7,7 +7,7 @@ static constexpr const char *NVS_PEER_KEY = "peer";
 
 void BleClientTransport::init(const String &deviceName) {
     NimBLEDevice::init(deviceName.c_str());
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setPower(9); // dBm
     NimBLEDevice::setMTU(256);
     // Just Works bonding with LE Secure Connections, mirroring the controller.
     NimBLEDevice::setSecurityAuth(true, false, true);
@@ -25,14 +25,13 @@ void BleClientTransport::init(const String &deviceName) {
 
 void BleClientTransport::scan() {
     _readyForConnection = false;
-    _scanner->clearDuplicateCache();
-    _scanner->setAdvertisedDeviceCallbacks(this, true);
+    _scanner->setScanCallbacks(this, true);
     _scanner->setInterval(1000);
     _scanner->setWindow(50);
     _scanner->setMaxResults(0);
     _scanner->setDuplicateFilter(false);
     _scanner->setActiveScan(false);
-    _scanner->start(0, nullptr, false); // 0 = continuous
+    _scanner->start(0); // 0 = continuous
 }
 
 void BleClientTransport::maintain() {
@@ -135,7 +134,7 @@ void BleClientTransport::loadPairedPeer() {
         return;
     uint8_t buf[7];
     if (prefs.getBytes(NVS_PEER_KEY, buf, sizeof(buf)) == sizeof(buf)) {
-        // Bytes are native order from getNative(); the uint8_t[6] ctor would reverse them, so restore via ble_addr_t.
+        // Bytes are native order from getVal(); the uint8_t[6] ctor would reverse them, so restore via ble_addr_t.
         ble_addr_t addr;
         memcpy(addr.val, buf, 6);
         addr.type = buf[6];
@@ -153,7 +152,7 @@ void BleClientTransport::savePairedPeer(const NimBLEAddress &address) {
     if (!prefs.begin(NVS_NAMESPACE, false))
         return;
     uint8_t buf[7];
-    memcpy(buf, address.getNative(), 6);
+    memcpy(buf, address.getVal(), 6);
     buf[6] = address.getType();
     prefs.putBytes(NVS_PEER_KEY, buf, sizeof(buf));
     prefs.end();
@@ -209,13 +208,10 @@ bool BleClientTransport::isConnected() const { return _client != nullptr && _cli
 bool BleClientTransport::isEncrypted() const {
     if (_client == nullptr || !_client->isConnected())
         return false;
-    ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(_client->getConnId(), &desc) != 0)
-        return false;
-    return desc.sec_state.encrypted;
+    return _client->getConnInfo().isEncrypted();
 }
 
-void BleClientTransport::onResult(NimBLEAdvertisedDevice *advertisedDevice) {
+void BleClientTransport::onResult(const NimBLEAdvertisedDevice *advertisedDevice) {
     if (_havePairedPeer) {
         // Our controller advertises directed PDUs, which carry no payload -- match on address alone.
         if (advertisedDevice->getAddress() != _pairedPeer)
@@ -242,7 +238,7 @@ void BleClientTransport::onResult(NimBLEAdvertisedDevice *advertisedDevice) {
     _readyForConnection = true;
 }
 
-bool BleClientTransport::isLockedToOther(NimBLEAdvertisedDevice *advertisedDevice) const {
+bool BleClientTransport::isLockedToOther(const NimBLEAdvertisedDevice *advertisedDevice) const {
     // Lock owner is broadcast as mfg data: 0xFFFF + paired display address in native order, zeros when unpaired.
     if (!advertisedDevice->haveManufacturerData())
         return false;
@@ -254,11 +250,12 @@ bool BleClientTransport::isLockedToOther(NimBLEAdvertisedDevice *advertisedDevic
     if (memcmp(owner, zeros, sizeof(zeros)) == 0)
         return false; // open for pairing
     // Locked to us is fine (we lost NVS, controller kept the pairing); compare raw native bytes -- no NimBLEAddress round-trip.
-    return memcmp(owner, NimBLEDevice::getAddress().getNative(), sizeof(zeros)) != 0;
+    return memcmp(owner, NimBLEDevice::getAddress().getVal(), sizeof(zeros)) != 0;
 }
 
-void BleClientTransport::onDisconnect(NimBLEClient *client) {
+void BleClientTransport::onDisconnect(NimBLEClient *client, int reason) {
     (void)client;
+    (void)reason;
     ESP_LOGI(LOG_TAG, "Disconnected, will rescan");
     _writeChar = nullptr;
     _notifyChar = nullptr;

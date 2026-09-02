@@ -1,4 +1,5 @@
 #include "Settings.h"
+#include <nvs_flash.h>
 
 #include <algorithm>
 #include <display/util/ColorConversion.h>
@@ -59,10 +60,27 @@ void PreferencesCodec<std::vector<AutoWakeupSchedule>>::write(Preferences &prefs
 }
 
 Settings::Settings() {
-    preferences.begin(PREFERENCES_KEY, true);
+    // `Controller controller;` is a global, so this runs before initArduino() calls nvs_flash_init(). On Arduino core 3
+    // that left every setting at its default (empty SSID -> AP mode). nvs_flash_init() is idempotent, so try it here, and
+    // Controller::setup() calls reload() again once the core has initialized NVS for certain.
+    const esp_err_t nvsErr = nvs_flash_init();
+    log_i("nvs_flash_init at construction: %s", esp_err_to_name(nvsErr));
+    reload();
+
+    // High-water mark showed ~300 B used of 6 KB (GET /api/debug/heap, 2026-09-02); NVS writes need little stack.
+    xTaskCreate(loopTask, "Settings::loop", configMINIMAL_STACK_SIZE * 3, this, 1, &taskHandle);
+}
+
+bool Settings::reload() {
+    if (!preferences.begin(PREFERENCES_KEY, true)) {
+        log_e("Could not open NVS namespace '%s'; running on defaults", PREFERENCES_KEY);
+        return false;
+    }
     for (auto *property : registry) {
         property->load(preferences);
     }
+    log_i("Loaded %u settings from NVS namespace '%s' (ssid key %s)", static_cast<unsigned>(registry.size()), PREFERENCES_KEY,
+          preferences.isKey("ws") ? "present" : "absent");
 
     // Legacy migrations: derive defaults for keys that were never persisted
     if (!preferences.isKey("sg_m")) {
@@ -76,8 +94,7 @@ Settings::Settings() {
         sunriseIdle.initDefault(ColorConversion::toHex(sunriseR, sunriseG, sunriseB, sunriseW));
     }
     preferences.end();
-
-    xTaskCreate(loopTask, "Settings::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle);
+    return true;
 }
 
 void Settings::batchUpdate(const SettingsCallback &callback) {
@@ -126,6 +143,8 @@ void Settings::setWifiPassword(const String &wifiPassword) { this->wifiPassword.
 void Settings::setWifiApPassword(const String &wifiApPassword) { this->wifiApPassword.set(wifiApPassword); }
 
 void Settings::setMdnsName(const String &mdnsName) { this->mdnsName.set(mdnsName); }
+
+void Settings::setOtaUploadToken(const String &otaUploadToken) { this->otaUploadToken.set(otaUploadToken); }
 
 void Settings::setHomekit(const bool homekit) { this->homekit.set(homekit); }
 

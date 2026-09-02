@@ -1,7 +1,5 @@
 /** Normalizes shot selections and loads shots with their preferred profiles. */
 
-/* global globalThis */
-
 import { calculateShotMetrics } from '../services/AnalyzerService';
 import { libraryService } from '../services/LibraryService';
 import { cleanName, getProfileDisplayLabel, getShotStorageKey } from '../utils/analyzerUtils';
@@ -176,11 +174,11 @@ export function buildShotWithMetadata({ item, loadedShot, importMode, loadKey })
   };
 }
 
-export async function loadShotSelection({ item, importMode }) {
+export async function loadShotSelection({ item, importMode, signal }) {
   const loadKey = getShotStorageKey(item);
   const loadedShot = hasLoadedShotPayload(item)
     ? item
-    : await libraryService.loadShot(loadKey, item.source);
+    : await libraryService.loadShot(loadKey, item.source, { signal });
   const shotWithMetadata = buildShotWithMetadata({
     item,
     loadedShot,
@@ -193,8 +191,4 @@ export async function loadShotSelection({ item, importMode }) {
     shotName: getShotSelectionName(item, loadKey),
     shotWithMetadata,
   };
-}
-
-export function isAlreadyLoadedDeepLink({ currentShot, params, serviceSource }) {
-  return currentShot?.id === params.id && currentShot?.source === serviceSource;
 }

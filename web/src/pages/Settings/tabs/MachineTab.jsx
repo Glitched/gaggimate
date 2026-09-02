@@ -188,9 +188,13 @@ export function MachineTab({ formData, onChange, setField }) {
               onChange={e => setSteamPumpDraft(e.target.value)}
               onBlur={e => {
                 setSteamPumpDraft(null);
+                const entered = parseFloat(e.target.value);
+                // An empty or unparsable field keeps the stored value instead of
+                // sending the string "NaN" to the device.
+                if (!Number.isFinite(entered)) return;
                 setField(
                   'steamPumpPercentage',
-                  (parseFloat(e.target.value) * (pressureAvailable.value ? 10 : 1)).toFixed(0),
+                  (entered * (pressureAvailable.value ? 10 : 1)).toFixed(0),
                 );
               }}
             />

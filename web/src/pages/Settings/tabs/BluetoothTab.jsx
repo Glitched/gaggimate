@@ -6,8 +6,6 @@ import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanc
 import { machine } from '../../../services/ApiService.js';
 import { Spinner } from '../../../components/Spinner.jsx';
 import Section from '../../../components/Card.jsx';
-import { faSignal } from '@fortawesome/free-solid-svg-icons/faSignal';
-import { faNetworkWired } from '@fortawesome/free-solid-svg-icons/faNetworkWired';
 import { faBatteryFull } from '@fortawesome/free-solid-svg-icons/faBatteryFull';
 import { faBatteryThreeQuarters } from '@fortawesome/free-solid-svg-icons/faBatteryThreeQuarters';
 import { faBatteryHalf } from '@fortawesome/free-solid-svg-icons/faBatteryHalf';
@@ -40,12 +38,15 @@ export function BluetoothTab() {
   const mode = machineMode.value;
 
   useEffect(() => {
+    // Refresh the scale lists every 10 s, but not in standby (mode 0, where the
+    // device cannot scan — see the notice below) or while the tab is hidden.
     const intervalHandle = setInterval(() => {
+      if (mode === 0 || document.hidden) return;
       setKey(Date.now().valueOf());
     }, 10000);
 
     return () => clearInterval(intervalHandle);
-  }, []);
+  }, [mode]);
 
   const {
     isLoading,
@@ -207,7 +208,7 @@ function ScaleList(props) {
                       className={`ml-2 inline-block h-2 w-2 rounded-full ${
                         scale.connected ? 'bg-success' : 'bg-base-content/20'
                       }`}
-                    ></span>
+                    />
                   </h4>
                   <p className='text-base-content/70 flex items-center space-x-2 text-sm'>
                     <span className='font-mono text-xs'>{scale.uuid}</span>

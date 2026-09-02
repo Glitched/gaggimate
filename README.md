@@ -2,51 +2,38 @@
 
 <p align="center">
 <em>Espresso machine control firmware — pressure, flow and temperature profiling.</em>
-<br /><br />
-
-[![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
-
 </p>
 
 > [!NOTE]
 > **Exhalation is an unofficial fork** of [GaggiMate](https://github.com/jniebuhr/gaggimate) by
 > [@jniebuhr](https://github.com/jniebuhr), modified and maintained independently. It is not
-> affiliated with or endorsed by the upstream project, and upstream cannot support it.
->
-> For the original project — hardware kits, assembly docs and community — see
-> [gaggimate.eu](https://gaggimate.eu/). What differs here is listed under
-> [Changes in this fork](#changes-in-this-fork).
+> affiliated with or endorsed by the upstream project, and upstream cannot support it. For
+> hardware kits, assembly guides and community, see [gaggimate.eu](https://gaggimate.eu/).
 
-This project upgrades a Gaggia espresso machine with smart controls to improve your coffee-making experience. By adding a display and custom electronics, you can monitor and control the machine more easily.
+Exhalation retrofits a Gaggia espresso machine with a controller board and a touchscreen
+display. The controller owns the heater, pump, valve and sensors; the display owns the UI,
+Wi-Fi, profiles, shot history and an embedded web app. The two talk over BLE.
 
-<img src="docs/assets/gaggimate_poster.jpg" alt="Gaggia Classic Installation" width="500" />
+The name comes from _Exhalation_, the Ted Chiang short story about a world that runs
+entirely on a difference in air pressure. So does espresso.
 
 ## Features
 
-- **Temperature Control**: Monitor the boiler temperature to ensure optimal brewing conditions.
-- **Brew timer**: Set a target duration and run the brewing for the specific time.
-- **Steam and Hot Water mode**: Control the pump and valve to run the respective task.
-- **Safety Features**: Automatic shutoff if the system becomes unresponsive or overheats.
-- **User Interface**: Simple, intuitive display to control and monitor the machine.
-
-## Screenshots and Images
-
-<img src="docs/assets/standby-screen.png" alt="Standby Screen" width="300px" />
-<img src="docs/assets/brew-screen.png" alt="Brew Screen" width="300px" />
-<img src="docs/assets/pcb_render.png" alt="PCB Render" width="300px" />
-
-### How to buy
-
-You can buy your kit on https://shop.gaggimate.eu/
-
-## How It Works
-
-The display allows you to control the espresso machine and see live temperature updates. If the machine becomes unresponsive or the temperature goes too high, it will automatically turn off for safety.
-
-## Docs
-
-The docs were moved to [https://gaggimate.eu/](https://gaggimate.eu/). You can find all sourcing and assembly information there.
-Additional documentation for the WebSocket API can be found in [docs/websocket-api.yaml](docs/websocket-api.yaml).
+- **Profiles** — multi-phase brew profiles with pressure or flow targets, timed, volumetric
+  and pumped-volume phase exits, and instant, linear or eased transitions between them.
+- **Modes** — brew, steam, hot water and grind, each with its own process and targets.
+- **Shot history** — every shot is logged on the device with notes, a rating and dose
+  in/out, and can be browsed, exported or copied out of the web UI.
+- **Web UI** — a Preact app served from the display over Wi-Fi: live status, profile
+  editor, shot history, settings and OTA updates.
+- **Bluetooth scales** — volumetric phase exits and brew-by-weight with supported scales.
+- **Integrations** — MQTT with Home Assistant discovery, HomeKit, mDNS and Improv Wi-Fi
+  provisioning.
+- **Autotune** — SIMC PID autotuner for the boiler.
+- **Safety** — thermal-runaway shutdown on the controller and a ping watchdog that kills
+  the outputs if the display goes quiet.
+- **OTA** — display updates from GitHub releases, controller updates pushed over BLE, and
+  raw-body firmware upload over HTTP for cable-free flashing.
 
 ## Changes in this fork
 
@@ -57,8 +44,42 @@ Additional documentation for the WebSocket API can be found in [docs/websocket-a
 - **`npm run scrape`** — pulls shots off a running machine over HTTP and formats them through
   the same parsers and analyzer the web UI uses, so output cannot drift from what the UI shows.
 - **`CLAUDE.md`** — build commands and architecture notes for working in this repository.
+- **Device UI icons** — the on-device icon set is [Phosphor Icons](https://phosphoricons.com)
+  (Regular weight), regenerated from the mapping in `scripts/phosphor_icons.py`.
+- **HTTP API for everything** — every command and query (`POST /api/mode`, `/api/process/...`,
+  `/api/targets/...`, `/api/ota`, profile and shot-history CRUD) is a plain HTTP route documented
+  in `docs/http-api.yaml`; the WebSocket carries only the device's `evt:*` pushes. Firmware
+  images upload as a raw body to `/api/ota/upload`.
 
 See the git history for the complete record of modifications.
+
+## Building
+
+Firmware builds with [PlatformIO](https://platformio.org/); the web UI needs Node 22.
+
+```shell
+scripts/build_webui.sh                  # build the web UI and embed it — run before the display build
+pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
+pio run -e controller                   # controller board
+pio run -e display-sim -t run           # run the display firmware natively against a mocked controller
+```
+
+Build the web UI first: a display image built without it links an empty stub in place of the web
+app (it still boots, but serves nothing).
+
+`CLAUDE.md` covers the rest: every environment, the simulator, the test suites, formatting
+and the architecture of both firmwares.
+
+## Documentation
+
+- [`docs/http-api.yaml`](docs/http-api.yaml) — OpenAPI description of the HTTP API: commands,
+  queries, settings, profiles, shot history and OTA.
+- [`docs/websocket-api.yaml`](docs/websocket-api.yaml) — AsyncAPI description of the `evt:*`
+  messages the device pushes over `/ws`.
+- [`schema/`](schema/) — JSON schemas for profiles, shot history and shot notes.
+- [`sim/README.md`](sim/README.md) — the native simulator; [`sim/tests/README.md`](sim/tests/README.md)
+  — end-to-end API suites that run against it.
+- [`CLAUDE.md`](CLAUDE.md) — build commands, architecture and conventions.
 
 ## Attribution and License
 
@@ -74,9 +95,10 @@ Non-commercial use only. "GaggiMate" and "Gaggia" are marks of their respective 
 are not licensed under CC BY-NC-SA and are used here solely to identify the upstream project
 and the hardware this software runs on.
 
+The on-device icons are [Phosphor Icons](https://phosphoricons.com) by Helena Zhang and Tobias
+Fried, used under the [MIT License](https://github.com/phosphor-icons/core/blob/main/LICENSE).
+
 Upstream community and hardware kits: [gaggimate.eu](https://gaggimate.eu/) ·
 [upstream Discord](https://discord.gg/APw7rgPGPf) — please don't raise issues about this fork there.
 
 [cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
-[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
-[cc-by-nc-sa-shield]: https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg?style=for-the-badge

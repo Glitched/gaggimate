@@ -99,7 +99,7 @@ void ShotHistoryPlugin::setup(Controller *c, PluginManager *pm) {
     if (fs->exists("/h/recent.bin")) {
         fs->remove("/h/recent.bin");
     }
-    xTaskCreatePinnedToCore(loopTask, "ShotHistoryPlugin::loop", configMINIMAL_STACK_SIZE * 6, this, 1, &taskHandle, 0);
+    xTaskCreatePinnedToCore(loopTask, "ShotHistoryPlugin::loop", configMINIMAL_STACK_SIZE * 4, this, 1, &taskHandle, 0);
 }
 
 void ShotHistoryPlugin::record() {
@@ -148,8 +148,10 @@ void ShotHistoryPlugin::record() {
         lastBluetoothWeight = btWeight;
 
         ShotLogSample sample{};
-        uint32_t tick = sampleCount <= 0xFFFF ? sampleCount : 0xFFFF;
-        sample.t = static_cast<uint16_t>(tick);
+        // Capture when this sampling pass actually runs. Older formats inferred
+        // time from sampleCount, which compressed the chart whenever task/SD
+        // overhead made the nominal 250 ms loop run late.
+        sample.t = millis() - shotStart;
         sample.tt = encodeUnsigned(controller->getTargetTemp(), TEMP_SCALE, TEMP_MAX_VALUE);
         sample.ct = encodeUnsigned(currentTemperature, TEMP_SCALE, TEMP_MAX_VALUE);
         sample.tp = encodeUnsigned(controller->getTargetPressure(), PRESSURE_SCALE, PRESSURE_MAX_VALUE);
@@ -198,11 +200,6 @@ void ShotHistoryPlugin::record() {
                 flowSumScaled += sample.fl;
                 positiveFlowCount++;
             }
-        }
-
-        // Check for early index insertion (once per shot after 7.5s)
-        if (!indexEntryCreated && (millis() - shotStart) > 7500) {
-            indexEntryCreated = createEarlyIndexEntry();
         }
 
         // Check for weight stabilization during extended recording
@@ -257,11 +254,6 @@ void ShotHistoryPlugin::record() {
         unsigned long duration = header.durationMs;
         if (duration <= 7500) { // Exclude failed shots and flushes
             fs->remove("/h/" + currentId + ".slog");
-
-            // If we created an early index entry, mark it as deleted
-            if (indexEntryCreated) {
-                markIndexDeleted(currentId.toInt());
-            }
         } else {
             controller->getSettings().setHistoryIndex(controller->getSettings().getHistoryIndex() + 1);
             cleanupHistory();
@@ -331,7 +323,6 @@ void ShotHistoryPlugin::startRecording() {
     currentProfileName = controller->getProfileManager()->getSelectedProfile().label;
     recording = true;
     extendedRecording = false;
-    indexEntryCreated = false; // Reset flag for new shot
     sampleCount = 0;
     ioBufferPos = 0;
     tempSumScaled = 0;
@@ -528,56 +519,34 @@ size_t ShotHistoryPlugin::getFreeSpace() {
     return total > used ? (total - used) : 0;
 }
 
-void ShotHistoryPlugin::handleRequest(JsonDocument &request, JsonDocument &response) {
-    String type = request["tp"].as<String>();
-    response["tp"] = String("res:") + type.substring(4);
-    response["rid"] = request["rid"].as<String>();
+void ShotHistoryPlugin::deleteShot(const String &id) {
+    const String paddedId = padId(id);
+    fs->remove("/h/" + paddedId + ".slog");
+    fs->remove("/h/" + paddedId + ".json");
+    markIndexDeleted(id.toInt());
+}
 
-    if (type == "req:history:delete") {
-        auto id = request["id"].as<String>();
-        String paddedId = id;
-        while (paddedId.length() < 6) {
-            paddedId = "0" + paddedId;
-        }
-        fs->remove("/h/" + paddedId + ".slog");
-        fs->remove("/h/" + paddedId + ".json");
+void ShotHistoryPlugin::saveShotNotes(const String &id, const JsonDocument &notes) {
+    saveNotes(id, notes);
 
-        // Mark as deleted in index
-        markIndexDeleted(id.toInt());
+    // Update rating and volume in index
+    uint8_t rating = notes["rating"].as<uint8_t>();
 
-        response["msg"] = "Ok";
-    } else if (type == "req:history:notes:get") {
-        auto id = request["id"].as<String>();
-        JsonDocument notes(&psramAllocator);
-        loadNotes(id, notes);
-        response["notes"] = notes;
-    } else if (type == "req:history:notes:save") {
-        auto id = request["id"].as<String>();
-        JsonDocument notes; // explicit document: variant->const JsonDocument& is ambiguous on clang
-        notes.set(request["notes"]);
-        saveNotes(id, notes);
-
-        // Update rating and volume in index
-        uint8_t rating = notes["rating"].as<uint8_t>();
-
-        // Check if user provided a doseOut value to override volume
-        uint16_t volume = 0;
-        if (notes["doseOut"].is<String>() && !notes["doseOut"].as<String>().isEmpty()) {
-            float doseOut = notes["doseOut"].as<String>().toFloat();
-            if (doseOut > 0.0f) {
-                volume = encodeUnsigned(doseOut, WEIGHT_SCALE, WEIGHT_MAX_VALUE);
-            }
-        }
-
-        // Always use updateIndexMetadata - it handles both rating and optional volume
-        updateIndexMetadata(id.toInt(), rating, volume);
-
-        response["msg"] = "Ok";
-    } else if (type == "req:history:rebuild") {
-        // Rebuild is now handled asynchronously by WebUIPlugin
-        // This path shouldn't be reached, but handle it just in case
-        response["msg"] = "Use async rebuild";
+    // A doseOut value overrides the index volume. schema/shot_notes.json says
+    // number; older clients stored it as a string, so accept both.
+    uint16_t volume = 0;
+    float doseOut = 0.0f;
+    if (notes["doseOut"].is<float>() || notes["doseOut"].is<int>()) {
+        doseOut = notes["doseOut"].as<float>();
+    } else if (notes["doseOut"].is<String>() && !notes["doseOut"].as<String>().isEmpty()) {
+        doseOut = notes["doseOut"].as<String>().toFloat();
     }
+    if (doseOut > 0.0f) {
+        volume = encodeUnsigned(doseOut, WEIGHT_SCALE, WEIGHT_MAX_VALUE);
+    }
+
+    // Always use updateIndexMetadata - it handles both rating and optional volume
+    updateIndexMetadata(id.toInt(), rating, volume);
 }
 
 void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
@@ -590,21 +559,26 @@ void ShotHistoryPlugin::saveNotes(const String &id, const JsonDocument &notes) {
     }
 }
 
-void ShotHistoryPlugin::loadNotes(const String &id, JsonDocument &notes) {
-    File file = fs->open("/h/" + id + ".json", "r");
-    if (file) {
-        String notesStr = file.readString();
-        file.close();
-        deserializeJson(notes, notesStr);
-    }
-}
-
 void ShotHistoryPlugin::loopTask(void *arg) {
     auto *plugin = static_cast<ShotHistoryPlugin *>(arg);
+    TickType_t lastWakeTime = xTaskGetTickCount();
+    const TickType_t interval = pdMS_TO_TICKS(SHOT_LOG_SAMPLE_INTERVAL_MS);
     while (true) {
         plugin->record();
-        // Use canonical interval from shot log format to avoid divergence.
-        vTaskDelay(SHOT_LOG_SAMPLE_INTERVAL_MS / portTICK_PERIOD_MS);
+
+        // If record() ran past the next deadline, the measurements that should
+        // have occurred during that gap cannot be recovered. Rebase the cadence
+        // from now instead of running immediate catch-up passes with nearly
+        // identical capture times. The v6 timestamps preserve the visible gap.
+        const TickType_t now = xTaskGetTickCount();
+        const TickType_t nextDeadline = lastWakeTime + interval;
+        if (static_cast<int32_t>(now - nextDeadline) >= 0) {
+            lastWakeTime = now;
+        }
+
+        // Keep the cadence tied to an absolute schedule so time spent in
+        // record() does not accumulate into every subsequent interval.
+        vTaskDelayUntil(&lastWakeTime, interval);
     }
 }
 
@@ -725,9 +699,10 @@ void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uin
             if (volume > 0) {
                 entry.volume = volume;
             }
-            if (rating > 0) {
-                entry.flags |= SHOT_FLAG_HAS_NOTES;
-            }
+            // The notes file has just been written, so flag it as rebuildIndex() does
+            // (file exists => flag). The web UI skips the notes fetch when the flag is
+            // clear, so an unrated note that left it clear was invisible after a reload.
+            entry.flags |= SHOT_FLAG_HAS_NOTES;
 
             if (writeEntryAtPosition(indexFile, entryPos, entry)) {
                 ESP_LOGD("ShotHistoryPlugin", "Updated metadata for shot %u: rating=%u, volume=%u", shotId, rating, volume);
@@ -964,9 +939,20 @@ void ShotHistoryPlugin::rebuildIndex() {
             ShotLogSample sample{};
             shotFile.seek(shotHeader.headerSize, SeekSet);
             for (uint32_t s = 0; s < shotHeader.sampleCount; s++) {
-                if (shotFile.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) != sizeof(sample)) {
+                // v1-v5 used a 26-byte record with a 16-bit t field. The
+                // aggregate fields begin two bytes later in v6 because t is
+                // now uint32_t; decode both layouts while rebuilding indexes.
+                const size_t expectedSampleSize = shotHeader.version >= 6 ? 28 : 26;
+                const size_t sampleSize = shotHeader.reserved0 ? shotHeader.reserved0 : expectedSampleSize;
+                if (sampleSize != expectedSampleSize) {
                     break;
                 }
+                uint8_t raw[sizeof(ShotLogSample)]{};
+                if (shotFile.read(raw, sampleSize) != sampleSize) {
+                    break;
+                }
+                const size_t valueOffset = shotHeader.version >= 6 ? 4 : 2;
+                memcpy(reinterpret_cast<uint8_t *>(&sample.tt), raw + valueOffset, sampleSize - valueOffset);
                 tempSum += sample.ct;
                 tempCount++;
                 if (sample.cp > maxPressure) {
@@ -1093,28 +1079,4 @@ bool ShotHistoryPlugin::writeEntryAtPosition(File &indexFile, size_t position, c
         return false;
     }
     return true;
-}
-
-bool ShotHistoryPlugin::createEarlyIndexEntry() {
-    Profile profile = controller->getProfileManager()->getSelectedProfile();
-
-    ShotIndexEntry indexEntry{};
-    indexEntry.id = currentId.toInt();
-    indexEntry.timestamp = header.startEpoch;
-    indexEntry.duration = 0; // Will be overwritten on completion
-    indexEntry.volume = 0;   // Will be overwritten on completion
-    indexEntry.rating = 0;
-    indexEntry.flags = 0; // No SHOT_FLAG_COMPLETED - indicates in-progress shot
-    strncpy(indexEntry.profileId, profile.id.c_str(), sizeof(indexEntry.profileId) - 1);
-    indexEntry.profileId[sizeof(indexEntry.profileId) - 1] = '\0';
-    strncpy(indexEntry.profileName, profile.label.c_str(), sizeof(indexEntry.profileName) - 1);
-    indexEntry.profileName[sizeof(indexEntry.profileName) - 1] = '\0';
-
-    bool success = appendToIndex(indexEntry);
-    if (success) {
-        ESP_LOGD("ShotHistoryPlugin", "Created early index entry for shot %u", indexEntry.id);
-    } else {
-        ESP_LOGE("ShotHistoryPlugin", "Failed to create early index entry for shot %u", indexEntry.id);
-    }
-    return success;
 }

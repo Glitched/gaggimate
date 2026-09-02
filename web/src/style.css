@@ -4,14 +4,17 @@
 /* https://daisyui.com/theme-generator/#theme=eJx9kutuozAQhV8FIa20K5WRPca3vg2BoUElENmgbbvad18HR8WJs_mHmfP5nBnPn3JqTlS-luPwdlzKl7KqXNMNq688jdQusws17uiUlvqBxi78ZyDvKof5I9X74YvSixigvKntN-2Fw-w62mzPH9uPjs7L8SLaTtM8eLqe2nmcXeXbI931EAuHxlPFGQul-X1sjz_D94-CFezXvQgTkdVQKxV0wDgvUFowiBkhUkIAKhMJVaBC0JJnRDtPC03LN1VzMCb6SBF8ZPCpU2qidXHNuKe3oHgE1AXQoG5trkDmZARYFDEfPgKHqZ93tQGOelMbWSCvQXKZqv3atuT9DjCobb0BWhc8zM-gSIHfjZuG6W2fF17EIYqVoGuVSsm5bVOiUAtgV3F4icv96j521iwP3aGMzeon8XNQBbPrK8onbTxyNCL2z2yhOdQ6aymH6vCY0Q3xQW9nN5wa9_mtlwrisoRF2Z5Q3ph4CgZdCtQIUvJtdioMzyAIYVOkCWNIAoU9t8JuessLISRwzR8kyjqxHITGuMf8WbR8Lw3EhEzg_xPmo-NgTRydMGnSjvpmHYNwcSu9lGdHPTkfrN_L174ZPf39B95wXy4 */
 @plugin "daisyui/theme" {
   name: 'light';
-  default: true;
+  default: false;
   prefersdark: false;
   color-scheme: 'light';
   --color-base-100: oklch(100% 0 0);
   --color-base-200: oklch(97.466% 0.011 259.822);
   --color-base-300: oklch(93.268% 0.016 262.751);
   --color-base-content: oklch(41.886% 0.053 255.824);
-  --color-primary: oklch(56.86% 0.255 257.57);
+  /* Was C 0.255 -- near the sRGB gamut edge for this hue, against a surface
+     palette sitting at C 0.011-0.016. Pulled in so the accent belongs to the
+     palette instead of sitting on top of it. */
+  --color-primary: oklch(54% 0.15 257.57);
   --color-primary-content: oklch(91.372% 0.051 257.57);
   --color-secondary: oklch(42.551% 0.161 282.339);
   --color-secondary-content: oklch(88.51% 0.032 282.339);
@@ -41,13 +44,16 @@
 @plugin "daisyui/theme" {
   name: 'dark';
   default: false;
-  prefersdark: true;
+  prefersdark: false;
   color-scheme: 'dark';
   --color-base-100: oklch(20.768% 0.039 265.754);
   --color-base-200: oklch(19.314% 0.037 265.754);
   --color-base-300: oklch(17.86% 0.034 265.754);
   --color-base-content: oklch(84.153% 0.007 265.754);
-  --color-primary: oklch(75.351% 0.138 232.661);
+  /* Was L 75.4% / C 0.138: the lightest and (by ~3.5x) most saturated thing
+     on a panel whose surfaces sit at C 0.034-0.039. Still clearly the accent,
+     no longer the loudest object on screen. */
+  --color-primary: oklch(68% 0.105 232.661);
   --color-primary-content: oklch(15.07% 0.027 232.661);
   --color-secondary: oklch(68.011% 0.158 276.934);
   --color-secondary-content: oklch(13.602% 0.031 276.934);
@@ -63,6 +69,55 @@
   --color-warning-content: oklch(16.648% 0.027 82.95);
   --color-error: oklch(71.785% 0.17 13.118);
   --color-error-content: oklch(14.357% 0.034 13.118);
+  --radius-selector: 1rem;
+  --radius-field: 0.5rem;
+  --radius-box: 1rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* Exhalation -- after the cover of the Ted Chiang collection: a near-black field
+   with points of pale light, and the title set in a luminous ice blue.
+
+   The point of difference from `dark` is chroma, not lightness. That theme puts
+   every surface at C 0.034-0.039, which is what makes it read blue rather than
+   dark -- the tint is in the walls, not the highlights. Here the surfaces sit at
+   C 0.006-0.008: enough to feel cool rather than flatly neutral, not enough to
+   colour the room. The colour lives in the accents, the way the cover is black
+   paper with light on it. */
+@plugin "daisyui/theme" {
+  name: 'exhalation';
+  default: true;
+  prefersdark: true;
+  color-scheme: 'dark';
+  /* base-300 is the page, base-100 the panels that sit on it. */
+  --color-base-300: oklch(9.5% 0.006 240);
+  --color-base-200: oklch(13% 0.007 240);
+  --color-base-100: oklch(16.5% 0.008 240);
+  --color-base-content: oklch(90% 0.008 240);
+  /* The title on the cover: pale, luminous, barely saturated. */
+  --color-primary: oklch(82% 0.055 225);
+  --color-primary-content: oklch(16% 0.02 225);
+  --color-secondary: oklch(66% 0.06 250);
+  --color-secondary-content: oklch(14% 0.02 250);
+  --color-accent: oklch(78% 0.07 195);
+  --color-accent-content: oklch(15% 0.02 195);
+  --color-neutral: oklch(24% 0.008 240);
+  --color-neutral-content: oklch(88% 0.006 240);
+  /* Functional colours keep their hue so they stay readable at a glance, but
+     their chroma is pulled toward the rest of the palette so a warning does not
+     look like it belongs to a different application. */
+  --color-info: oklch(72% 0.09 235);
+  --color-info-content: oklch(14% 0.02 235);
+  --color-success: oklch(76% 0.09 165);
+  --color-success-content: oklch(14% 0.02 165);
+  --color-warning: oklch(80% 0.1 80);
+  --color-warning-content: oklch(16% 0.02 80);
+  --color-error: oklch(70% 0.12 20);
+  --color-error-content: oklch(14% 0.025 20);
   --radius-selector: 1rem;
   --radius-field: 0.5rem;
   --radius-box: 1rem;
@@ -600,4 +655,22 @@ html[data-theme='coffee'] {
   @media (min-height: 429px) {
     @slot;
   }
+}
+
+/* daisyUI fills alerts with the semantic colour at full strength and puts dark
+   text on top. Against a near-black page that reads as a bright slab -- the
+   calibration tab had two of them shouting over the fields they were meant to
+   annotate.
+ *
+ * Tint the background and keep the text at normal reading contrast instead,
+ * which is how selection and emphasis are marked everywhere else in this UI.
+ * The border carries the colour identity, so a warning still reads as a warning
+ * without taking over the page.
+ *
+ * alert-error is deliberately left alone: something has actually gone wrong
+ * there, and it has earned the right to shout. */
+.alert-warning {
+  background-color: color-mix(in oklab, var(--color-warning) 14%, transparent);
+  border-color: color-mix(in oklab, var(--color-warning) 32%, transparent);
+  color: var(--color-base-content);
 }

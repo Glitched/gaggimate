@@ -23,8 +23,8 @@ void PressureSensor::onReading(int reading) {
     _raw_pressure = pressure;
     _raw_pressure = std::clamp(_raw_pressure, 0.0f, _pressure_scale);
     _pressure = std::clamp(_filter.updateEstimate(pressure), 0.0f, _pressure_scale);
-    ESP_LOGV(LOG_TAG, "Channel %d, ADC Reading: %d, Pressure Reading: %f, Pressure Step: %f, Floor: %d", _channel, reading,
-             _pressure, _pressure_step, _adc_floor);
+    ESP_LOGV("PressureSensor", "Channel %d, ADC Reading: %d, Pressure Reading: %f, Pressure Step: %f, Floor: %d", _channel,
+             reading, _pressure, _pressure_step, _adc_floor);
 }
 
 void PressureSensor::setScale(float pressure_scale) {

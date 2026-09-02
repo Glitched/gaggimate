@@ -1,9 +1,11 @@
 #include "WebUIPlugin.h"
 #include <DNSServer.h>
+#include <Update.h>
 #include <LittleFS.h>
 #include <SD_MMC.h>
 #include <algorithm>
 #include <display/core/Controller.h>
+#include <display/core/HeapCheckpoints.h>
 #include <display/core/ProfileManager.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/GrindProcess.h>
@@ -14,6 +16,10 @@
 #include <display/util/PsramWsBuffer.h>
 #include <display/util/mathutils.h>
 #include <display/webassets/web_ui_manifest.h>
+
+// Stands in for a credential the API declines to disclose. The settings form
+// round-trips it unchanged, and the POST handler treats it as "leave alone".
+static constexpr const char *PASSWORD_PLACEHOLDER = "---unchanged---";
 #include <esp32-hal-psram.h>
 #include <esp_core_dump.h>
 #include <esp_err.h>
@@ -25,12 +31,6 @@
 #include <vector>
 #include <version.h>
 
-// Incoming WebSocket payloads (profile uploads reserve up to 64 KB) are
-// reassembled here. Back the character storage with PSRAM so these large,
-// transient buffers don't spike the scarce internal SRAM. The map nodes
-// themselves stay on the default heap (tiny: an id + a string handle).
-using PsramString = std::basic_string<char, std::char_traits<char>, PsramStlAllocator<char>>;
-static std::unordered_map<uint32_t, PsramString> rxBuffers;
 static WebUIPlugin *g_webUIPlugin = nullptr;
 
 // Serialize a JsonDocument straight into a PSRAM-backed WebSocket message
@@ -47,6 +47,14 @@ static AsyncWebSocketSharedBuffer toWsBuffer(JsonDocument &doc) {
 static constexpr const char *PROFILE_VALIDATION_ERROR =
     "Invalid profile: 'label' (string), 'type' (string) and a non-empty 'phases' array are required";
 
+// "scheme://host[:port]" against the Host header "host[:port]", case-insensitive. The
+// scheme is irrelevant: the device only speaks plain HTTP.
+static bool originMatchesHost(const String &origin, const String &host) {
+    const int at = origin.indexOf("://");
+    const String bare = at >= 0 ? origin.substring(at + 3) : origin;
+    return !host.isEmpty() && bare.equalsIgnoreCase(host);
+}
+
 // Buffers a request body chunk by chunk into request->_tempObject. Ownership:
 // the consuming handler takes the pointer (and frees it); if none does, the
 // request destructor frees it. Oversized or inconsistent bodies are dropped,
@@ -54,6 +62,12 @@ static constexpr const char *PROFILE_VALIDATION_ERROR =
 static void bufferJsonBody(AsyncWebServerRequest *request, const uint8_t *data, size_t len, size_t index, size_t total,
                            size_t maxLen) {
     if (total == 0 || total > maxLen || index + len > total) {
+        return;
+    }
+    // JSON routes read JSON only. A text/plain body is what a cross-site form or a
+    // no-preflight fetch sends; leaving it unbuffered makes every JSON handler see
+    // "no body" (400) instead of acting on it.
+    if (index == 0 && !request->contentType().startsWith("application/json")) {
         return;
     }
     if (index == 0) {
@@ -155,7 +169,14 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
     setupServer();
 }
 
+static constexpr unsigned long PANEL_STATS_PERIOD = 10000; // render-pipeline snapshot cadence, ms
+
 void WebUIPlugin::loop() {
+    if (restartPending != 0 && millis() >= restartPending) {
+        ESP_LOGI("WebUIPlugin", "Rebooting (deferred restart)");
+        delay(50);
+        ESP.restart();
+    }
     if (updating) {
         // Pass which component is being flashed: a controller update streams the
         // firmware over BLE (wants a low-latency link), a display update is over
@@ -169,6 +190,37 @@ void WebUIPlugin::loop() {
         return;
     }
     const unsigned long now = millis();
+    if (now - lastPanelStats >= PANEL_STATS_PERIOD) {
+        // Render-pipeline health: UI frames vs flushes vs panel refreshes, plus the heap floor. One line per 10 s.
+        panelSnapshot = panelStats().snapshot(lastPanelStats == 0 ? 0 : now - lastPanelStats);
+        lastPanelStats = now;
+        ESP_LOGI("WebUIPlugin",
+                 "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz (%lu late); "
+                 "heap free %u min %u largest %u",
+                 panelSnapshot.uiFps, panelSnapshot.flushHz, static_cast<unsigned long>(panelSnapshot.flushAvgUs),
+                 static_cast<unsigned long>(panelSnapshot.flushMaxUs), panelSnapshot.vsyncHz,
+                 static_cast<unsigned long>(panelSnapshot.vsyncsLate),
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)));
+    }
+    // An upload that dies mid-stream -- client sleeps, Wi-Fi drops, browser tab
+    // closes -- never reaches handleFirmwareUploadResult, so nothing clears
+    // uploadInProgress and the Updater keeps the OTA slot open. Every later
+    // attempt is then rejected as "another update is already running" until the
+    // display is power-cycled. Reclaim it once the stream has clearly stopped.
+    // uploadLastChunk is written by the receive callback on the AsyncTCP task; read millis() fresh and compare signed,
+    // or a chunk landing between the `now` capture above and this check wraps to ~4.29e9 ms and aborts a healthy
+    // upload ("no data for 4294967242 ms" seen on 2026-09-02).
+    if (uploadInProgress && static_cast<long>(millis() - uploadLastChunk) > static_cast<long>(UPLOAD_STALL_TIMEOUT)) {
+        const unsigned long stalledMs = millis() - uploadLastChunk;
+        ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", stalledMs);
+        uploadError = "no data for " + String(stalledMs) + " ms after " + String(uploadTotal) + " bytes";
+        Update.abort();
+        uploadInProgress = false;
+        pluginManager->trigger("ota:update:end");
+        pluginManager->trigger("ota:upload:failed");
+    }
     // Skip the (blocking, TLS) update check while a process is active: a brew/steam/grind
     // must not have the control loop stalled for the duration of the handshake, nor compete
     // with it for memory. isActive() is the reliable "a process is running" signal. Subtraction
@@ -177,7 +229,7 @@ void WebUIPlugin::loop() {
         ota->checkForUpdates();
         pluginManager->trigger("ota:update:status", "value", ota->isUpdateAvailable());
         lastUpdateCheck = now;
-        updateOTAStatus(ota->getCurrentVersion());
+        updateOTAStatus();
     }
     if (now > lastStatus + STATUS_PERIOD && !ws.getClients().empty()) {
         lastStatus = now;
@@ -296,6 +348,15 @@ void WebUIPlugin::loop() {
     }
 }
 
+// The bundle is pulled into flash by web_ui_blob.S via .incbin, a dependency the
+// build system cannot see (scripts/check_webui_blob.py is the build-time guard).
+// If a stale object from a stub build ever slips through, the linked blob is a
+// single byte while the manifest still describes the full bundle — serving from
+// it would hand out whatever rodata follows the symbol. Refuse instead. [GM-106]
+static bool webBlobIsIntact() {
+    return static_cast<size_t>(gWebUiBlobEnd - gWebUiBlobStart) >= WEB_UI_BLOB_SIZE;
+}
+
 // Linear lookup over the embedded asset table (~60 entries) — a couple of
 // strcmps per request, negligible next to the network round-trip.
 static const WebAsset *findWebAsset(const String &path) {
@@ -308,6 +369,11 @@ static const WebAsset *findWebAsset(const String &path) {
 }
 
 void WebUIPlugin::serveWebAsset(AsyncWebServerRequest *request) {
+    if (!webBlobIsIntact()) {
+        request->send(503, "text/plain", "Web UI bundle missing from this firmware image.");
+        return;
+    }
+
     String path = request->url();
     if (path.isEmpty() || path == "/") {
         path = WEB_UI_INDEX_PATH;
@@ -343,6 +409,26 @@ void WebUIPlugin::serveWebAsset(AsyncWebServerRequest *request) {
 }
 
 void WebUIPlugin::setupServer() {
+    // Cross-site writes. A browser adds an Origin header to every cross-origin
+    // request and to same-origin POST/PUT/DELETE, so a write whose Origin is not
+    // this device's own host came from some other page and is rejected. GETs stay
+    // open (read-only), and requests with no Origin -- curl, scripts, the Vite dev
+    // proxy (which strips it) -- pass. One check, ahead of every route.
+    server.addMiddleware([](AsyncWebServerRequest *request, ArMiddlewareNext next) {
+        const int method = request->method();
+        if (method == HTTP_GET || method == HTTP_HEAD || method == HTTP_OPTIONS || !request->hasHeader("Origin")) {
+            next();
+            return;
+        }
+        const String origin = request->header("Origin");
+        if (originMatchesHost(origin, request->host())) {
+            next();
+            return;
+        }
+        ESP_LOGW("WebUIPlugin", "Rejected cross-origin write to %s from %s", request->url().c_str(), origin.c_str());
+        request->send(403, "application/json", "{\"error\":\"Cross-origin request rejected\"}");
+    });
+
     server.on("/connecttest.txt", [](AsyncWebServerRequest *request) {
         request->redirect("http://logout.net");
     }); // windows 11 captive portal workaround
@@ -366,9 +452,8 @@ void WebUIPlugin::setupServer() {
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             bufferJsonBody(request, data, len, index, total, 16 * 1024);
         });
-    // REST profile API for external tools (scripts, agents): the WebSocket
-    // req:profiles:* contract needs a stateful client, this needs only HTTP.
-    // The plain-string route matches /api/profiles and all subpaths.
+    // REST profile API, used by the web UI and by external tools (scripts, agents)
+    // alike. The plain-string route matches /api/profiles and all subpaths.
     server.on(
         "/api/profiles", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleProfilesRest(request); }, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -392,7 +477,6 @@ void WebUIPlugin::setupServer() {
     if (controller->isSDCard()) {
         fs = &SD_MMC;
     }
-    server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/history/index.bin", HTTP_GET, [this, fs](AsyncWebServerRequest *request) {
         // Serve the binary index file directly
         if (fs->exists("/h/index.bin")) {
@@ -432,13 +516,54 @@ void WebUIPlugin::setupServer() {
         free(entries);
         request->send(response);
     });
+    // After the explicit index.bin / recent.bin routes: the static handler probes for a
+    // "<file>.gz" first, so registered ahead of them it cost every history load a flash stat
+    // for /h/index.bin.gz and an error-level log line.
+    server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+    server.on("/api/debug/heap", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHeapDebug(request); });
+#ifndef GAGGIMATE_SIM
+    // Direct firmware upload. The body handler streams straight into the
+    // inactive OTA partition; the request handler runs once the body is done.
+    server.on(
+        "/api/ota/upload", HTTP_POST, [this](AsyncWebServerRequest *request) { handleFirmwareUploadResult(request); }, nullptr,
+        // Raw body (Content-Type: application/octet-stream), not multipart: the
+        // server's form-data parser walks the body one byte at a time and topped
+        // out at ~26 KB/s, three minutes for an image. The body callback hands
+        // over whole TCP segments, and Content-Length sizes the Updater up front.
+        [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            handleFirmwareUpload(request, index, data, len, total);
+        });
+#endif
+    // Command routes (mode, process, targets, OTA, history), so scripts and agents
+    // can drive the machine with curl (docs/http-api.yaml). Plain-string routes match
+    // the path and its subpaths; JSON bodies stream into _tempObject as for
+    // /api/settings. Registered after /api/ota/upload: "/api/ota" is a prefix
+    // route and would otherwise claim it. /api/history is registered per method so GETs never reach
+    // it: the sim's server shim tries routes before static files, and a catch-all
+    // here would shadow serveStatic("/api/history/") there.
+    const auto jsonBody = [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+        bufferJsonBody(request, data, len, index, total, 16 * 1024);
+    };
+    for (const char *route : {"/api/mode", "/api/process", "/api/grind", "/api/flush", "/api/autotune", "/api/targets"}) {
+        server.on(
+            route, HTTP_ANY, [this](AsyncWebServerRequest *request) { handleMachineRest(request); }, nullptr, jsonBody);
+    }
+    server.on(
+        "/api/ota", HTTP_ANY, [this](AsyncWebServerRequest *request) { handleOtaRest(request); }, nullptr, jsonBody);
+    server.on("/api/history/rebuild", HTTP_POST, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); });
+    server.on("/api/history", HTTP_DELETE, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); });
+    server.on(
+        "/api/history", HTTP_PUT, [this](AsyncWebServerRequest *request) { handleHistoryRest(request); }, nullptr, jsonBody);
     // The web UI is embedded in firmware flash and served from the memory-mapped blob (see serveWebAsset). It is no
     // longer in LittleFS, so OTA never touches the partition holding profiles/shots. The catch-all onNotFound handles
     // every path not claimed by an explicit server.on()/api route above. [GM-106]
     server.onNotFound([this](AsyncWebServerRequest *request) { serveWebAsset(request); });
     ws.onEvent(
         [this](AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+            (void)arg;
+            (void)data;
+            (void)len;
             if (type == WS_EVT_CONNECT) {
                 // Close (and let the browser reconnect) a client whose send
                 // queue backs up, instead of keeping it open. With it kept open
@@ -449,13 +574,14 @@ void WebUIPlugin::setupServer() {
                 // die, no recovery). Reclaiming via close is the safer failure
                 // mode. (Was the v1.8.1 behaviour.)
                 client->setCloseClientOnQueueFull(true);
-                ESP_LOGI("WebUIPlugin", "WebSocket client connected (%d open connections)", server->getClients().size());
+                ESP_LOGI("WebUIPlugin", "WebSocket client connected (%u open connections)",
+                         static_cast<unsigned>(server->getClients().size()));
             } else if (type == WS_EVT_DISCONNECT) {
-                ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%d open connections)", server->getClients().size());
-                rxBuffers.erase(client->id());
-            } else if (type == WS_EVT_DATA) {
-                handleWebSocketData(server, client, type, arg, data, len);
+                ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%u open connections)",
+                         static_cast<unsigned>(server->getClients().size()));
             }
+            // The socket is push-only: every command and query is an HTTP route
+            // (docs/http-api.yaml). Inbound frames are ignored.
         });
     server.addHandler(&ws);
 }
@@ -494,219 +620,6 @@ void WebUIPlugin::stop() {
     ESP_LOGI("WebUIPlugin", "WebUIPlugin stopped (wifi disconnected)");
 }
 
-void WebUIPlugin::handleWebSocketData(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg,
-                                      uint8_t *data, size_t len) {
-
-    auto *info = static_cast<AwsFrameInfo *>(arg);
-    const uint32_t cid = client->id();
-
-    if (info->index == 0) {
-        auto &buf = rxBuffers[cid];
-        buf.clear();
-        if (info->len <= 64 * 1024) {
-            buf.reserve(info->len);
-        }
-    }
-
-    auto &buf = rxBuffers[cid];
-    buf.append(reinterpret_cast<const char *>(data), len);
-    const bool isFinal = info->final && (info->index + len) == info->len;
-
-    // If this is the final frame of the message, process and clear
-    if (isFinal) {
-        if (info->opcode == WS_TEXT) {
-            ESP_LOGV("WebUIPlugin", "Received request: %.*s", (int)buf.size(), buf.c_str());
-            JsonDocument doc(&psramAllocator);
-            DeserializationError err = deserializeJson(doc, buf.c_str());
-            if (!err) {
-                String msgType = doc["tp"].as<String>();
-                if (msgType.startsWith("req:profiles:")) {
-                    handleProfileRequest(client->id(), doc);
-                } else if (msgType == "req:ota-settings") {
-                    handleOTASettings(client->id(), doc);
-                } else if (msgType == "req:ota-start") {
-                    handleOTAStart(client->id(), doc);
-                } else if (msgType == "req:autotune-start") {
-                    handleAutotuneStart(client->id(), doc);
-                } else if (msgType == "req:process:activate") {
-                    controller->activate();
-                } else if (msgType == "req:process:deactivate") {
-                    controller->deactivate();
-                    controller->clear();
-                } else if (msgType == "req:process:clear") {
-                    controller->clear();
-                } else if (msgType == "req:grind:activate") {
-                    controller->activateGrind();
-                } else if (msgType == "req:grind:deactivate") {
-                    controller->deactivateGrind();
-                } else if (msgType == "req:change-grind-target") {
-                    if (doc["target"].is<uint8_t>()) {
-                        auto target = doc["target"].as<uint8_t>();
-                        controller->getSettings().setVolumetricTarget(target);
-                    }
-                } else if (msgType == "req:raise-temp") {
-                    controller->raiseTemp();
-                } else if (msgType == "req:lower-temp") {
-                    controller->lowerTemp();
-                } else if (msgType == "req:raise-grind-target") {
-                    controller->raiseGrindTarget();
-                } else if (msgType == "req:lower-grind-target") {
-                    controller->lowerGrindTarget();
-                } else if (msgType == "req:raise-brew-target") {
-                    controller->raiseBrewTarget();
-                } else if (msgType == "req:lower-brew-target") {
-                    controller->lowerBrewTarget();
-                } else if (msgType == "req:change-mode") {
-                    if (doc["mode"].is<uint8_t>()) {
-                        auto mode = doc["mode"].as<uint8_t>();
-                        controller->deactivate();
-                        controller->clear();
-                        controller->setMode(mode);
-                    }
-                } else if (msgType == "req:change-brew-target") {
-                    if (doc["target"].is<uint8_t>()) {
-                        auto target = doc["target"].as<uint8_t>();
-                        controller->getSettings().setVolumetricTarget(target);
-                    }
-                } else if (msgType == "req:history:rebuild") {
-                    // Handle rebuild asynchronously - send immediate ack, progress comes via events
-                    JsonDocument resp(&psramAllocator);
-                    resp["tp"] = "res:history:rebuild";
-                    if (doc["rid"].is<const char *>()) {
-                        resp["rid"] = doc["rid"];
-                    }
-                    resp["msg"] = "Rebuild started";
-                    client->text(toWsBuffer(resp));
-                    ShotHistory.startAsyncRebuild();
-                } else if (msgType.startsWith("req:history")) {
-                    JsonDocument resp(&psramAllocator);
-                    ShotHistory.handleRequest(doc, resp);
-                    client->text(toWsBuffer(resp));
-                } else if (msgType == "req:flush:start") {
-                    handleFlushStart(client->id(), doc);
-                }
-            }
-        }
-        // Done with this message
-        rxBuffers.erase(cid);
-    }
-}
-
-void WebUIPlugin::handleOTASettings(uint32_t clientId, JsonDocument &request) {
-    if (request["update"].as<bool>()) {
-        if (!request["channel"].isNull()) {
-            controller->getSettings().setOTAChannel(request["channel"].as<String>() == "latest" ? "latest" : "nightly");
-            ota->setReleaseUrl(RELEASE_URL + (controller->getSettings().getOTAChannel() == "latest" ? "latest" : "tag/nightly"));
-            lastUpdateCheck = 0;
-        }
-    }
-    updateOTAStatus("Checking...");
-}
-
-void WebUIPlugin::handleOTAStart(uint32_t clientId, JsonDocument &request) {
-    updating = true;
-    if (request["cp"].is<String>()) {
-        updateComponent = request["cp"].as<String>();
-    } else {
-        updateComponent = "";
-    }
-}
-
-void WebUIPlugin::handleAutotuneStart(uint32_t clientId, JsonDocument &request) {
-    int testTime = request["time"].as<int>();
-    int samples = request["samples"].as<int>();
-    // Heater wattage drives combinedKff = TUNER_OUTPUT_SPAN / wattage on the
-    // controller. 0 = "skip combinedKff derivation" — happens when older Web
-    // UI builds omit the field. WebUI form default is 680 W (Gaggia Classic
-    // Pro 2019 / E24, 230 V boiler).
-    int heaterWattage = request["wattage"] | 0;
-    controller->autotune(testTime, samples, heaterWattage);
-}
-
-void WebUIPlugin::handleProfileRequest(uint32_t clientId, JsonDocument &request) {
-    // Allocate the response node pool from PSRAM — list responses can be tens
-    // of KB and would otherwise fragment the ~300 KB internal heap.
-    JsonDocument response(&psramAllocator);
-    auto type = request["tp"].as<String>();
-    ESP_LOGI("WebUIPlugin", "Handling request: %s", type.c_str());
-    response["tp"] = String("res:") + type.substring(4);
-    response["rid"] = request["rid"].as<String>();
-
-    if (type == "req:profiles:list") {
-        auto arr = response["profiles"].to<JsonArray>();
-        for (auto const &id : profileManager->listProfiles()) {
-            Profile profile{};
-            // Skip entries whose JSON couldn't be opened or failed validation
-            // (parseProfile returns false for missing label/type/phases). Without
-            // this, corrupt or partial profile files surface as blank cards in
-            // the UI — the user reported "blank Simple cards" originating here.
-            if (!profileManager->loadProfile(id, profile)) {
-                ESP_LOGW("WebUIPlugin", "Skipping unreadable profile %s in list response", id.c_str());
-                continue;
-            }
-            auto p = arr.add<JsonObject>();
-            if (request["minimal"].as<bool>()) {
-                p["id"] = profile.id;
-                p["label"] = profile.label;
-            } else {
-                writeProfile(p, profile);
-            }
-        }
-    } else if (type == "req:profiles:load") {
-        auto id = request["id"].as<String>();
-        Profile profile;
-        if (profileManager->loadProfile(id, profile)) {
-            auto obj = response["profile"].to<JsonObject>();
-            writeProfile(obj, profile);
-        } else {
-            response["error"] = F("Profile not found");
-        }
-    } else if (type == "req:profiles:save") {
-        auto obj = request["profile"].as<JsonObject>();
-        Profile profile;
-        // A rejected parse used to be saved anyway, silently writing a
-        // half-parsed profile to flash. Refuse it instead.
-        if (!parseProfile(obj, profile)) {
-            response["error"] = PROFILE_VALIDATION_ERROR;
-        } else if (!profileManager->saveProfile(profile)) {
-            response["error"] = F("Save failed");
-        } else {
-            auto respObj = response["profile"].to<JsonObject>();
-            writeProfile(respObj, profile);
-        }
-    } else if (type == "req:profiles:delete") {
-        auto id = request["id"].as<String>();
-        if (!profileManager->deleteProfile(id)) {
-            response["error"] = F("Delete failed");
-        }
-    } else if (type == "req:profiles:select") {
-        auto id = request["id"].as<String>();
-        profileManager->selectProfile(id);
-    } else if (type == "req:profiles:favorite") {
-        auto id = request["id"].as<String>();
-        profileManager->addFavoritedProfile(id);
-    } else if (type == "req:profiles:unfavorite") {
-        auto id = request["id"].as<String>();
-        profileManager->removeFavoritedProfile(id);
-    } else if (type == "req:profiles:reorder") {
-        // Expect an array of profile IDs in desired order
-        if (request["order"].is<JsonArray>()) {
-            std::vector<String> order;
-            for (JsonVariant v : request["order"].as<JsonArray>()) {
-                if (v.is<String>()) {
-                    String id = v.as<String>();
-                    if (!id.isEmpty() && std::find(order.begin(), order.end(), id) == order.end()) {
-                        order.emplace_back(std::move(id));
-                    }
-                }
-            }
-            controller->getSettings().setProfileOrder(order);
-        }
-    }
-
-    ws.text(clientId, toWsBuffer(response));
-}
-
 namespace {
 // Uniform view over the two /api/settings POST encodings: a JSON object body
 // (preferred) or legacy form args. Only keys present in the request are
@@ -734,7 +647,7 @@ struct SettingsPatch {
 };
 } // namespace
 
-void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
+void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) {
     bool restartRequested = false;
     if (request->method() == HTTP_POST) {
         JsonDocument json(&psramAllocator);
@@ -782,9 +695,16 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
                 settings->setWifiSsid(patch.str("wifiSsid"));
             if (patch.has("mdnsName"))
                 settings->setMdnsName(patch.str("mdnsName"));
-            if (patch.has("wifiPassword") && patch.str("wifiPassword") != "---unchanged---")
+            if (patch.has("otaUploadToken"))
+                settings->setOtaUploadToken(patch.str("otaUploadToken"));
+            if (patch.has("wifiPassword") && patch.str("wifiPassword") != PASSWORD_PLACEHOLDER)
                 settings->setWifiPassword(patch.str("wifiPassword"));
-            if (patch.has("apPassword") && patch.str("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
+            // The placeholder check has to come first: it is longer than the
+            // minimum length, so without it saving an unedited form would store
+            // "---unchanged---" as the access point password and lock you out of
+            // the hotspot.
+            if (patch.has("apPassword") && patch.str("apPassword") != PASSWORD_PLACEHOLDER &&
+                patch.str("apPassword").length() >= WIFI_AP_PASSWORD_MIN_LENGTH)
                 settings->setWifiApPassword(patch.str("apPassword"));
             if (patch.has("homekit"))
                 settings->setHomekit(patch.asBool("homekit"));
@@ -935,9 +855,21 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     doc["pumpModelCoeffs"] = settings.getPumpModelCoeffs();
     doc["pumpSlipCoeffs"] = settings.getPumpSlipCoeffs();
     doc["wifiSsid"] = settings.getWifiSsid();
-    doc["wifiPassword"] = apMode ? "---unchanged---" : settings.getWifiPassword();
-    doc["apPassword"] = settings.getWifiApPassword();
+    // Credentials are echoed back only over the device's own access point, where
+    // the caller had to know the AP password to reach us at all. On a home
+    // network this endpoint is unauthenticated and reachable by anything on the
+    // LAN, so both are masked.
+    //
+    // The wifiPassword condition used to be inverted -- masked on the AP, sent
+    // in clear text over the shared network -- and apPassword was never masked.
+    // The AP password is still readable from the device's own screen, which is
+    // the appropriate channel for it.
+    const bool echoCredentials = apMode;
+    doc["wifiPassword"] = echoCredentials ? settings.getWifiPassword() : PASSWORD_PLACEHOLDER;
+    doc["apPassword"] = echoCredentials ? settings.getWifiApPassword() : PASSWORD_PLACEHOLDER;
     doc["mdnsName"] = settings.getMdnsName();
+    // Report only whether upload is armed; never echo the secret back.
+    doc["otaUploadEnabled"] = settings.getOtaUploadToken().length() > 0;
     doc["temperatureOffset"] = String(settings.getTemperatureOffset());
     doc["pressureScaling"] = String(settings.getPressureScaling());
     doc["boilerFillActive"] = settings.isBoilerFillActive();
@@ -993,19 +925,64 @@ void WebUIPlugin::handleSettings(AsyncWebServerRequest *request) const {
     serializeJson(doc, *response);
     request->send(response);
 
-    if (restartRequested)
-        ESP.restart();
+    if (restartRequested) {
+        restartPending = millis() + 1000; // loop() reboots once the response has left the socket
+    }
 }
 
 // REST profile API: JSON in/out, full-document writes with save-echo.
-//   GET    /api/profiles            list (add ?minimal=1 for id+label only)
+//   GET    /api/profiles            list (?minimal=1: id, label, favorite, selected)
 //   POST   /api/profiles            create (409 if the body's id already exists)
 //   GET    /api/profiles/{id}       load
 //   PUT    /api/profiles/{id}       replace (the path id wins over the body's)
 //   DELETE /api/profiles/{id}       delete
 //   POST   /api/profiles/{id}/select | /favorite | /unfavorite
 // Invalid profile documents are refused with 422 — never partially stored.
-void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
+std::shared_ptr<const WebUIPlugin::PsramString> WebUIPlugin::profileListJson(bool minimal) {
+    const uint32_t revision = profileManager->getRevision();
+    if (profileListCache.revision != revision) {
+        profileListCache.full.reset();
+        profileListCache.minimal.reset();
+        profileListCache.revision = revision;
+    }
+    auto &slot = minimal ? profileListCache.minimal : profileListCache.full;
+    if (!slot) {
+        JsonDocument doc(&psramAllocator);
+        auto arr = doc["profiles"].to<JsonArray>();
+        for (auto const &profileId : profileManager->listProfiles()) {
+            Profile profile{};
+            if (!profileManager->loadProfile(profileId, profile)) {
+                continue; // skip unreadable entries
+            }
+            auto p = arr.add<JsonObject>();
+            if (minimal) { // enough for pickers and the favourites card without the phases
+                p["id"] = profile.id;
+                p["label"] = profile.label;
+                p["favorite"] = profile.favorite;
+                p["selected"] = profile.selected;
+            } else {
+                writeProfile(p, profile);
+            }
+        }
+        auto out = std::make_shared<PsramString>();
+        struct PsramWriter {
+            PsramString &s;
+            size_t write(uint8_t c) {
+                s.push_back(static_cast<char>(c));
+                return 1;
+            }
+            size_t write(const uint8_t *buf, size_t n) {
+                s.append(reinterpret_cast<const char *>(buf), n);
+                return n;
+            }
+        } writer{*out};
+        serializeJson(doc, writer);
+        slot = std::move(out);
+    }
+    return slot;
+}
+
+void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) {
     // Split "/api/profiles[/{id}[/{action}]]" into id + action.
     String rest = request->url().substring(String("/api/profiles").length());
     if (rest.startsWith("/"))
@@ -1052,23 +1029,16 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
 
     if (id.isEmpty()) { // Collection: /api/profiles
         if (request->method() == HTTP_GET) {
-            JsonDocument doc(&psramAllocator);
-            auto arr = doc["profiles"].to<JsonArray>();
-            const bool minimal = request->hasArg("minimal");
-            for (auto const &profileId : profileManager->listProfiles()) {
-                Profile profile{};
-                if (!profileManager->loadProfile(profileId, profile)) {
-                    continue; // Same policy as the WS list: skip unreadable entries.
-                }
-                auto p = arr.add<JsonObject>();
-                if (minimal) {
-                    p["id"] = profile.id;
-                    p["label"] = profile.label;
-                } else {
-                    writeProfile(p, profile);
-                }
-            }
-            sendJson(200, doc);
+            // Served from the PSRAM cache in chunks: no 10 KB String in internal RAM per request.
+            auto json = profileListJson(request->hasArg("minimal"));
+            AsyncWebServerResponse *response =
+                request->beginResponse("application/json", json->size(), [json](uint8_t *out, size_t maxLen, size_t index) -> size_t {
+                    const size_t remaining = index < json->size() ? json->size() - index : 0;
+                    const size_t n = remaining < maxLen ? remaining : maxLen;
+                    memcpy(out, json->data() + index, n);
+                    return n;
+                });
+            request->send(response);
             return;
         }
         if (request->method() == HTTP_POST) {
@@ -1090,6 +1060,25 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
             return;
         }
         return sendError(405, "Method not allowed");
+    }
+
+    if (rest == "reorder") { // POST /api/profiles/reorder {"ids": [...]} ("order" also accepted, as the socket)
+        if (request->method() != HTTP_POST) {
+            return sendError(405, "Method not allowed");
+        }
+        JsonArrayConst ids = bodyDoc["ids"].is<JsonArrayConst>() ? bodyDoc["ids"].as<JsonArrayConst>()
+                                                                  : bodyDoc["order"].as<JsonArrayConst>();
+        if (ids.isNull()) {
+            return sendError(400, "Body must be {\"ids\": [profile ids in display order]}");
+        }
+        std::vector<String> order;
+        for (JsonVariantConst v : ids) {
+            order.emplace_back(v.as<String>());
+        }
+        controller->getSettings().setProfileOrder(order);
+        profileManager->bumpRevision(); // the order is part of the list
+        sendOk();
+        return;
     }
 
     if (action.isEmpty()) { // Item: /api/profiles/{id}
@@ -1155,19 +1144,286 @@ void WebUIPlugin::handleProfilesRest(AsyncWebServerRequest *request) const {
         sendOk();
         return;
     }
-    sendError(404, "Unknown action; expected select, favorite or unfavorite");
+    sendError(404, "Unknown action; expected select, favorite, unfavorite or reorder");
+}
+
+// --- REST command surface -------------------------------------------------------------------
+// The only command path into the machine: the WebSocket has been push-only (evt:* messages)
+// since 2026-08-31. Responses: 200 {"ok":true} or a small JSON object; 4xx {"error": "..."}.
+
+namespace {
+
+bool takeJsonBody(AsyncWebServerRequest *request, JsonDocument &doc) {
+    auto *body = static_cast<char *>(request->_tempObject);
+    request->_tempObject = nullptr;
+    if (body == nullptr) {
+        return false;
+    }
+    const DeserializationError err = deserializeJson(doc, static_cast<const char *>(body));
+    free(body);
+    return !err;
+}
+
+void replyJson(AsyncWebServerRequest *request, int code, const JsonDocument &doc) {
+    String body;
+    serializeJson(doc, body);
+    request->send(code, "application/json", body);
+}
+
+void replyOk(AsyncWebServerRequest *request) { request->send(200, "application/json", R"({"ok":true})"); }
+
+void replyError(AsyncWebServerRequest *request, int code, const char *message) {
+    JsonDocument doc(&psramAllocator);
+    doc["error"] = message;
+    replyJson(request, code, doc);
+}
+
+// 405 with the Allow header RFC 9110 requires on that status.
+void replyMethodNotAllowed(AsyncWebServerRequest *request, const char *allow) {
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->setCode(405);
+    response->addHeader("Allow", allow);
+    JsonDocument doc(&psramAllocator);
+    doc["error"] = "Method not allowed";
+    serializeJson(doc, *response);
+    request->send(response);
+}
+
+// Accepts the numeric mode or its name; returns -1 when neither.
+int parseMode(JsonVariantConst v) {
+    if (v.is<int>()) {
+        const int m = v.as<int>();
+        return (m >= MODE_STANDBY && m <= MODE_GRIND) ? m : -1;
+    }
+    if (v.is<const char *>()) {
+        const String name = v.as<String>();
+        static const char *const names[] = {"standby", "brew", "steam", "water", "grind"};
+        for (int m = 0; m < 5; m++) {
+            if (name.equalsIgnoreCase(names[m])) {
+                return m;
+            }
+        }
+    }
+    return -1;
+}
+
+} // namespace
+
+void WebUIPlugin::handleMachineRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    JsonDocument body(&psramAllocator);
+    takeJsonBody(request, body); // optional for most routes
+
+    if (url == "/api/mode") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"mode\": 0-4 | \"standby\"|\"brew\"|\"steam\"|\"water\"|\"grind\"}");
+        }
+        const int mode = parseMode(body["mode"]);
+        if (mode < 0) {
+            return replyError(request, 400, "mode must be 0-4 or one of standby, brew, steam, water, grind");
+        }
+        controller->deactivate();
+        controller->clear();
+        controller->setMode(mode);
+        JsonDocument doc(&psramAllocator);
+        doc["mode"] = mode;
+        return replyJson(request, 200, doc);
+    }
+    if (url.startsWith("/api/process") || url.startsWith("/api/grind") || url == "/api/flush") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "Method not allowed");
+        }
+        if (url == "/api/process/activate") {
+            controller->activate();
+        } else if (url == "/api/process/deactivate") {
+            controller->deactivate();
+            controller->clear();
+        } else if (url == "/api/process/clear") {
+            controller->clear();
+        } else if (url == "/api/grind/activate") {
+            controller->activateGrind();
+        } else if (url == "/api/grind/deactivate") {
+            controller->deactivateGrind();
+        } else if (url == "/api/flush") {
+            controller->onFlush();
+        } else {
+            return replyError(request, 404, "Unknown action");
+        }
+        return replyOk(request);
+    }
+    if (url == "/api/autotune") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"time\": s, \"samples\": n, \"wattage\": W}");
+        }
+        const int testTime = body["time"] | 0;
+        const int samples = body["samples"] | 0;
+        const int wattage = body["wattage"] | 0; // 0 = skip combinedKff derivation, as on the socket path
+        if (testTime <= 0 || samples <= 0) {
+            return replyError(request, 400, "time and samples must be positive");
+        }
+        controller->autotune(testTime, samples, wattage);
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "started";
+        return replyJson(request, 202, doc);
+    }
+    if (url.startsWith("/api/targets/")) {
+        // /api/targets/{temperature|brew|grind}/{raise|lower}  POST, one step
+        // /api/targets/{temperature|grind}                     PUT {"value": n}, absolute
+        // /api/targets/mode                                    PUT {"volumetric": bool}
+        // brew has no absolute form: its target is the selected profile's duration or
+        // volumetric target, which raiseBrewTarget()/lowerBrewTarget() step.
+        const String rest = url.substring(String("/api/targets/").length());
+        String which = rest, dir;
+        const int slash = rest.indexOf('/');
+        if (slash >= 0) {
+            which = rest.substring(0, slash);
+            dir = rest.substring(slash + 1);
+        }
+        if (method == HTTP_POST && (dir == "raise" || dir == "lower")) {
+            const bool up = dir == "raise";
+            if (which == "temperature") {
+                up ? controller->raiseTemp() : controller->lowerTemp();
+            } else if (which == "brew") {
+                up ? controller->raiseBrewTarget() : controller->lowerBrewTarget();
+            } else if (which == "grind") {
+                up ? controller->raiseGrindTarget() : controller->lowerGrindTarget();
+            } else {
+                return replyError(request, 404, "Unknown target; expected temperature, brew or grind");
+            }
+            return replyOk(request);
+        }
+        if (method == HTTP_PUT && dir.isEmpty() && which == "mode") {
+            // /api/targets/mode {"volumetric": bool}: brew/grind targets are time-based or
+            // volumetric (weight, needs a scale). One setting covers both targets.
+            if (!body["volumetric"].is<bool>()) {
+                return replyError(request, 400, "Body must be {\"volumetric\": true|false}");
+            }
+            controller->getSettings().setVolumetricTarget(body["volumetric"].as<bool>());
+            JsonDocument doc(&psramAllocator);
+            doc["volumetric"] = controller->getSettings().isVolumetricTarget();
+            return replyJson(request, 200, doc);
+        }
+        if (method == HTTP_PUT && dir.isEmpty()) {
+            if (!body["value"].is<float>()) {
+                return replyError(request, 400, "Body must be {\"value\": number}");
+            }
+            const float value = body["value"].as<float>();
+            JsonDocument doc(&psramAllocator);
+            if (which == "temperature") {
+                const float t = constrain(value, static_cast<float>(MIN_TEMP), static_cast<float>(MAX_TEMP));
+                controller->setTargetTemp(t);
+                doc["temperature"] = t;
+            } else if (which == "grind") {
+                if (value <= 0) {
+                    return replyError(request, 400, "grind target must be positive");
+                }
+                controller->getSettings().setTargetGrindVolume(value);
+                doc["grind"] = value;
+            } else {
+                return replyError(request, 404, "Absolute value supported for temperature and grind only");
+            }
+            return replyJson(request, 200, doc);
+        }
+        return replyError(request, 405, "POST .../raise|lower or PUT {\"value\": n}");
+    }
+    replyError(request, 404, "Unknown route");
+}
+
+void WebUIPlugin::handleOtaRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    if (url == "/api/ota") {
+        if (method == HTTP_GET) {
+            JsonDocument doc(&psramAllocator);
+            buildOTAStatus(doc);
+            return replyJson(request, 200, doc);
+        }
+        if (method == HTTP_POST) {
+            // Optionally switch the release channel, then schedule an update check.
+            JsonDocument body(&psramAllocator);
+            takeJsonBody(request, body);
+            if (body["channel"].is<const char *>()) {
+                const String channel = body["channel"].as<String>() == "latest" ? "latest" : "nightly";
+                controller->getSettings().setOTAChannel(channel);
+                ota->setReleaseUrl(RELEASE_URL + (channel == "latest" ? "latest" : "tag/nightly"));
+            }
+            lastUpdateCheck = 0; // loop() performs the (blocking, TLS) check
+            JsonDocument doc(&psramAllocator);
+            doc["status"] = "checking";
+            doc["channel"] = controller->getSettings().getOTAChannel();
+            return replyJson(request, 202, doc);
+        }
+        return replyError(request, 405, "GET for status, POST {\"channel\": \"latest\"|\"nightly\"} to re-check");
+    }
+    if (url == "/api/ota/start") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "POST {\"component\": \"display\"|\"controller\"}");
+        }
+        JsonDocument body(&psramAllocator);
+        takeJsonBody(request, body);
+        const String component = body["component"].is<const char *>() ? body["component"].as<String>()
+                                                                        : body["cp"].as<String>();
+        updateComponent = component;
+        updating = true;
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "started";
+        doc["component"] = component;
+        return replyJson(request, 202, doc);
+    }
+    replyError(request, 404, "Unknown route");
+}
+
+void WebUIPlugin::handleHistoryRest(AsyncWebServerRequest *request) {
+    const String url = request->url();
+    const auto method = request->method();
+    if (url == "/api/history/rebuild") {
+        if (method != HTTP_POST) {
+            return replyError(request, 405, "Method not allowed");
+        }
+        ShotHistory.startAsyncRebuild(); // progress arrives as evt:history-rebuild-progress
+        JsonDocument doc(&psramAllocator);
+        doc["status"] = "rebuilding";
+        return replyJson(request, 202, doc);
+    }
+    // DELETE /api/history/{id}      PUT /api/history/{id}.json (notes)
+    String id = url.substring(String("/api/history/").length());
+    const bool notes = id.endsWith(".json");
+    if (notes) {
+        id = id.substring(0, id.length() - 5);
+    }
+    if (id.isEmpty()) {
+        return replyError(request, 404, "Unknown route");
+    }
+    for (size_t i = 0; i < id.length(); i++) {
+        if (!isdigit(static_cast<unsigned char>(id[i]))) {
+            return replyError(request, 400, "Shot id must be numeric");
+        }
+    }
+    if (method == HTTP_DELETE && !notes) {
+        ShotHistory.deleteShot(id);
+        return replyOk(request);
+    }
+    if (method == HTTP_PUT && notes) {
+        JsonDocument body(&psramAllocator);
+        if (!takeJsonBody(request, body) || !body.is<JsonObject>()) {
+            return replyError(request, 400, "Body must be a JSON notes object");
+        }
+        ShotHistory.saveShotNotes(id, body);
+        return replyOk(request);
+    }
+    replyError(request, 405, "DELETE /api/history/{id} or PUT /api/history/{id}.json");
 }
 
 void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
     JsonDocument doc(&psramAllocator);
     JsonArray scalesArray = doc.to<JsonArray>();
-    std::vector<DiscoveredDevice> devices = BLEScales.getDiscoveredScales();
-    for (const DiscoveredDevice &device : BLEScales.getDiscoveredScales()) {
-        JsonDocument scale(&psramAllocator);
+    const std::vector<DiscoveredDevice> devices = BLEScales.getDiscoveredScales(); // returned by value
+    for (const DiscoveredDevice &device : devices) {
+        JsonObject scale = scalesArray.add<JsonObject>();
         scale["uuid"] = device.getAddress().toString();
         scale["name"] = device.getName();
         scale["rssi"] = device.getRSSI();
-        scalesArray.add(scale);
     }
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     serializeJson(doc, *response);
@@ -1176,8 +1432,7 @@ void WebUIPlugin::handleBLEScaleList(AsyncWebServerRequest *request) {
 
 void WebUIPlugin::handleBLEScaleScan(AsyncWebServerRequest *request) {
     if (request->method() != HTTP_POST) {
-        request->send(404);
-        return;
+        return replyMethodNotAllowed(request, "POST");
     }
     BLEScales.scan();
     JsonDocument doc(&psramAllocator);
@@ -1189,10 +1444,13 @@ void WebUIPlugin::handleBLEScaleScan(AsyncWebServerRequest *request) {
 
 void WebUIPlugin::handleBLEScaleConnect(AsyncWebServerRequest *request) {
     if (request->method() != HTTP_POST) {
-        request->send(404);
-        return;
+        return replyMethodNotAllowed(request, "POST");
     }
-    BLEScales.connect(request->arg("uuid").c_str());
+    const String uuid = request->arg("uuid"); // form field or query parameter
+    if (uuid.isEmpty()) {
+        return replyError(request, 400, "Missing uuid");
+    }
+    BLEScales.connect(uuid.c_str());
     JsonDocument doc(&psramAllocator);
     doc["success"] = true;
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -1220,14 +1478,8 @@ void WebUIPlugin::handleBLEScaleInfo(AsyncWebServerRequest *request) {
     request->send(response);
 }
 
-void WebUIPlugin::updateOTAStatus(const String &version) {
-    if (ws.getClients().empty()) {
-        return;
-    }
+void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
     Settings const &settings = controller->getSettings();
-    JsonDocument doc(&psramAllocator);
-    doc["latestVersion"] = ota->getCurrentVersion();
-    doc["tp"] = "res:ota-settings";
     doc["displayUpdateAvailable"] = ota->isUpdateAvailable(false);
     doc["controllerUpdateAvailable"] = ota->isUpdateAvailable(true);
     doc["displayVersion"] = BUILD_GIT_VERSION;
@@ -1256,11 +1508,47 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
         doc["heapFree"] = static_cast<uint32_t>(free);
         doc["heapLargest"] = static_cast<uint32_t>(largest);
         doc["heapTotal"] = static_cast<uint32_t>(total);
+        // PSRAM is the other budget: JSON work, the LVGL buffers and response caches live there.
+        doc["psramFree"] = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        doc["psramLargest"] = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        doc["heapMinFree"] = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL));
+    }
+    // Render pipeline over the last PANEL_STATS_PERIOD window (see PanelStats.h): UI frames rendered, LVGL flushes into
+    // the framebuffer, and RGB panel refreshes. Nominal on the T-RGB: ~40 fps while animating, ~23.5 Hz vsync.
+    {
+        doc["uiFps"] = panelSnapshot.uiFps;
+        doc["flushAvgUs"] = panelSnapshot.flushAvgUs;
+        doc["flushMaxUs"] = panelSnapshot.flushMaxUs;
+        doc["panelVsyncHz"] = panelSnapshot.vsyncHz;
+        doc["panelLateVsyncs"] = panelSnapshot.vsyncsLate;
     }
     doc["controllerTaskHealth"] = controller->isTaskHealthy();
 #ifndef GAGGIMATE_HEADLESS
     doc["uiTaskHealth"] = controller->getUI()->isTaskHealthy();
 #endif
+    // Controller link health: counters since boot. Retransmits are normal under
+    // Wi-Fi load; give-ups are commands the controller never received.
+    {
+        const GaggiMateClient *client = controller->getClientController();
+        const auto s = client->getLinkStats(); // Endpoint::LinkStats; the sim mock mirrors the fields
+        const Controller::LinkHealth h = controller->getLinkHealth();
+        JsonObject link = doc["link"].to<JsonObject>();
+        link["connected"] = client->isConnected();
+        link["rttMs"] = client->hasLatency() ? static_cast<int>(client->getLatencyMs()) : -1;
+        link["rttMaxMs"] = s.rttMaxMs;
+        link["txFrames"] = s.txFrames;
+        link["rxFrames"] = s.rxFrames;
+        link["retransmits"] = s.retransmits;
+        link["giveUps"] = s.giveUps;
+        link["sendFailures"] = s.sendFailures;
+        link["encodeFailures"] = s.encodeFailures;
+        link["duplicates"] = s.duplicates;
+        link["rxBackpressure"] = s.rxBackpressure;
+        link["disconnects"] = h.disconnects;
+        link["lastGapMs"] = h.lastGapMs;
+        link["maxGapMs"] = h.maxGapMs;
+        link["linkUptimeMs"] = h.connectedAt != 0 ? static_cast<uint32_t>(millis() - h.connectedAt) : 0;
+    }
     if (controller->isSDCard()) {
         const uint64_t total = SD_MMC.cardSize();
         const uint64_t used = SD_MMC.usedBytes();
@@ -1273,8 +1561,160 @@ void WebUIPlugin::updateOTAStatus(const String &version) {
             doc["sdUsedPct"] = static_cast<uint8_t>((used * 100) / total);
         }
     }
+}
+
+void WebUIPlugin::updateOTAStatus() {
+    if (ws.getClients().empty()) {
+        return;
+    }
+    JsonDocument doc(&psramAllocator);
+    doc["tp"] = "evt:ota-status";
+    buildOTAStatus(doc);
     broadcastJson(doc);
 }
+
+// Firmware upload is device-only: the simulator's ESPAsyncWebServer shim has no
+// multipart upload support, so these are compiled out there rather than faked.
+#ifndef GAGGIMATE_SIM
+bool WebUIPlugin::isUploadAuthorized(AsyncWebServerRequest *request) const {
+    const String expected = controller->getSettings().getOtaUploadToken();
+    if (expected.isEmpty()) {
+        return false; // fail closed: upload stays disabled until a token is set
+    }
+    String provided;
+    if (request->hasHeader("X-OTA-Token")) {
+        provided = request->getHeader("X-OTA-Token")->value();
+    } else if (request->hasArg("token")) {
+        provided = request->arg("token");
+    }
+    if (provided.length() != expected.length()) {
+        return false;
+    }
+    // Constant-time compare so a wrong token cannot be recovered byte by byte.
+    uint8_t diff = 0;
+    for (size_t i = 0; i < expected.length(); i++) {
+        diff |= static_cast<uint8_t>(provided[i]) ^ static_cast<uint8_t>(expected[i]);
+    }
+    return diff == 0;
+}
+
+void WebUIPlugin::handleFirmwareUpload(AsyncWebServerRequest *request, size_t index, uint8_t *data, size_t len,
+                                       size_t total) {
+    const bool final = index + len >= total;
+    if (index == 0) {
+        if (!isUploadAuthorized(request)) {
+            ESP_LOGW("WebUIPlugin", "Rejected firmware upload: bad or missing token");
+            return; // result handler turns this into a 401
+        }
+        if (uploadInProgress || Update.isRunning()) {
+            ESP_LOGW("WebUIPlugin", "Rejected firmware upload: another update is already running");
+            uploadError = "another update is already running";
+            return;
+        }
+        uploadError = "";
+        uploadTotal = 0;
+        // ?target=fs writes the LittleFS image instead of the app. That is how a
+        // filesystem backup is restored without a cable -- profiles and shot
+        // history live there, and there is no other write path for .slog files.
+        // Unlike the app, the filesystem partition is single-banked: a failed
+        // write leaves it corrupt and the next mount reformats it
+        // (Controller.cpp's LittleFS.begin(true)). Only ever push an image you
+        // still hold a copy of.
+        const bool toFilesystem = request->hasArg("target") && request->arg("target") == "fs";
+        uploadCommand = toFilesystem ? U_SPIFFS : U_FLASH;
+        // Content-Length sizes the update, so an image too big for the partition
+        // is refused before a byte is written. For U_FLASH the Updater also
+        // aborts on the first chunk if the ESP image magic byte is wrong, so a
+        // stray file cannot be half-written; that check does not apply to
+        // U_SPIFFS, which has no header to validate.
+        if (!Update.begin(total > 0 ? total : UPDATE_SIZE_UNKNOWN, uploadCommand)) {
+            uploadError = String("Update.begin: ") + Update.errorString();
+            ESP_LOGE("WebUIPlugin", "Update.begin failed: %s", Update.errorString());
+            return;
+        }
+        uploadInProgress = true;
+        uploadLastPct = -1;
+        uploadLastChunk = millis();
+        // ota:upload:* has no listeners; ota:update:* has five, including the
+        // one that hands the shared radio to Wi-Fi for a display update and the
+        // one that puts an update screen on the panel. Streaming megabytes over
+        // Wi-Fi without them left BLE fighting for the antenna, which is how a
+        // controller link gets dropped mid-upload. component=display is what
+        // tells Controller to leave BLE relaxed rather than preferring it.
+        pluginManager->trigger("ota:update:start", "component", "display");
+        pluginManager->trigger("ota:upload:start");
+        ESP_LOGI("WebUIPlugin", "%s upload started", toFilesystem ? "Filesystem" : "Firmware");
+    }
+    if (!uploadInProgress) {
+        return;
+    }
+    if (len && Update.write(data, len) != len) {
+        // Capture before abort(): abort() overwrites the reason with "Aborted".
+        uploadError = String("Update.write: ") + Update.errorString() + " at " + String(uploadTotal) + " bytes";
+        ESP_LOGE("WebUIPlugin", "Update.write failed: %s", Update.errorString());
+        Update.abort();
+        uploadInProgress = false;
+        pluginManager->trigger("ota:update:end");
+        return;
+    }
+    uploadTotal += len;
+    uploadLastChunk = millis();
+    // Progress is reported against the partition size, which is the only bound
+    // available while streaming; it is a lower bound on the real percentage.
+    const size_t capacity = Update.size();
+    if (capacity > 0) {
+        const int pct = static_cast<int>((uploadTotal * 100) / capacity);
+        if (pct != uploadLastPct) {
+            uploadLastPct = pct;
+            updateOTAProgress(PHASE_DISPLAY_FW, pct);
+        }
+    }
+    if (final) {
+        if (!Update.end(true)) {
+            uploadError = String("Update.end: ") + Update.errorString() + " after " + String(uploadTotal) + " bytes";
+            ESP_LOGE("WebUIPlugin", "Update.end failed: %s", Update.errorString());
+            uploadInProgress = false;
+            pluginManager->trigger("ota:update:end");
+            return;
+        }
+        ESP_LOGI("WebUIPlugin", "Firmware upload complete: %u bytes", static_cast<unsigned>(uploadTotal));
+    }
+}
+
+void WebUIPlugin::handleFirmwareUploadResult(AsyncWebServerRequest *request) {
+    if (!isUploadAuthorized(request)) {
+        request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+        return;
+    }
+    const bool ok = uploadInProgress && !Update.hasError() && Update.isFinished();
+    uploadInProgress = false;
+    if (!ok) {
+        // uploadError names the real cause; the Updater's own string is only a fallback,
+        // and reads "Aborted" whenever abort() has run.
+        const String reason = uploadError.isEmpty() ? String(Update.errorString()) : uploadError;
+        ESP_LOGE("WebUIPlugin", "Firmware upload failed: %s", reason.c_str());
+        Update.abort();
+        JsonDocument doc(&psramAllocator);
+        doc["error"] = reason;
+        doc["received"] = static_cast<uint32_t>(uploadTotal);
+        String body;
+        serializeJson(doc, body);
+        request->send(400, "application/json", body);
+        pluginManager->trigger("ota:update:end");
+        pluginManager->trigger("ota:upload:failed");
+        return;
+    }
+    AsyncWebServerResponse *response =
+        request->beginResponse(200, "application/json", "{\"status\":\"ok\",\"restarting\":true}");
+    response->addHeader("Connection", "close");
+    request->send(response);
+    updateOTAProgress(PHASE_FINISHED, 100);
+    pluginManager->trigger("ota:update:end");
+    pluginManager->trigger("ota:upload:finished");
+    ESP_LOGI("WebUIPlugin", "Restarting into newly uploaded firmware");
+    restartPending = millis() + 1000; // let the response flush before rebooting
+}
+#endif
 
 void WebUIPlugin::updateOTAProgress(uint8_t phase, int progress) {
     if (ws.getClients().empty()) {
@@ -1309,14 +1749,54 @@ void WebUIPlugin::sendAutotuneFailed() {
     broadcastJson(doc);
 }
 
-void WebUIPlugin::handleFlushStart(uint32_t clientId, JsonDocument &request) {
-    controller->onFlush();
-
-    JsonDocument response(&psramAllocator);
-    response["tp"] = "res:flush:start";
-    response["rid"] = request["rid"];
-    response["success"] = true;
-    ws.text(clientId, toWsBuffer(response));
+// GET /api/debug/heap: internal-heap attribution. `checkpoints` are the boot stages and brew events recorded by
+// heapCheckpoint(); `tasks` lists every FreeRTOS task with its stack headroom (bytes) and cumulative CPU share since
+// boot (needs CONFIG_FREERTOS_USE_TRACE_FACILITY + GENERATE_RUN_TIME_STATS, both on in the prebuilt config).
+void WebUIPlugin::handleHeapDebug(AsyncWebServerRequest *request) {
+    JsonDocument doc(&psramAllocator);
+    const uint32_t caps = MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL;
+    JsonObject now = doc["now"].to<JsonObject>();
+    now["free"] = static_cast<uint32_t>(heap_caps_get_free_size(caps));
+    now["largest"] = static_cast<uint32_t>(heap_caps_get_largest_free_block(caps));
+    now["minFree"] = static_cast<uint32_t>(heap_caps_get_minimum_free_size(caps));
+    now["total"] = static_cast<uint32_t>(heap_caps_get_total_size(caps));
+    now["psramFree"] = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    now["uptimeMs"] = static_cast<uint32_t>(millis());
+    JsonArray cps = doc["checkpoints"].to<JsonArray>();
+    size_t count = 0;
+    const HeapCheckpoint *table = heapCheckpoints(count);
+    for (size_t i = 0; i < count; i++) {
+        JsonObject o = cps.add<JsonObject>();
+        o["label"] = table[i].label;
+        o["t"] = table[i].atMs;
+        o["free"] = table[i].free;
+        o["largest"] = table[i].largest;
+        o["minFree"] = table[i].minFree;
+    }
+#ifndef GAGGIMATE_SIM
+    JsonArray tasks = doc["tasks"].to<JsonArray>();
+    const UBaseType_t n = uxTaskGetNumberOfTasks();
+    auto *status = static_cast<TaskStatus_t *>(heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (status != nullptr) {
+        uint32_t totalRunTime = 0;
+        const UBaseType_t got = uxTaskGetSystemState(status, n, &totalRunTime);
+        for (UBaseType_t i = 0; i < got; i++) {
+            JsonObject o = tasks.add<JsonObject>();
+            o["name"] = status[i].pcTaskName;
+            o["prio"] = status[i].uxCurrentPriority;
+            o["stackFree"] = status[i].usStackHighWaterMark;
+#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+            o["core"] = status[i].xCoreID;
+#endif
+            if (totalRunTime > 0)
+                o["cpuPct"] = static_cast<float>(status[i].ulRunTimeCounter) * 100.0f / static_cast<float>(totalRunTime);
+        }
+        heap_caps_free(status);
+    }
+#endif
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    serializeJson(doc, *response);
+    request->send(response);
 }
 
 void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
@@ -1335,7 +1815,8 @@ void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
         return;
     }
 
-    ESP_LOGI("WebUIPlugin", "Streaming core dump: %d bytes from 0x%x", coreSize, coreAddr);
+    ESP_LOGI("WebUIPlugin", "Streaming core dump: %u bytes from 0x%lx", static_cast<unsigned>(coreSize),
+             static_cast<unsigned long>(coreAddr));
 
     // Create a streaming response
     AsyncWebServerResponse *response =

@@ -13,7 +13,7 @@ static constexpr const char *DEVICE_NAME = "Exhalation";
 static constexpr const char *TOPIC_PREFIX = "exhalation/";
 
 bool MQTTPlugin::connect(Controller *controller) {
-    const Settings settings = controller->getSettings();
+    const Settings &settings = controller->getSettings();
     const String ip = settings.getHomeAssistantIP();
     const int haPort = settings.getHomeAssistantPort();
     const String clientId = DEVICE_NAME;
@@ -38,7 +38,7 @@ bool MQTTPlugin::connect(Controller *controller) {
 void MQTTPlugin::publishDiscovery(Controller *controller) {
     if (!client.connected())
         return;
-    const Settings settings = controller->getSettings();
+    const Settings &settings = controller->getSettings();
     const String haTopic = settings.getHomeAssistantTopic();
     String mac = WiFi.macAddress();
     mac.replace(":", "_");

@@ -7,14 +7,27 @@ info:
     tools (scripts, automations, LLM agents) can read machine state, manage
     profiles, and fetch shot data with nothing but plain HTTP.
 
-    Realtime control and events (process start/stop, live status, autotune,
-    shot notes) remain on the WebSocket API — see `docs/websocket-api.yaml`.
+    Every command and query is a route here. The WebSocket at `/ws` is
+    push-only: the device streams `evt:*` events on it (live status, OTA
+    progress, autotune results, history rebuild progress) and ignores inbound
+    frames — see `docs/websocket-api.yaml`.
 
     Conventions:
     - All JSON endpoints respond `application/json`.
     - Errors are `{"error": "<message>"}` with a 4xx/5xx status.
     - There is no authentication; the API trusts the local network, like the
-      web UI itself.
+      web UI itself. `POST /api/ota/upload` is the exception (token header).
+    - Writes (anything but GET) that carry a browser `Origin` header must match
+      the request's `Host`, or the device answers 403. Browsers add Origin to
+      every cross-site request, so a page on another site cannot drive the
+      machine; curl and scripts send no Origin and are unaffected.
+    - JSON routes read the body only when `Content-Type: application/json`;
+      any other type is treated as no body (400).
+servers:
+  - url: http://exhalation.local
+    description: The display on your Wi-Fi network via mDNS. The host is the `mdnsName` setting (default `exhalation`).
+  - url: http://4.4.4.1
+    description: The display's own access point (AP mode), before it has joined a network.
 paths:
   /api/status:
     get:
@@ -24,6 +37,7 @@ paths:
         over the WebSocket as `evt:status`.
       responses:
         "200":
+          description: Current mode and temperatures.
           content:
             application/json:
               schema:
@@ -38,8 +52,12 @@ paths:
       summary: Read all settings
       responses:
         "200":
-          description: Flat JSON object of every setting. `wifiPassword` reads
-            as the sentinel `"---unchanged---"` while in AP mode.
+          description: |
+            Flat JSON object of every setting. `wifiPassword` and `apPassword`
+            are echoed only while the device is in AP mode (reaching it there
+            required the AP password); on a shared network both read as the
+            sentinel `"---unchanged---"`. The OTA upload token is never
+            returned: `otaUploadEnabled` (boolean) says whether one is set.
     post:
       summary: Partial settings update
       description: |
@@ -55,13 +73,16 @@ paths:
 
         Special keys: `restart` (boolean) reboots the machine after the
         response is sent. `wifiPassword` equal to `"---unchanged---"` is
-        ignored. `apPassword` shorter than the minimum length is ignored.
+        ignored. `apPassword` equal to the sentinel or shorter than the minimum
+        length is ignored. `otaUploadToken` (string) is write-only: it sets the
+        token `POST /api/ota/upload` requires (empty disables uploads) and GET
+        reports only `otaUploadEnabled`.
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              description: Any subset of the keys returned by GET.
+              description: Any subset of the keys returned by GET, plus the write-only `otaUploadToken`.
       responses:
         "200":
           description: Full settings object after the update.
@@ -76,9 +97,10 @@ paths:
           in: query
           required: false
           schema: { type: integer }
-          description: When present, each entry carries only `id` and `label`.
+          description: Any value returns id, label, favorite and selected per profile (no phases). Both forms are served from a per-revision cache in PSRAM.
       responses:
         "200":
+          description: All profiles in display order.
           content:
             application/json:
               schema:
@@ -114,6 +136,7 @@ paths:
       summary: Load a profile
       responses:
         "200":
+          description: The stored profile.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Profile" }
@@ -139,18 +162,24 @@ paths:
         "404": { description: Profile not found. }
 
   /api/profiles/{id}/select:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Make this the active profile
       responses:
         "200": { description: "`{\"ok\": true}`" }
         "404": { description: Profile not found. }
   /api/profiles/{id}/favorite:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Add to favorites
       responses:
         "200": { description: "`{\"ok\": true}`" }
         "404": { description: Profile not found. }
   /api/profiles/{id}/unfavorite:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Remove from favorites
       responses:
@@ -163,7 +192,9 @@ paths:
       description: SIDX header plus fixed-size entries; parser reference is
         `web/src/pages/ShotHistory/parseBinaryIndex.js`.
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The index file.
+          content: { application/octet-stream: {} }
         "404": { description: Index not built yet. }
   /api/history/recent.bin:
     get:
@@ -173,8 +204,12 @@ paths:
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 8 }
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: Up to `limit` index entries, newest first.
+          content: { application/octet-stream: {} }
   /api/history/{id}.slog:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]{6}$" } }
     get:
       summary: Full shot recording (binary)
       description: Zero-padded 6-digit id, e.g. `/api/history/000042.slog`.
@@ -182,22 +217,434 @@ paths:
         `web/scripts/shot-scrape.mjs` converts shots to a compact text format
         suitable for LLM input.
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The shot's samples.
+          content: { application/octet-stream: {} }
   /api/history/{id}.json:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]{6}$" } }
     get:
       summary: Shot notes (dose, grind, rating, tasting notes)
       description: Present only for shots that have notes. Schema is
-        `schema/shot_notes.json`. Notes are written over the WebSocket.
+        `schema/shot_notes.json`. Notes are written with PUT on this route.
       responses:
-        "200": { content: { application/json: {} } }
-
+        "200":
+          description: The notes document.
+          content: { application/json: {} }
+        "404": { description: The shot has no notes. }
+    put:
+      summary: Save the notes for a shot
+      description: Stores the notes document as the shot's `.json` file; also updates the index's
+        rating and, when `doseOut` is given, its recorded volume.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: Notes object (see `schema/`). }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/debug/heap:
+    get:
+      summary: Internal-heap attribution (debug)
+      description: >
+        Current internal-heap figures, the heap checkpoints recorded at each boot stage and on
+        brew start/end (free, largest block and minimum-ever free at that moment), and every
+        FreeRTOS task with its stack headroom in bytes and cumulative CPU share since boot.
+        Intended for diagnosing where internal RAM goes; not part of the UI.
+      responses:
+        '200':
+          description: Heap snapshot, checkpoint table and task list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  now:
+                    type: object
+                    properties:
+                      free: { type: integer }
+                      largest: { type: integer }
+                      minFree: { type: integer }
+                      total: { type: integer }
+                      psramFree: { type: integer }
+                      uptimeMs: { type: integer }
+                  checkpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        label: { type: string }
+                        t: { type: integer, description: Milliseconds since boot. }
+                        free: { type: integer }
+                        largest: { type: integer }
+                        minFree: { type: integer }
+                  tasks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        prio: { type: integer }
+                        core: { type: integer }
+                        stackFree: { type: integer, description: Stack high-water mark, bytes never used. }
+                        cpuPct: { type: number, description: Share of all run time since boot. }
   /api/core-dump:
     get:
       summary: Download the last crash core dump, if any
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The raw core dump partition, for `scripts/analyze_coredump.sh`.
+          content: { application/octet-stream: {} }
 
+  /api/mode:
+    post:
+      summary: Switch machine mode
+      description: |
+        Stops and clears any running process, then selects the mode. Accepts the number or the name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  oneOf:
+                    - { type: integer, minimum: 0, maximum: 4 }
+                    - { type: string, enum: [standby, brew, steam, water, grind] }
+      responses:
+        "200":
+          description: The mode now in effect.
+          content: { application/json: { schema: { type: object, properties: { mode: { type: integer } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/process/{action}:
+    post:
+      summary: Start, stop or clear the current process
+      description: |
+        `activate` starts the process for the current mode (brew, steam, water); `deactivate`
+        stops it and clears its state; `clear` only clears.
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate, clear] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/grind/{action}:
+    post:
+      summary: Start or stop grinding
+      parameters:
+        - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+  /api/flush:
+    post:
+      summary: Run the flush routine
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+  /api/autotune:
+    post:
+      summary: Start a PID autotune
+      description: Runs the SIMC autotuner on the boiler. The result arrives as `evt:autotune-result`
+        on the WebSocket (`evt:autotune-failed` if it aborts). `wattage` 0 skips the feed-forward derivation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [time, samples]
+              properties:
+                time: { type: integer, minimum: 1, description: Test duration (s). }
+                samples: { type: integer, minimum: 1 }
+                wattage: { type: integer, minimum: 0, description: Heater wattage; 680 is the WebUI default. }
+      responses:
+        "202": { description: Autotune started. }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/targets/{target}/{direction}:
+    post:
+      summary: Step a target up or down
+      description: |
+        One step, as the on-screen +/- buttons: temperature by 1 °C; brew by 1 s of duration or
+        1 g of volumetric target, whichever the selected profile uses; grind by 0.5 g or 1 s
+        likewise.
+      parameters:
+        - { name: target, in: path, required: true, schema: { type: string, enum: [temperature, brew, grind] } }
+        - { name: direction, in: path, required: true, schema: { type: string, enum: [raise, lower] } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/targets/{target}:
+    put:
+      summary: Set a target to an absolute value
+      description: |
+        `temperature` (°C, clamped to 0–160) or `grind` (g, > 0). `brew` has no absolute form:
+        its target belongs to the selected profile; edit the profile or step it.
+      parameters:
+        - { name: target, in: path, required: true, schema: { type: string, enum: [temperature, grind] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [value], properties: { value: { type: number } } }
+      responses:
+        "200":
+          description: The value as applied (after clamping).
+          content:
+            application/json:
+              schema:
+                type: object
+                description: "Echoes the value as applied, e.g. {\"temperature\": 93}."
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/targets/mode:
+    put:
+      summary: Choose time-based or volumetric targets
+      description: |
+        Sets whether brew and grind stop on weight (`volumetric: true`) or on time.
+        Volumetric needs a connected scale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [volumetric], properties: { volumetric: { type: boolean } } }
+      responses:
+        "200":
+          description: The setting now in effect.
+          content: { application/json: { schema: { type: object, properties: { volumetric: { type: boolean } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/ota:
+    get:
+      summary: Versions, update availability, storage and memory
+      description: The same payload the device pushes as `evt:ota-status` on the WebSocket.
+      responses:
+        "200":
+          description: Versions, channel, update flags, LittleFS and heap figures.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  displayVersion: { type: string }
+                  controllerVersion: { type: string }
+                  hardware: { type: string, description: Controller board variant. }
+                  latestVersion: { type: string }
+                  channel: { type: string, enum: [latest, nightly] }
+                  displayUpdateAvailable: { type: boolean }
+                  controllerUpdateAvailable: { type: boolean }
+                  updating: { type: boolean }
+                  spiffsTotal: { type: integer, description: LittleFS size (bytes). }
+                  spiffsUsed: { type: integer }
+                  spiffsFree: { type: integer, description: Free LittleFS bytes. }
+                  spiffsUsedPct: { type: integer }
+                  heapFree: { type: integer, description: Free internal RAM (bytes). }
+                  heapLargest: { type: integer, description: Largest free internal block (bytes). }
+                  heapTotal: { type: integer }
+                  psramFree: { type: integer, description: Free PSRAM (bytes). }
+                  psramLargest: { type: integer }
+                  heapMinFree: { type: integer, description: Lowest free internal heap since boot (bytes). }
+                  uiFps: { type: number, description: UI loop iterations per second over the last 10 s window (~40 while animating on the T-RGB). }
+                  flushAvgUs: { type: integer, description: Mean LVGL flush (copy into the framebuffer) duration over the window, microseconds. }
+                  flushMaxUs: { type: integer, description: Longest LVGL flush in the window, microseconds. }
+                  panelVsyncHz: { type: number, description: RGB panel refresh rate over the window (~23.5 on the T-RGB); lower means the LCD DMA is starving and restarting frames. }
+                  panelLateVsyncs: { type: integer, description: Refreshes in the window that arrived more than 1.5 periods late, i.e. stalled or restarted frames (a flash write while the DMA reads PSRAM, or PSRAM contention). 0 is healthy. }
+                  link:
+                    type: object
+                    description: >-
+                      Controller (BLE) link health, counters since boot. Retransmits are normal
+                      under Wi-Fi load; giveUps are commands the controller never received.
+                    properties:
+                      connected: { type: boolean }
+                      rttMs: { type: integer, description: Smoothed send-to-ACK round trip in ms; -1 until measured }
+                      rttMaxMs: { type: integer }
+                      txFrames: { type: integer }
+                      rxFrames: { type: integer }
+                      retransmits: { type: integer, description: In-flight frame re-sent after a 150 ms ACK timeout }
+                      giveUps: { type: integer, description: Frame abandoned after 5 retries; a lost command }
+                      sendFailures: { type: integer, description: The radio refused a write }
+                      encodeFailures: { type: integer }
+                      duplicates: { type: integer, description: Controller retransmits already processed }
+                      rxBackpressure: { type: integer, description: Inbound frames left un-ACKed because the dispatch queue was full }
+                      disconnects: { type: integer }
+                      lastGapMs: { type: integer, description: Duration of the most recent drop; 0 if none }
+                      maxGapMs: { type: integer }
+                      linkUptimeMs: { type: integer, description: Time since the current connection came up }
+    post:
+      summary: Re-check for updates, optionally switching channel
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { channel: { type: string, enum: [latest, nightly] } } }
+      responses:
+        "202": { description: Check scheduled; results show up in `GET /api/ota` and as `evt:ota-status` on the socket. }
+  /api/ota/start:
+    post:
+      summary: Install the available update
+      description: Downloads and flashes the latest release for the component (both when omitted).
+        Progress arrives as `evt:ota-progress`; the display reboots when its own image finishes.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { component: { type: string, enum: [display, controller] } } }
+      responses:
+        "202": { description: Update started. }
+  /api/history/rebuild:
+    post:
+      summary: Rebuild the shot index from the .slog files
+      responses:
+        "202": { description: Rebuild started; progress arrives as `evt:history-rebuild-progress`. }
+  /api/history/{id}:
+    delete:
+      summary: Delete a shot (its .slog and notes) and mark it deleted in the index
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]+$" } }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/profiles/reorder:
+    post:
+      summary: Set the display order of profiles
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, items: { type: string }, description: Profile ids in display order. }
+      responses:
+        "200": { $ref: "#/components/responses/Ok" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/scales/list:
+    get:
+      summary: Bluetooth scales found by the last scan
+      responses:
+        "200":
+          description: Discovered scales (empty until `POST /api/scales/scan` has run).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    uuid: { type: string, description: BLE address; pass it to `POST /api/scales/connect`. }
+                    name: { type: string }
+                    rssi: { type: integer }
+  /api/scales/scan:
+    post:
+      summary: Start a BLE scan for scales
+      description: Returns immediately; discovered devices accumulate in `GET /api/scales/list`.
+        Any method other than POST answers 404.
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/scales/connect:
+    post:
+      summary: Connect to a scale
+      description: The `uuid` comes from the scan list, as a form field or query parameter. The reply
+        only acknowledges the request; the connection shows up as `bc` in `evt:status` and in
+        `GET /api/scales/info`. Any method other than POST answers 404.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, required: [uuid], properties: { uuid: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/scales/info:
+    get:
+      summary: The currently connected scale
+      responses:
+        "200":
+          description: Connection state and identity of the scale; `battery` is present only when the scale reports one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  name: { type: string }
+                  uuid: { type: string }
+                  rssi: { type: integer }
+                  hasBattery: { type: boolean, description: Whether the driver reports a battery level. }
+                  battery: { type: integer, minimum: 0, maximum: 100, description: Battery percentage; omitted when unknown. }
+  /api/ota/upload:
+    post:
+      summary: Push a firmware (or LittleFS) image over the network
+      description: |
+        The image is the raw request body (`Content-Type: application/octet-stream`,
+        `Content-Length` required), written to the inactive OTA slot; on success
+        the display reboots into it. With `target=fs` it is a LittleFS image
+        instead. Requires the upload token configured in settings
+        (`otaUploadToken`), sent as the `X-OTA-Token` header or `token` query
+        parameter. The filesystem target is single-banked: a failed write leaves
+        it corrupt, so only push an image you still hold a copy of.
+        Uploads that stop delivering data for 30 s are aborted server-side so a
+        dead connection cannot hold the OTA slot until a power-cycle.
+
+            curl -H "X-OTA-Token: $TOKEN" -H "Content-Type: application/octet-stream" \
+                 --data-binary @.pio/build/display/firmware.bin http://exhalation.local/api/ota/upload
+      parameters:
+        - name: X-OTA-Token
+          in: header
+          schema: { type: string }
+        - name: token
+          in: query
+          description: Alternative to the header.
+          schema: { type: string }
+        - name: target
+          in: query
+          description: "`fs` writes the LittleFS partition instead of the app."
+          schema: { type: string, enum: [fs] }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Image verified; the display restarts about a second later.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+                  restarting: { type: boolean }
+        "400":
+          description: The image was rejected or the upload did not complete.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: |
+                      Where and why it failed, e.g. `Update.write: Not Enough Space at 1048576 bytes`,
+                      `no data for 30012 ms after 2097152 bytes`, `another update is already running`.
+                  received:
+                    type: integer
+                    description: Bytes written before the failure.
+        "401": { description: Missing or wrong token. }
 components:
+  responses:
+    Ok:
+      description: Done.
+      content:
+        application/json:
+          schema: { type: object, properties: { ok: { type: boolean, const: true } } }
+    Success:
+      description: Request accepted.
+      content:
+        application/json:
+          schema: { type: object, properties: { success: { type: boolean, const: true } } }
+    Error:
+      description: Refused; `error` says why.
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: string } } }
   schemas:
     Profile:
       type: object

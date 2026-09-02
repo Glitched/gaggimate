@@ -25,3 +25,26 @@ packer = os.path.join(project_dir, "scripts", "embed_webui.py")
 if not os.path.isfile(manifest):
     print("embed_webui_pre: no web bundle found, writing stub (run build_webui.sh for the real UI)")
     subprocess.check_call([sys.executable, packer, "--out", out_dir, "--stub"])
+
+# The bundle reaches the firmware through .incbin, which no dependency scanner
+# can see: SCons decides whether to reassemble by hashing the .S file, and that
+# file does not change when the blob it pulls in does. embed_webui.py stamps the
+# blob's size and digest into the generated src/display/webassets/web_ui_blob.S
+# to force a rebuild there, but the simulator uses its own hand-written stub
+# (sim/web/web_ui_blob_sim.S) which has no such stamp -- so it silently kept
+# serving whatever bundle was current the first time it was assembled.
+#
+# Drop any blob object older than the bundle it is supposed to contain.
+# scripts/check_webui_blob.py is the post-link backstop for the device builds.
+blob = os.path.join(out_dir, "web_ui.bin")
+build_dir = env.subst("$BUILD_DIR")  # noqa: F821
+if os.path.isfile(blob) and os.path.isdir(build_dir):
+    blob_mtime = os.path.getmtime(blob)
+    for root, _dirs, files in os.walk(build_dir):
+        for name in files:
+            if not name.startswith("web_ui_blob") or not name.endswith(".o"):
+                continue
+            obj = os.path.join(root, name)
+            if os.path.getmtime(obj) < blob_mtime:
+                print("embed_webui_pre: %s predates web_ui.bin, removing so it reassembles" % name)
+                os.remove(obj)

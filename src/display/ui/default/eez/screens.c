@@ -1076,10 +1076,9 @@ void create_screen_standby_screen() {
         {
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.obj1 = obj;
-            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_pos(obj, 0, -14);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_img_set_src(obj, &img_logo);
-            lv_img_set_zoom(obj, 210);
             lv_obj_set_style_img_recolor(obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
                                          LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1089,10 +1088,10 @@ void create_screen_standby_screen() {
             // touchIcon
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.touch_icon = obj;
-            lv_obj_set_pos(obj, 0, 150);
+            lv_obj_set_pos(obj, 0, 210);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_img_set_src(obj, &img_tap_60x60);
-            lv_img_set_zoom(obj, 210);
+            lv_img_set_src(obj, &img_angle_up_40x40);
+            lv_obj_set_style_img_opa(obj, 153, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_img_recolor(obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
                                          LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1396,10 +1395,36 @@ void create_screen_brew_screen() {
                     lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
                 {
+                    // profileSelectButton -- on the bottom arc with startButton: radius 130, 45 deg left of it
+                    lv_obj_t *obj = lv_imgbtn_create(parent_obj);
+                    objects.profile_select_button = obj;
+                    lv_obj_set_pos(obj, -92, 92);
+                    lv_obj_set_size(obj, 40, 40);
+                    lv_imgbtn_set_src(obj, LV_IMGBTN_STATE_RELEASED, NULL, &img_dropdown_bar_40x40, NULL);
+                    lv_obj_add_event_cb(obj, event_handler_cb_brew_screen_profile_select_button, LV_EVENT_ALL, flowState);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_img_recolor(obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
+                                                 LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                }
+                {
+                    // settingsButton -- radius 130, 45 deg right of startButton
+                    lv_obj_t *obj = lv_imgbtn_create(parent_obj);
+                    objects.settings_button = obj;
+                    lv_obj_set_pos(obj, 92, 92);
+                    lv_obj_set_size(obj, 40, 40);
+                    lv_imgbtn_set_src(obj, LV_IMGBTN_STATE_RELEASED, NULL, &img_settings_40x40, NULL);
+                    lv_obj_add_event_cb(obj, event_handler_cb_brew_screen_settings_button, LV_EVENT_ALL, flowState);
+                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_img_recolor(obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
+                                                 LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                }
+                {
                     // controlContainer
                     lv_obj_t *obj = lv_obj_create(parent_obj);
                     objects.control_container = obj;
-                    lv_obj_set_pos(obj, 0, -19);
+                    lv_obj_set_pos(obj, 0, -37);
                     lv_obj_set_size(obj, 360, 214);
                     lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1417,6 +1442,7 @@ void create_screen_brew_screen() {
                     lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_track_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_row(obj, 40, LV_PART_MAIN | LV_STATE_DEFAULT);
                     {
                         lv_obj_t *parent_obj = obj;
                         {
@@ -1489,7 +1515,7 @@ void create_screen_brew_screen() {
                             lv_obj_t *obj = lv_obj_create(parent_obj);
                             objects.profile_info = obj;
                             lv_obj_set_pos(obj, 0, 0);
-                            lv_obj_set_size(obj, 360, 120);
+                            lv_obj_set_size(obj, 360, LV_SIZE_CONTENT);
                             lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1508,86 +1534,22 @@ void create_screen_brew_screen() {
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
+                                    // profileName
                                     lv_obj_t *obj = lv_label_create(parent_obj);
-                                    objects.obj4 = obj;
+                                    objects.profile_name = obj;
                                     lv_obj_set_pos(obj, 0, 0);
-                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_size(obj, 360, LV_SIZE_CONTENT);
+                                    lv_label_set_long_mode(obj, LV_LABEL_LONG_SCROLL_CIRCULAR);
+                                    lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_color(
                                         obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
                                         LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text_static(obj, "Selected profile");
-                                }
-                                {
-                                    lv_obj_t *obj = lv_obj_create(parent_obj);
-                                    lv_obj_set_pos(obj, 1769, 0);
-                                    lv_obj_set_size(obj, 360, 40);
-                                    lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_layout(obj, LV_LAYOUT_FLEX, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_flex_flow(obj, LV_FLEX_FLOW_ROW, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_flex_main_place(obj, LV_FLEX_ALIGN_START, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_flex_cross_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_flex_track_place(obj, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_pad_column(obj, 20, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    {
-                                        lv_obj_t *parent_obj = obj;
-                                        {
-                                            // profileSelectButton
-                                            lv_obj_t *obj = lv_imgbtn_create(parent_obj);
-                                            objects.profile_select_button = obj;
-                                            lv_obj_set_pos(obj, 0, 0);
-                                            lv_obj_set_size(obj, LV_SIZE_CONTENT, 64);
-                                            lv_imgbtn_set_src(obj, LV_IMGBTN_STATE_RELEASED, NULL, &img_dropdown_bar_40x40, NULL);
-                                            lv_obj_add_event_cb(obj, event_handler_cb_brew_screen_profile_select_button,
-                                                                LV_EVENT_ALL, flowState);
-                                            lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_img_recolor(
-                                                obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
-                                                LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                        }
-                                        {
-                                            // profileName
-                                            lv_obj_t *obj = lv_label_create(parent_obj);
-                                            objects.profile_name = obj;
-                                            lv_obj_set_pos(obj, 0, 0);
-                                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                                            lv_label_set_long_mode(obj, LV_LABEL_LONG_SCROLL_CIRCULAR);
-                                            lv_obj_set_style_flex_grow(obj, 1, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_text_color(
-                                                obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
-                                                LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24,
-                                                                       LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_bg_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_bg_color(
-                                                obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][1]),
-                                                LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_label_set_text(obj, "");
-                                        }
-                                        {
-                                            // settingsButton
-                                            lv_obj_t *obj = lv_imgbtn_create(parent_obj);
-                                            objects.settings_button = obj;
-                                            lv_obj_set_pos(obj, 0, 0);
-                                            lv_obj_set_size(obj, LV_SIZE_CONTENT, 64);
-                                            lv_imgbtn_set_src(obj, LV_IMGBTN_STATE_RELEASED, NULL, &img_settings_40x40, NULL);
-                                            lv_obj_add_event_cb(obj, event_handler_cb_brew_screen_settings_button, LV_EVENT_ALL,
-                                                                flowState);
-                                            lv_obj_set_style_img_recolor(
-                                                obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][0]),
-                                                LV_PART_MAIN | LV_STATE_DEFAULT);
-                                            lv_obj_set_style_img_recolor_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                        }
-                                    }
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_bg_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_bg_color(
+                                        obj, lv_color_hex(theme_colors[eez_flow_get_selected_theme_index()][1]),
+                                        LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text(obj, "");
                                 }
                             }
                         }
@@ -2078,6 +2040,21 @@ void tick_screen_brew_screen() {
                 lv_obj_clear_flag(objects.profile_info, LV_OBJ_FLAG_HIDDEN);
             }
             tick_value_change_obj = NULL;
+        }
+        // profileSelectButton / settingsButton carry the same Hidden expression
+        // (ui_flags.brew_adjustments) in the EEZ project. They used to inherit it as
+        // children of profileInfo; now that they sit on the bottom arc beside
+        // startButton it is mirrored here by hand, because adding a compiled flow
+        // expression needs an EEZ Studio export.
+        lv_obj_t *arc_buttons[] = {objects.profile_select_button, objects.settings_button};
+        for (size_t k = 0; k < 2; k++) {
+            if (arc_buttons[k] && new_val != lv_obj_has_flag(arc_buttons[k], LV_OBJ_FLAG_HIDDEN)) {
+                if (new_val) {
+                    lv_obj_add_flag(arc_buttons[k], LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_clear_flag(arc_buttons[k], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
         }
     }
     {
@@ -6517,9 +6494,6 @@ void change_color_theme(uint32_t theme_index) {
                                          LV_PART_MAIN | LV_STATE_DEFAULT);
         if (objects.weight_label)
             lv_obj_set_style_text_color(objects.weight_label, lv_color_hex(theme_colors[theme_index][0]),
-                                        LV_PART_MAIN | LV_STATE_DEFAULT);
-        if (objects.obj4)
-            lv_obj_set_style_text_color(objects.obj4, lv_color_hex(theme_colors[theme_index][0]),
                                         LV_PART_MAIN | LV_STATE_DEFAULT);
         if (objects.profile_select_button)
             lv_obj_set_style_img_recolor(objects.profile_select_button, lv_color_hex(theme_colors[theme_index][0]),

@@ -82,6 +82,8 @@ class Amoled_DisplayPanel : public Display {
 
     uint8_t getPoint(int16_t *x_array, int16_t *y_array, uint8_t get_point = 1);
 
+    uint8_t readTouchPoints(int16_t *x_array, int16_t *y_array, uint8_t max_points);
+
     bool isPressed();
 
     uint16_t getBattVoltage(void);

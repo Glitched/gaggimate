@@ -22,13 +22,13 @@ class GearpumpAddon {
     float *_power = nullptr;
     float _currentPower = 0.0f;
     float _maxPower = 1.0f;
-    SoftWire *i2c;
-    MCP4725 *mcp;
+    SoftWire *i2c = nullptr;
+    MCP4725 *mcp = nullptr;
 
     const char *LOG_TAG = "GearpumpAddon";
     void ensureSafePowerOnState();
     static void loopTask(void *arg);
-    xTaskHandle taskHandle;
+    xTaskHandle taskHandle = nullptr;
 };
 
 #endif // GEARPUMPADDON_H

@@ -1,12 +1,13 @@
-import { useContext, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { computed, useSignalEffect } from '@preact/signals';
-import { ApiServiceContext, machine } from '../../../services/ApiService.js';
+import { machine } from '../../../services/ApiService.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTemperatureFull } from '@fortawesome/free-solid-svg-icons/faTemperatureFull';
 import { faClock } from '@fortawesome/free-solid-svg-icons/faClock';
 import { faScaleBalanced } from '@fortawesome/free-solid-svg-icons/faScaleBalanced';
 import PropTypes from 'prop-types';
 import { SkeletonBlock } from '../../../components/SkeletonBlock.jsx';
+import { profilesApi } from '../../../services/api.js';
 
 const connected = computed(() => machine.value.connected);
 
@@ -58,22 +59,25 @@ ProfileMiniCard.propTypes = {
 };
 
 export function FavoriteProfilesCard({ selectedProfileId, inCard = false, compact = false }) {
-  const apiService = useContext(ApiServiceContext);
   const [favorites, setFavorites] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Fetched over HTTP once; the socket's connected flag is only used to retry
+  // while the first load has not succeeded. Previously every reconnect
+  // re-requested the list, which under tab churn kept the device busy reading
+  // profiles from flash.
   useSignalEffect(() => {
-    if (!apiService || !connected.value) {
+    if (!connected.value || favorites !== null) {
       setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    apiService
-      .request({ tp: 'req:profiles:list' })
-      .then(res => {
+    profilesApi
+      .list({ minimal: true }) // id, label, favorite, selected -- ~0.5 KB instead of the full 10 KB
+      .then(profiles => {
         if (cancelled) return;
-        setFavorites((res.profiles ?? []).filter(p => p.favorite).slice(0, 3));
+        setFavorites(profiles.filter(p => p.favorite).slice(0, 3));
         setLoading(false);
       })
       .catch(() => {
@@ -85,7 +89,7 @@ export function FavoriteProfilesCard({ selectedProfileId, inCard = false, compac
   });
 
   const handleSelect = id => {
-    apiService.request({ tp: 'req:profiles:select', id }).catch(() => {});
+    profilesApi.select(id).catch(() => {});
   };
 
   const wrapperClass = inCard

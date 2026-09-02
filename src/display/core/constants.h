@@ -42,7 +42,6 @@
 #define ALT_RELAY_GRIND 1
 #define ALT_RELAY_STEAM_BOILER 2
 
-#define WIFI_CONNECT_TIMEOUT_MS 30000
 #define DEFAULT_WIFI_AP_TIMEOUT_MS 600000
 #define DEFAULT_WIFI_AP_PASSWORD_LENGTH 10 // generated AP password length (alphanumeric)
 #define WIFI_AP_PASSWORD_MIN_LENGTH 8      // WPA2 minimum passphrase length

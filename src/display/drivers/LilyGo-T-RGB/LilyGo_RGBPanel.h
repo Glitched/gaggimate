@@ -10,6 +10,8 @@
 #pragma once
 
 #include <Arduino.h>
+#include <IoExpanderSPI.hpp>
+#include <IoExpanderXL9555.hpp>
 
 #ifndef BOARD_HAS_PSRAM
 #error "Please turn on PSRAM to OPI !"
@@ -119,11 +121,12 @@ class LilyGo_RGBPanel : public Display {
 
     LilyGo_RGBPanel_TouchType _touchType;
 
-    ExtensionIOXL9555::ExtensionGPIO cs = ExtensionIOXL9555::IO3;
-    ExtensionIOXL9555::ExtensionGPIO mosi = ExtensionIOXL9555::IO4;
-    ExtensionIOXL9555::ExtensionGPIO sclk = ExtensionIOXL9555::IO5;
-    ExtensionIOXL9555::ExtensionGPIO reset = ExtensionIOXL9555::IO6;
-    ExtensionIOXL9555::ExtensionGPIO power_enable = ExtensionIOXL9555::IO2;
-    ExtensionIOXL9555::ExtensionGPIO sdmmc_cs = ExtensionIOXL9555::IO7;
-    ExtensionIOXL9555::ExtensionGPIO tp_reset = ExtensionIOXL9555::IO1;
+    // XL9555 expander pin numbers (SensorLib 0.4 addresses expander GPIOs by integer)
+    uint8_t cs = 3;
+    uint8_t mosi = 4;
+    uint8_t sclk = 5;
+    uint8_t reset = 6;
+    uint8_t power_enable = 2;
+    uint8_t sdmmc_cs = 7;
+    uint8_t tp_reset = 1;
 };

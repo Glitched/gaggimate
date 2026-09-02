@@ -1,16 +1,23 @@
-name: CI
+name: Check
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # Manual runs, e.g. to re-check a branch without pushing.
+  workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  # cppcheck static analysis (pre-existing job, unchanged behavior).
-  analyze:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    env:
+      # cppcheck only needs the build environment, not a version string, and
+      # this shallow checkout has no tags for `git describe` to find
+      # (scripts/auto_firmware_version.py fails the build otherwise).
+      GM_ALLOW_UNVERSIONED: '1'
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -21,35 +28,37 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio-analyze-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            ${{ runner.os }}-pio-analyze-
-            ${{ runner.os }}-pio
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
       - name: Run static code analysis for display
+        # continue-on-error: the display analysis has reported defects for a
+        # long time that nobody has triaged, so it cannot be allowed to gate
+        # merges yet. It should go: fix or suppress the existing findings, then
+        # remove this line so the step fails the job like the controller one.
         continue-on-error: true
-        run: platformio check -e display --fail-on-defect=medium -f "-<*>" -f "+<src/display/>" -f "-<src/display/ui>"
+        run: platformio check -e display --fail-on-defect=medium -f "-<*>" -f "+<src/display/>" -f "-<src/display/ui>" -f "+<lib/NanoPbComm/>" -f "+<lib/NayrodPID/>" -f "+<lib/OTA/>"
       - name: Run static code analysis for controller
-        run: platformio check -e controller --fail-on-defect=medium -f "-<*>" -f "+<src/controller/>"
+        run: platformio check -e controller --fail-on-defect=medium -f "-<*>" -f "+<src/controller/>" -f "+<lib/GaggiMateController/>" -f "+<lib/NanoPbComm/>" -f "+<lib/NayrodPID/>"
 
-  # Compile the real firmware images on every push, not just on release tags —
-  # the tag-only build.yml meant firmware changes could merge without ever
-  # having been compiled for the ESP32 target.
-  firmware:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [display, display-headless, controller]
+    env:
+      # build_webui.sh runs first, so the display images must embed the real
+      # bundle; the empty stub means the web build silently did not happen.
+      GM_REQUIRE_WEBUI: '1'
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          fetch-tags: true
+          fetch-depth: 0
           submodules: 'recursive'
       - uses: actions/cache@v4
         with:
@@ -58,73 +67,38 @@ jobs:
             ~/.platformio/.cache
             ~/.platformio/packages
             ~/.platformio/platforms
-          key: ${{ runner.os }}-pio-fw-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            ${{ runner.os }}-pio-fw-${{ matrix.env }}-
-            ${{ runner.os }}-pio-fw-
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
-      # embed_webui_pre.py stubs the embedded web bundle, so the compile check
-      # doesn't need a web build.
-      - name: Build ${{ matrix.env }}
-        run: platformio run -e ${{ matrix.env }}
-
-  # Host-side unit tests (SIMC autotuner).
-  native-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.platformio/.cache
-            ~/.platformio/packages
-            ~/.platformio/platforms
-          key: ${{ runner.os }}-pio-native-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            ${{ runner.os }}-pio-native-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
-      - name: Run native tests
-        run: platformio test -e native_autotune
-
-  # Web UI: lint and production build.
-  web:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+        run: pip install platformio==6.1.19
       - uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
-          cache: npm
+          node-version-file: .nvmrc
+          cache: 'npm'
           cache-dependency-path: web/package-lock.json
-      - name: Install dependencies
-        run: npm ci
+      - name: Build web UI
+        run: ./scripts/build_webui.sh
+      - name: Build firmware
+        run: pio run -e display -e display-headless -e display-headless-8m -e controller
+      - name: Unit tests
+        run: pio test -e native_autotune
+      - name: Lint web UI
         working-directory: web
-      - name: Lint
         run: npm run lint:check
-        working-directory: web
-      - name: Build
-        run: npm run build
-        working-directory: web
 
-  # Build the simulator (which compiles the real display firmware natively)
-  # and run the black-box HTTP API suites against it. This is the only job
-  # that exercises the firmware's request handlers end to end.
+  # Build the simulator (the display firmware compiled natively, sim/ shims for
+  # the platform) and run the black-box HTTP API suites in sim/tests/ against
+  # it. This is the only job that exercises the firmware's request handlers
+  # end to end; the stubbed web bundle is fine because the suites only touch
+  # /api endpoints.
   sim-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GM_ALLOW_UNVERSIONED: '1'
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -135,21 +109,35 @@ jobs:
             ~/.platformio/.cache
             ~/.platformio/packages
             ~/.platformio/platforms
-          key: ${{ runner.os }}-pio-sim-${{ hashFiles('platformio.ini') }}
-          restore-keys: |
-            ${{ runner.os }}-pio-sim-
+          key: ${{ runner.os }}-pio-sim-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-sim-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       # Node >= 22 for the WebSocket assertions in the profile suite.
       - uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: .nvmrc
       - name: Install SDL2
         run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
       - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
       - name: Build simulator
-        run: platformio run -e display-sim
+        run: pio run -e display-sim
+      # Each suite has its own readiness wait, so booting first is enough.
       - name: Run HTTP API suites
-        run: ./sim/tests/run.sh
+        run: |
+          SDL_VIDEODRIVER=dummy ./.pio/build/display-sim/program > sim.log 2>&1 &
+          SIM_PID=$!
+          trap 'kill "$SIM_PID" 2>/dev/null || true' EXIT
+          rc=0
+          for suite in sim/tests/test-*.sh; do
+            echo "=== $suite"
+            bash "$suite" || rc=1
+          done
+          if ! kill -0 "$SIM_PID" 2>/dev/null; then
+            echo "::error::simulator exited during the suites; last log lines follow"
+            tail -40 sim.log
+            rc=1
+          fi
+          exit $rc

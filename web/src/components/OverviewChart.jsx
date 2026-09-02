@@ -1,8 +1,24 @@
 import { machine } from '../services/ApiService.js';
 import { effect } from '@preact/signals';
-import { Chart } from 'chart.js';
+import {
+  Chart,
+  Filler,
+  Legend,
+  LinearScale,
+  LineController,
+  LineElement,
+  PointElement,
+  TimeScale,
+} from 'chart.js';
+// The x axis is a time scale, so the date adapter lives here with its only
+// consumer rather than in the pages that happen to render this chart.
+import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 import { ChartComponent } from './Chart.jsx';
 import { getChartAnnotationLabelColors } from '../utils/chartTheme.js';
+
+// Registered here so the chart works from any chunk that renders it (the
+// Calibration settings tab does, and Settings registers nothing itself).
+Chart.register(LineController, TimeScale, LinearScale, PointElement, LineElement, Filler, Legend);
 
 // Global state to track phase transitions during brewing
 let phaseTransitions = [];
@@ -10,15 +26,6 @@ let lastKnownPhase = null;
 let brewStartTime = null;
 let lastProcessState = null;
 let initialPhaseName = null; // Store the first phase name
-
-// Function to clear phase transitions (can be called from outside)
-export const clearPhaseTransitions = () => {
-  phaseTransitions = [];
-  lastKnownPhase = null;
-  brewStartTime = null;
-  lastProcessState = null;
-  initialPhaseName = null;
-};
 
 function isBrewProcess(process) {
   return !!(
@@ -401,7 +408,7 @@ function getChartData(data) {
             source: 'auto',
             autoSkip: true,
             autoSkipPadding: 0,
-            callback: (value, index, ticks) => {
+            callback: value => {
               if (isBrewActive) {
                 // For brewing: show relative time from chart end in a clean format
                 const chartEnd = end.getTime();

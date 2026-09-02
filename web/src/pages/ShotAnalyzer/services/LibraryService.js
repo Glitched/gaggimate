@@ -11,6 +11,7 @@ import { parseBinaryShot } from '../../ShotHistory/parseBinaryShot';
 import { indexedDBService } from './IndexedDBService';
 import { notesService } from './NotesService';
 import { getProfileDisplayLabel, getShotStorageKey } from '../utils/analyzerUtils';
+import { historyApi, profilesApi } from '../../../services/api.js';
 
 const HISTORY_NOTES_DEFAULTS = {
   id: '',
@@ -239,24 +240,14 @@ class LibraryService {
    * @returns {Promise<Object[]>} List of GaggiMate profiles with source tag
    */
   async getGaggiMateProfiles() {
-    if (this.apiService?.socket?.readyState !== WebSocket.OPEN) {
-      return [];
-    }
-
     try {
-      const response = await this.apiService.request({
-        tp: 'req:profiles:list',
-      });
+      const profiles = await profilesApi.list();
 
-      if (!response.profiles) {
-        return [];
-      }
-
-      // Add source tag and preserve the API id for req:profiles:load.
-      return response.profiles.map(profile => ({
+      // Add source tag and preserve the API id for loadProfile().
+      return profiles.map(profile => ({
         ...profile,
         exportName: getProfileExportFilename(profile),
-        profileId: profile.id, // Keep real API id for req:profiles:load
+        profileId: profile.id, // Keep real API id for loadProfile()
         label: profile.label,
         source: 'gaggimate',
       }));
@@ -306,14 +297,15 @@ class LibraryService {
    * Load full shot data
    * @param {string} id - Shot ID
    * @param {string} source - 'gaggimate' or 'browser'
+   * @param {{ signal?: AbortSignal }} options - Optional request controls for GaggiMate fetches
    * @returns {Promise<Object>} Full shot data with samples
    */
-  async loadShot(id, source) {
+  async loadShot(id, source, { signal } = {}) {
     const idStr = String(id);
 
     if (source === 'gaggimate') {
       const paddedId = idStr.padStart(6, '0');
-      const response = await fetch(`/api/history/${paddedId}.slog`);
+      const response = await fetch(`/api/history/${paddedId}.slog`, { signal });
 
       if (!response.ok) {
         throw new Error(`Failed to load shot ${idStr}: HTTP ${response.status}`);
@@ -341,21 +333,10 @@ class LibraryService {
    */
   async loadProfile(nameOrId, source) {
     if (source === 'gaggimate') {
-      if (this.apiService?.socket?.readyState !== WebSocket.OPEN) {
-        throw new Error('WebSocket not connected');
-      }
-
-      const response = await this.apiService.request({
-        tp: 'req:profiles:load',
-        id: nameOrId,
-      });
-
-      if (!response.profile) {
-        throw new Error(`Profile ${nameOrId} not found`);
-      }
+      const profile = await profilesApi.load(nameOrId); // 404 -> ApiError "Profile not found"
 
       return {
-        ...response.profile,
+        ...profile,
         source: 'gaggimate',
       };
     }
@@ -436,8 +417,7 @@ class LibraryService {
    */
   async deleteShot(id, source) {
     if (source === 'gaggimate') {
-      if (!this.apiService) throw new Error('ApiService not set');
-      await this.apiService.request({ tp: 'req:history:delete', id });
+      await historyApi.remove(id);
     } else {
       await indexedDBService.deleteShot(id);
       await indexedDBService.deleteNotes(String(id));
@@ -451,8 +431,7 @@ class LibraryService {
    */
   async deleteProfile(id, source) {
     if (source === 'gaggimate') {
-      if (!this.apiService) throw new Error('ApiService not set');
-      await this.apiService.request({ tp: 'req:profiles:delete', id });
+      await profilesApi.remove(id);
     } else {
       await indexedDBService.deleteProfile(id);
     }

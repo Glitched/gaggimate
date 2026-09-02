@@ -31,7 +31,7 @@ class ADSAdc {
     xTaskHandle taskHandle;
 
     const char *LOG_TAG = "ADSAdc";
-    static void loopTask(void *arg);
+    [[noreturn]] static void loopTask(void *arg);
 };
 
 #endif // ADS_ADC_H

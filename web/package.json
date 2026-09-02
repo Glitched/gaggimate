@@ -6,8 +6,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "format": "prettier -w .",
-    "lint": "eslint src --fix",
-    "lint:check": "eslint src",
+    "lint": "eslint src --ext .js,.jsx --fix",
+    "lint:check": "eslint src --ext .js,.jsx",
     "scrape": "esbuild scripts/shot-scrape.mjs --bundle --platform=node --format=esm --outfile=node_modules/.cache/shot-scrape.mjs --log-level=error && node node_modules/.cache/shot-scrape.mjs"
   },
   "dependencies": {
@@ -32,7 +32,6 @@
   "devDependencies": {
     "@preact/preset-vite": "^2.10.2",
     "@tailwindcss/vite": "^4.1.11",
-    "autoprefixer": "^10.4.20",
     "eslint": "^8.57.1",
     "eslint-config-preact": "^1.5.0",
     "prettier": "^3.6.2",
@@ -41,6 +40,10 @@
     "vite": "^7.0.5"
   },
   "eslintConfig": {
-    "extends": "preact"
+    "extends": "preact",
+    "env": {
+      "browser": true,
+      "es2022": true
+    }
   }
 }
