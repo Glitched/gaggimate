@@ -1,11 +1,24 @@
-on: [push, pull_request]
+name: Check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # cppcheck only needs the build environment, not a version string, and
+      # this shallow checkout has no tags for `git describe` to find
+      # (scripts/auto_firmware_version.py fails the build otherwise).
+      GM_ALLOW_UNVERSIONED: '1'
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: 'recursive'
       - uses: actions/cache@v4
@@ -13,14 +26,63 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
       - name: Run static code analysis for display
+        # continue-on-error: the display analysis has reported defects for a
+        # long time that nobody has triaged, so it cannot be allowed to gate
+        # merges yet. It should go: fix or suppress the existing findings, then
+        # remove this line so the step fails the job like the controller one.
         continue-on-error: true
-        run: platformio check -e display --fail-on-defect=medium -f "-<*>" -f "+<src/display/>" -f "-<src/display/ui>"
+        run: platformio check -e display --fail-on-defect=medium -f "-<*>" -f "+<src/display/>" -f "-<src/display/ui>" -f "+<lib/NanoPbComm/>" -f "+<lib/NayrodPID/>" -f "+<lib/OTA/>"
       - name: Run static code analysis for controller
-        run: platformio check -e controller --fail-on-defect=medium -f "-<*>" -f "+<src/controller/>"
+        run: platformio check -e controller --fail-on-defect=medium -f "-<*>" -f "+<src/controller/>" -f "+<lib/GaggiMateController/>" -f "+<lib/NanoPbComm/>" -f "+<lib/NayrodPID/>"
+
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # build_webui.sh runs first, so the display images must embed the real
+      # bundle; the empty stub means the web build silently did not happen.
+      GM_REQUIRE_WEBUI: '1'
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+          submodules: 'recursive'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO Core
+        run: pip install platformio==6.1.19
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Build web UI
+        run: ./scripts/build_webui.sh
+      - name: Build firmware
+        run: pio run -e display -e display-headless -e display-headless-8m -e controller
+      - name: Unit tests
+        run: pio test -e native_autotune
+      - name: Lint web UI
+        working-directory: web
+        run: npm run lint:check

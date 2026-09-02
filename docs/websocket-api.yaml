@@ -49,6 +49,10 @@ components:
   schemas:
     StatusPayload:
       type: object
+      description:
+        "Pushed every status period while a client is connected. Field list mirrors
+        WebUIPlugin::loop in src/display/plugins/WebUIPlugin.cpp; keys are short to keep the
+        frame small. 0/1 integers are booleans the device UI also consumes."
       properties:
         tp:
           type: string
@@ -56,31 +60,140 @@ components:
             - evt:status
         ct:
           type: number
-          description: Current temperature
+          description: Current temperature (°C)
         tt:
           type: number
-          description: Target temperature
+          description: Target temperature (°C)
         pr:
           type: number
-          description: Current pressure
+          description: Current pressure (bar)
         fl:
           type: number
-          description: Current flow
+          description: Current pump flow
         pt:
           type: number
-          description: Target pressure
+          description: Target pressure (bar)
         m:
           type: integer
-          description: Machine mode
+          description: Machine mode (0=standby, 1=brew, 2=steam, 3=water, 4=grind)
         p:
           type: string
           description: Selected profile label
+        puid:
+          type: string
+          description: Selected profile id
         cp:
           type: boolean
-          description: Indicates pressure capability
+          description: Controller has a pressure sensor
         cd:
           type: boolean
-          description: Indicates dimming capability
+          description: Controller can dim the pump
+        gp:
+          type: boolean
+          description: Gear-pump addon present
+        tw:
+          type: number
+          description: Total volumetric target of the selected profile (g)
+        bta:
+          type: integer
+          description: 1 when volumetric targets are available (a scale is connected)
+        bt:
+          type: integer
+          description: 1 when the selected profile brews by weight and a scale is connected
+        btd:
+          type: number
+          description: Total duration of the selected profile
+        led:
+          type: boolean
+          description: Controller has LED control
+        gtd:
+          type: number
+          description: Target grind duration
+        gtv:
+          type: number
+          description: Target grind volume (g)
+        gt:
+          type: integer
+          description: 1 when grinding stops on weight (scale connected and volumetric target set)
+        gact:
+          type: integer
+          description: 1 while grinding
+        wl:
+          type: integer
+          description: Water level (%)
+        tof:
+          type: integer
+          description: Time-of-flight distance sensor reading
+        rssi:
+          type: integer
+          description: Controller BLE RSSI (dBm); 0 while disconnected
+        lat:
+          type: integer
+          description: Display-to-controller BLE round-trip latency (ms); -1 until measured
+        pw:
+          type: number
+          description: Current pump power
+        hp:
+          type: number
+          description: Current heater power
+        up:
+          type: boolean
+          description: A display or controller update is available
+        bw:
+          type: number
+          description: Bluetooth scale weight (g); 0 without a scale
+        cw:
+          type: number
+          description: Same as bw (kept for forward compatibility)
+        bc:
+          type: boolean
+          description: Bluetooth scale connected
+        sbat:
+          type: integer
+          description: Scale battery (%); present only when the scale reports one
+        pkr:
+          type: number
+          description: Current puck resistance (present only while a process exists)
+        pf:
+          type: number
+          description: Estimated puck flow (present only while a process exists)
+        tf:
+          type: number
+          description: Target flow (present only while a process exists)
+        process:
+          type: object
+          description:
+            "The running process, or the last one until it is cleared. Absent when there has
+            been none since boot."
+          properties:
+            a:
+              type: integer
+              description: 1 while the process is active
+            s:
+              type: string
+              enum:
+                - infusion
+                - brew
+                - grind
+              description: Stage
+            l:
+              type: string
+              description: Label — the current phase name, "Grinding", or "Finished"
+            e:
+              type: integer
+              description: Elapsed time since the process started (ms)
+            tt:
+              type: string
+              enum:
+                - time
+                - volumetric
+              description: What the current phase's target is measured in
+            pt:
+              type: number
+              description: Phase target — ms for time, g for volumetric
+            pp:
+              type: number
+              description: Phase progress in the same unit as pt
       required:
         - tp
     OtaSettingsPayload:

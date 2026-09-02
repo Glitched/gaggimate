@@ -6,6 +6,23 @@ check() { # name expected actual
 }
 jqf() { python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('$1')))"; }
 
+# Wait for the simulator's HTTP server (up to 20 s) rather than sleeping a fixed time.
+for i in $(seq 1 40); do
+  curl -sf -o /dev/null http://localhost:8080/api/status && break
+  if [ "$i" -eq 40 ]; then echo "simulator not reachable on localhost:8080 after 20 s" >&2; exit 1; fi
+  sleep 0.5
+done
+
+# Leave the sim as we found it: snapshot the keys this suite changes and POST them back on exit.
+KEYS="homekit targetSteamTemp targetWaterTemp homeAssistant pumpModelCoeffs brewDelay"
+SNAP=$(curl -s $B)
+restore() {
+  [ -n "$SNAP" ] || return 0
+  echo "$SNAP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps({k: d[k] for k in '$KEYS'.split() if k in d}))" \
+    | curl -s -o /dev/null -X POST -H 'Content-Type: application/json' -d @- $B
+}
+trap restore EXIT
+
 echo "--- 1. JSON partial update sets values"
 r=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"homekit": true, "targetSteamTemp": 152}' $B)
 check "homekit set true via JSON" 'true' "$(echo "$r" | jqf homekit)"

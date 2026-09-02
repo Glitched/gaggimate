@@ -7,14 +7,21 @@ info:
     tools (scripts, automations, LLM agents) can read machine state, manage
     profiles, and fetch shot data with nothing but plain HTTP.
 
-    Realtime control and events (process start/stop, live status, autotune,
-    shot notes) remain on the WebSocket API — see `docs/websocket-api.yaml`.
+    Every command and query is a route here. The WebSocket at `/ws` is
+    push-only: the device streams `evt:*` events on it (live status, OTA
+    progress, autotune results, history rebuild progress) and ignores inbound
+    frames — see `docs/websocket-api.yaml`.
 
     Conventions:
     - All JSON endpoints respond `application/json`.
     - Errors are `{"error": "<message>"}` with a 4xx/5xx status.
     - There is no authentication; the API trusts the local network, like the
-      web UI itself.
+      web UI itself. `POST /api/ota/upload` is the exception (token header).
+servers:
+  - url: http://exhalation.local
+    description: The display on your Wi-Fi network via mDNS. The host is the `mdnsName` setting (default `exhalation`).
+  - url: http://4.4.4.1
+    description: The display's own access point (AP mode), before it has joined a network.
 paths:
   /api/status:
     get:
@@ -24,6 +31,7 @@ paths:
         over the WebSocket as `evt:status`.
       responses:
         "200":
+          description: Current mode and temperatures.
           content:
             application/json:
               schema:
@@ -38,8 +46,12 @@ paths:
       summary: Read all settings
       responses:
         "200":
-          description: Flat JSON object of every setting. `wifiPassword` reads
-            as the sentinel `"---unchanged---"` while in AP mode.
+          description: |
+            Flat JSON object of every setting. `wifiPassword` and `apPassword`
+            are echoed only while the device is in AP mode (reaching it there
+            required the AP password); on a shared network both read as the
+            sentinel `"---unchanged---"`. The OTA upload token is never
+            returned: `otaUploadEnabled` (boolean) says whether one is set.
     post:
       summary: Partial settings update
       description: |
@@ -55,13 +67,16 @@ paths:
 
         Special keys: `restart` (boolean) reboots the machine after the
         response is sent. `wifiPassword` equal to `"---unchanged---"` is
-        ignored. `apPassword` shorter than the minimum length is ignored.
+        ignored. `apPassword` equal to the sentinel or shorter than the minimum
+        length is ignored. `otaUploadToken` (string) is write-only: it sets the
+        token `POST /api/ota/upload` requires (empty disables uploads) and GET
+        reports only `otaUploadEnabled`.
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              description: Any subset of the keys returned by GET.
+              description: Any subset of the keys returned by GET, plus the write-only `otaUploadToken`.
       responses:
         "200":
           description: Full settings object after the update.
@@ -79,6 +94,7 @@ paths:
           description: Any value returns id, label, favorite and selected per profile (no phases). Both forms are served from a per-revision cache in PSRAM.
       responses:
         "200":
+          description: All profiles in display order.
           content:
             application/json:
               schema:
@@ -114,6 +130,7 @@ paths:
       summary: Load a profile
       responses:
         "200":
+          description: The stored profile.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Profile" }
@@ -139,18 +156,24 @@ paths:
         "404": { description: Profile not found. }
 
   /api/profiles/{id}/select:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Make this the active profile
       responses:
         "200": { description: "`{\"ok\": true}`" }
         "404": { description: Profile not found. }
   /api/profiles/{id}/favorite:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Add to favorites
       responses:
         "200": { description: "`{\"ok\": true}`" }
         "404": { description: Profile not found. }
   /api/profiles/{id}/unfavorite:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
     post:
       summary: Remove from favorites
       responses:
@@ -163,7 +186,9 @@ paths:
       description: SIDX header plus fixed-size entries; parser reference is
         `web/src/pages/ShotHistory/parseBinaryIndex.js`.
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The index file.
+          content: { application/octet-stream: {} }
         "404": { description: Index not built yet. }
   /api/history/recent.bin:
     get:
@@ -173,8 +198,12 @@ paths:
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 8 }
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: Up to `limit` index entries, newest first.
+          content: { application/octet-stream: {} }
   /api/history/{id}.slog:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]{6}$" } }
     get:
       summary: Full shot recording (binary)
       description: Zero-padded 6-digit id, e.g. `/api/history/000042.slog`.
@@ -182,19 +211,25 @@ paths:
         `web/scripts/shot-scrape.mjs` converts shots to a compact text format
         suitable for LLM input.
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The shot's samples.
+          content: { application/octet-stream: {} }
   /api/history/{id}.json:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9]{6}$" } }
     get:
       summary: Shot notes (dose, grind, rating, tasting notes)
       description: Present only for shots that have notes. Schema is
-        `schema/shot_notes.json`. Notes are written over the WebSocket.
+        `schema/shot_notes.json`. Notes are written with PUT on this route.
       responses:
-        "200": { content: { application/json: {} } }
-
+        "200":
+          description: The notes document.
+          content: { application/json: {} }
+        "404": { description: The shot has no notes. }
     put:
       summary: Save the notes for a shot
-      description: Equivalent of `req:history:notes:save`; also updates the index's rating and,
-        when `doseOut` is given, its recorded volume.
+      description: Stores the notes document as the shot's `.json` file; also updates the index's
+        rating and, when `doseOut` is given, its recorded volume.
       requestBody:
         required: true
         content:
@@ -207,14 +242,15 @@ paths:
     get:
       summary: Download the last crash core dump, if any
       responses:
-        "200": { content: { application/octet-stream: {} } }
+        "200":
+          description: The raw core dump partition, for `scripts/analyze_coredump.sh`.
+          content: { application/octet-stream: {} }
 
   /api/mode:
     post:
       summary: Switch machine mode
       description: |
-        Equivalent of `req:change-mode`: stops and clears any running process, then selects the
-        mode. Accepts the number or the name.
+        Stops and clears any running process, then selects the mode. Accepts the number or the name.
       requestBody:
         required: true
         content:
@@ -228,14 +264,16 @@ paths:
                     - { type: integer, minimum: 0, maximum: 4 }
                     - { type: string, enum: [standby, brew, steam, water, grind] }
       responses:
-        "200": { content: { application/json: { schema: { type: object, properties: { mode: { type: integer } } } } } }
+        "200":
+          description: The mode now in effect.
+          content: { application/json: { schema: { type: object, properties: { mode: { type: integer } } } } }
         "400": { $ref: "#/components/responses/Error" }
   /api/process/{action}:
     post:
       summary: Start, stop or clear the current process
       description: |
         `activate` starts the process for the current mode (brew, steam, water); `deactivate`
-        stops it and clears its state; `clear` only clears. Equivalents of `req:process:*`.
+        stops it and clears its state; `clear` only clears.
       parameters:
         - { name: action, in: path, required: true, schema: { type: string, enum: [activate, deactivate, clear] } }
       responses:
@@ -256,8 +294,8 @@ paths:
   /api/autotune:
     post:
       summary: Start a PID autotune
-      description: Equivalent of `req:autotune-start`. The result arrives as `evt:autotune-result`
-        on the WebSocket. `wattage` 0 skips the feed-forward derivation.
+      description: Runs the SIMC autotuner on the boiler. The result arrives as `evt:autotune-result`
+        on the WebSocket (`evt:autotune-failed` if it aborts). `wattage` 0 skips the feed-forward derivation.
       requestBody:
         required: true
         content:
@@ -278,7 +316,7 @@ paths:
       description: |
         One step, as the on-screen +/- buttons: temperature by 1 °C; brew by 1 s of duration or
         1 g of volumetric target, whichever the selected profile uses; grind by 0.5 g or 1 s
-        likewise. Equivalents of `req:raise-*` / `req:lower-*`.
+        likewise.
       parameters:
         - { name: target, in: path, required: true, schema: { type: string, enum: [temperature, brew, grind] } }
         - { name: direction, in: path, required: true, schema: { type: string, enum: [raise, lower] } }
@@ -300,6 +338,7 @@ paths:
             schema: { type: object, required: [value], properties: { value: { type: number } } }
       responses:
         "200":
+          description: The value as applied (after clamping).
           content:
             application/json:
               schema:
@@ -310,22 +349,26 @@ paths:
   /api/targets/mode:
     put:
       summary: Choose time-based or volumetric targets
-      description: Equivalent of `req:change-brew-target` / `req:change-grind-target` (whose
-        `target` field is this boolean). Volumetric needs a connected scale.
+      description: |
+        Sets whether brew and grind stop on weight (`volumetric: true`) or on time.
+        Volumetric needs a connected scale.
       requestBody:
         required: true
         content:
           application/json:
             schema: { type: object, required: [volumetric], properties: { volumetric: { type: boolean } } }
       responses:
-        "200": { content: { application/json: { schema: { type: object, properties: { volumetric: { type: boolean } } } } } }
+        "200":
+          description: The setting now in effect.
+          content: { application/json: { schema: { type: object, properties: { volumetric: { type: boolean } } } } }
         "400": { $ref: "#/components/responses/Error" }
   /api/ota:
     get:
       summary: Versions, update availability, storage and memory
-      description: The payload of the WebSocket `res:ota-settings` message, without the socket.
+      description: The same payload the device pushes as `evt:ota-status` on the WebSocket.
       responses:
         "200":
+          description: Versions, channel, update flags, LittleFS and heap figures.
           content:
             application/json:
               schema:
@@ -333,14 +376,21 @@ paths:
                 properties:
                   displayVersion: { type: string }
                   controllerVersion: { type: string }
+                  hardware: { type: string, description: Controller board variant. }
                   latestVersion: { type: string }
                   channel: { type: string, enum: [latest, nightly] }
                   displayUpdateAvailable: { type: boolean }
                   controllerUpdateAvailable: { type: boolean }
                   updating: { type: boolean }
-                  heapFree: { type: integer, description: Free internal RAM (bytes). }
-                  heapLargest: { type: integer }
+                  spiffsTotal: { type: integer, description: LittleFS size (bytes). }
+                  spiffsUsed: { type: integer }
                   spiffsFree: { type: integer, description: Free LittleFS bytes. }
+                  spiffsUsedPct: { type: integer }
+                  heapFree: { type: integer, description: Free internal RAM (bytes). }
+                  heapLargest: { type: integer, description: Largest free internal block (bytes). }
+                  heapTotal: { type: integer }
+                  psramFree: { type: integer, description: Free PSRAM (bytes). }
+                  psramLargest: { type: integer }
     post:
       summary: Re-check for updates, optionally switching channel
       requestBody:
@@ -348,12 +398,12 @@ paths:
           application/json:
             schema: { type: object, properties: { channel: { type: string, enum: [latest, nightly] } } }
       responses:
-        "202": { description: Check scheduled; results show up in `GET /api/ota` and on the socket. }
+        "202": { description: Check scheduled; results show up in `GET /api/ota` and as `evt:ota-status` on the socket. }
   /api/ota/start:
     post:
       summary: Install the available update
-      description: Equivalent of `req:ota-start`. Progress arrives as `evt:ota-progress`; the display
-        reboots when its own image finishes.
+      description: Downloads and flashes the latest release for the component (both when omitted).
+        Progress arrives as `evt:ota-progress`; the display reboots when its own image finishes.
       requestBody:
         content:
           application/json:
@@ -388,6 +438,59 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Ok" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/scales/list:
+    get:
+      summary: Bluetooth scales found by the last scan
+      responses:
+        "200":
+          description: Discovered scales (empty until `POST /api/scales/scan` has run).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    uuid: { type: string, description: BLE address; pass it to `POST /api/scales/connect`. }
+                    name: { type: string }
+                    rssi: { type: integer }
+  /api/scales/scan:
+    post:
+      summary: Start a BLE scan for scales
+      description: Returns immediately; discovered devices accumulate in `GET /api/scales/list`.
+        Any method other than POST answers 404.
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/scales/connect:
+    post:
+      summary: Connect to a scale
+      description: The `uuid` comes from the scan list, as a form field or query parameter. The reply
+        only acknowledges the request; the connection shows up as `bc` in `evt:status` and in
+        `GET /api/scales/info`. Any method other than POST answers 404.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { type: object, required: [uuid], properties: { uuid: { type: string } } }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/scales/info:
+    get:
+      summary: The currently connected scale
+      responses:
+        "200":
+          description: Connection state and identity of the scale; `battery` is present only when the scale reports one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected: { type: boolean }
+                  name: { type: string }
+                  uuid: { type: string }
+                  rssi: { type: integer }
+                  hasBattery: { type: boolean, description: Whether the driver reports a battery level. }
+                  battery: { type: integer, minimum: 0, maximum: 100, description: Battery percentage; omitted when unknown. }
   /api/ota/upload:
     post:
       summary: Push a firmware (or LittleFS) image over the network
@@ -403,7 +506,7 @@ paths:
         dead connection cannot hold the OTA slot until a power-cycle.
 
             curl -H "X-OTA-Token: $TOKEN" -H "Content-Type: application/octet-stream" \
-                 --data-binary @.pio/build/display/firmware.bin http://gaggimate.local/api/ota/upload
+                 --data-binary @.pio/build/display/firmware.bin http://exhalation.local/api/ota/upload
       parameters:
         - name: X-OTA-Token
           in: header
@@ -454,6 +557,11 @@ components:
       content:
         application/json:
           schema: { type: object, properties: { ok: { type: boolean, const: true } } }
+    Success:
+      description: Request accepted.
+      content:
+        application/json:
+          schema: { type: object, properties: { success: { type: boolean, const: true } } }
     Error:
       description: Refused; `error` says why.
       content:

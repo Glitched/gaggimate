@@ -2,6 +2,10 @@
 env/
 pcb/**/Gaggimate-backups
 pcb/**/*.kicad_sch_old
+# KiCad's footprint-library cache, regenerated whenever a project is opened.
+# Two copies are still tracked (pcb/fp-info-cache, pcb/expansion-template/fp-info-cache)
+# and need `git rm --cached` before this rule stops their churn.
+pcb/**/fp-info-cache
 .vscode
 .idea
 node_modules/

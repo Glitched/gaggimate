@@ -3,15 +3,19 @@ on:
     branches:
       - "master"
 
-permissions:
-  contents: write
 name: Build Nightly
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # A nightly image must carry the real web UI: fail the link if only the
+      # empty stub bundle is present (scripts/check_webui_blob.py).
+      GM_REQUIRE_WEBUI: '1'
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-tags: true
           fetch-depth: 0
@@ -21,12 +25,15 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'lib/*/library.json') }}
+          restore-keys: ${{ runner.os }}-pio-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install PlatformIO Core
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -43,6 +50,9 @@ jobs:
           git describe --tags --dirty > out/version.txt
       - name: Build Web
         run: ./scripts/build_webui.sh
+      # All images are built before anything is published, so a failure in one
+      # build cannot leave a partial nightly (e.g. a controller image with no
+      # matching display image) on the update server.
       - name: Build controller
         run: |
           export PLATFORMIO_BUILD_FLAGS="'-DNIGHTLY_BUILD'"
@@ -53,14 +63,6 @@ jobs:
           cp .pio/build/controller/firmware.bin upload/controller/firmware.bin
           cp .pio/build/controller/partitions.bin upload/controller/partitions.bin
           cp .pio/build/controller/bootloader.bin upload/controller/bootloader.bin
-      - uses: ./.github/actions/upload-firmware
-        env:
-          UPDATE_SERVER_HOST: ${{ secrets.UPDATE_SERVER_HOST }}
-          UPDATE_SERVER_API_KEY: ${{ secrets.UPDATE_SERVER_API_KEY }}
-        with:
-          channel: 'nightly'
-          target: 'controller'
-          firmware_dir: 'upload/controller'
       - name: Build display FS
         run: |
           pio run -t buildfs -e display
@@ -78,15 +80,6 @@ jobs:
           cp .pio/build/display/firmware.bin upload/display/firmware.bin
           cp .pio/build/display/partitions.bin upload/display/partitions.bin
           cp .pio/build/display/bootloader.bin upload/display/bootloader.bin
-      - uses: ./.github/actions/upload-firmware
-        env:
-          UPDATE_SERVER_HOST: ${{ secrets.UPDATE_SERVER_HOST }}
-          UPDATE_SERVER_API_KEY: ${{ secrets.UPDATE_SERVER_API_KEY }}
-        with:
-          channel: 'nightly'
-          target: 'display'
-          firmware_dir: 'upload/display'
-          firmware_files: 'bootloader.bin,partitions.bin,firmware.bin,filesystem.bin'
       - name: Build headless
         run: |
           export PLATFORMIO_BUILD_FLAGS="'-DNIGHTLY_BUILD'"
@@ -103,6 +96,23 @@ jobs:
           UPDATE_SERVER_API_KEY: ${{ secrets.UPDATE_SERVER_API_KEY }}
         with:
           channel: 'nightly'
+          target: 'controller'
+          firmware_dir: 'upload/controller'
+      - uses: ./.github/actions/upload-firmware
+        env:
+          UPDATE_SERVER_HOST: ${{ secrets.UPDATE_SERVER_HOST }}
+          UPDATE_SERVER_API_KEY: ${{ secrets.UPDATE_SERVER_API_KEY }}
+        with:
+          channel: 'nightly'
+          target: 'display'
+          firmware_dir: 'upload/display'
+          firmware_files: 'bootloader.bin,partitions.bin,firmware.bin,filesystem.bin'
+      - uses: ./.github/actions/upload-firmware
+        env:
+          UPDATE_SERVER_HOST: ${{ secrets.UPDATE_SERVER_HOST }}
+          UPDATE_SERVER_API_KEY: ${{ secrets.UPDATE_SERVER_API_KEY }}
+        with:
+          channel: 'nightly'
           target: 'headless'
           firmware_dir: 'upload/headless'
           firmware_files: 'bootloader.bin,partitions.bin,firmware.bin,filesystem.bin'
@@ -111,6 +121,7 @@ jobs:
         with:
           name: gaggimate-firmware
           path: "out/*"
+          retention-days: 14
   release-nightly:
     needs: build
     runs-on: ubuntu-latest

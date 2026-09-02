@@ -58,11 +58,14 @@ See the git history for the complete record of modifications.
 Firmware builds with [PlatformIO](https://platformio.org/); the web UI needs Node 22.
 
 ```shell
+scripts/build_webui.sh                  # build the web UI and embed it — run before the display build
 pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
 pio run -e controller                   # controller board
-scripts/build_webui.sh                  # build the web UI and embed it for the display build
 pio run -e display-sim -t run           # run the display firmware natively against a mocked controller
 ```
+
+Build the web UI first: a display image built without it links an empty stub in place of the web
+app (it still boots, but serves nothing).
 
 `CLAUDE.md` covers the rest: every environment, the simulator, the test suites, formatting
 and the architecture of both firmwares.

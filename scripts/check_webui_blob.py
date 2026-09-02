@@ -18,6 +18,11 @@ failure impossible to ship. [GM-106]
 Runs as a PlatformIO post-action on the ELF, and standalone:
 
     check_webui_blob.py <firmware.elf> <webassets_dir>
+
+As a post-action, an intact but *empty* stub bundle (``pio run`` without
+``build_webui.sh``) is only a warning by default, because a local build with no
+UI is legitimate. Set ``GM_REQUIRE_WEBUI=1`` (CI does, for images that get
+published) to turn that warning into a build failure.
 """
 
 import hashlib
@@ -166,6 +171,12 @@ if "Import" in globals():
         with open(os.path.join(assets, "web_ui.bin"), "rb") as f:
             size = len(f.read())
         if size <= 1:
+            if os.environ.get("GM_REQUIRE_WEBUI") == "1":
+                print("\n*** Embedded web UI is the empty stub and GM_REQUIRE_WEBUI=1"
+                      " -- refusing to produce a firmware image ***")
+                print("    Run scripts/build_webui.sh before pio run, or unset GM_REQUIRE_WEBUI for a UI-less build.")
+                print("")
+                env.Exit(1)
             print("check_webui_blob: WARNING -- empty stub bundle linked in (no web UI).")
             print("                  Run scripts/build_webui.sh to embed the real bundle.")
         else:

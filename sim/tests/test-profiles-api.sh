@@ -4,6 +4,24 @@ pass=0; fail=0
 check() { if [ "$2" == "$3" ]; then pass=$((pass+1)); echo "PASS: $1"; else fail=$((fail+1)); echo "FAIL: $1 (expected [$2], got [$3])"; fi; }
 jqf() { python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d$1))" 2>/dev/null; }
 
+# Wait for the simulator's HTTP server (up to 20 s) rather than sleeping a fixed time.
+for i in $(seq 1 40); do
+  curl -sf -o /dev/null http://localhost:8080/api/status && break
+  if [ "$i" -eq 40 ]; then echo "simulator not reachable on localhost:8080 after 20 s" >&2; exit 1; fi
+  sleep 0.5
+done
+
+# Leave the sim as we found it: remember the selected profile now, and on exit
+# unfavourite and delete the profile this suite creates and re-select the original.
+ORIG_SELECTED=$(curl -s "$B?minimal=1" | python3 -c "import sys,json; print(next((p['id'] for p in json.load(sys.stdin)['profiles'] if p.get('selected')), ''))" 2>/dev/null)
+ID=
+cleanup() {
+  if [ -n "$ID" ]; then curl -s -o /dev/null -X POST "$B/$ID/unfavorite"; fi
+  if [ -n "$ORIG_SELECTED" ]; then curl -s -o /dev/null -X POST "$B/$ORIG_SELECTED/select"; fi
+  if [ -n "$ID" ]; then curl -s -o /dev/null -X DELETE "$B/$ID"; fi
+}
+trap cleanup EXIT
+
 VALID='{"label":"API Test","type":"pro","description":"made by test","temperature":93.5,"phases":[{"name":"Pre-Infusion","phase":"preinfusion","valve":1,"duration":8,"pump":{"target":"pressure","pressure":3,"flow":0},"transition":{"type":"instant","target":"time","duration":0,"adaptive":false},"targets":[]},{"name":"Brew","phase":"brew","valve":1,"duration":25,"pump":{"target":"pressure","pressure":9,"flow":0},"transition":{"type":"linear","target":"time","duration":4,"adaptive":true},"targets":[{"type":"volumetric","operator":"gte","value":36}]}]}'
 
 echo "--- 1. List works"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# HTTP command surface: the REST equivalents of the req:* WebSocket messages.
+# HTTP command surface: mode, process, targets, OTA status, history, reorder.
 # Runs against the simulator (see README.md). Avoids /api/ota/start and
 # /api/autotune's long-running effects; exercises everything else.
 B=http://localhost:8080/api
@@ -9,6 +9,24 @@ code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
 body() { curl -s "$@"; }
 jget() { python3 -c "import sys,json; d=json.load(sys.stdin); print(d$1)" 2>/dev/null; }
 J='-H Content-Type:application/json'
+
+# Wait for the simulator's HTTP server (up to 20 s) rather than sleeping a fixed time.
+for i in $(seq 1 40); do
+  curl -sf -o /dev/null $B/status && break
+  if [ "$i" -eq 40 ]; then echo "simulator not reachable on localhost:8080 after 20 s" >&2; exit 1; fi
+  sleep 0.5
+done
+
+# Leave the sim as we found it: put the mode and target temperature back on exit
+# (the OTA channel and the profile order are already restored inline below).
+ORIG_MODE=$(body $B/status | jget "['mode']")
+ORIG_TT=$(body $B/status | jget "['tt']")
+restore() {
+  curl -s -o /dev/null -X POST $B/process/deactivate
+  if [ -n "$ORIG_TT" ]; then curl -s -o /dev/null -X PUT $J -d "{\"value\":$ORIG_TT}" $B/targets/temperature; fi
+  if [ -n "$ORIG_MODE" ]; then curl -s -o /dev/null -X POST $J -d "{\"mode\":$ORIG_MODE}" $B/mode; fi
+}
+trap restore EXIT
 
 echo "--- mode"
 check "mode by name -> 200"      200 "$(code -X POST $J -d '{"mode":"brew"}' $B/mode)"
