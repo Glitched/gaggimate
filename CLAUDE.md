@@ -87,7 +87,8 @@ afterwards).** Read these before flashing it again:
   unblocked; the remaining ~38 KB gap to the old firmware is unattributed (candidates: Wi-Fi
   static RX buffers, NimBLE 2 pools that stay internal, AsyncTCP queues) -- a boot-phase heap
   log would settle it.
-- **The hybrid build is in place** (`custom_sdkconfig` on `[env:display]`, 2026-09-02): the
+- **The hybrid build is in place** (one `custom_sdkconfig` block in the `[custom_sdk]` section of
+  `platformio.ini`, referenced by every ESP env, 2026-09-02): the
   first `pio run` downloads `framework-espidf`, cmake and ninja, links a dummy sketch to
   compile the IDF libraries with the overrides (about 3 minutes on this Mac), copies them
   into `framework-arduinoespressif32-libs`, then builds the real project. The rebuilt
@@ -96,9 +97,13 @@ afterwards).** Read these before flashing it again:
   `ARDUINO_LIB_COMPILE_FLAG` is `Build`; keep that guard. The pass leaves `.dummy/`,
   `managed_components/`, `sdkconfig.defaults` and `sdkconfig.<env>` in the project root
   (git-ignored; `sdkconfig.defaults` carries the hash pioarduino uses to decide whether the
-  cached libs match). Building an env *without* `custom_sdkconfig` reinstalls the stock
-  libs and the next display build recompiles them, so give every qio_opi env the same block
-  before building it in this worktree. CI inherits the download and the extra minutes.
+  cached libs match). The libs are keyed on the block's text plus the board's memory layout:
+  controller, display and display-headless (all qio_opi) share one set and were verified to
+  build back to back without a recompile; display-headless-8m (qio_qspi) gets its own and
+  re-triggers the ~3 min compile step whenever it is alternated with the others. An env
+  *without* the block reinstalls the stock libs, so never add an ESP env without
+  `custom_sdkconfig = ${custom_sdk.custom_sdkconfig}`. CI inherits the download and the
+  compile step on every run (the hash marker `sdkconfig.defaults` is not cached).
 - **The panel.** IDF 5's RGB driver restarts the frame at the next VSYNC on a DMA underrun
   (`CONFIG_LCD_RGB_RESTART_IN_VSYNC=y` in the prebuilt config) where IDF 4.4 just tore, so
   PSRAM-bandwidth contention that used to be an occasional tear shows up as dropped frames.
