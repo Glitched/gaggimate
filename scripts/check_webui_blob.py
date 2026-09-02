@@ -159,6 +159,11 @@ if "Import" in globals():
     Import("env")  # noqa: F821 -- provided by PlatformIO/SCons
 
     def _verify(source, target, env):  # noqa: ARG001 -- SCons callback signature
+        if env.subst("$ARDUINO_LIB_COMPILE_FLAG") == "Build":
+            # pioarduino's hybrid build (custom_sdkconfig) first links a dummy sketch to
+            # produce the IDF libraries; that ELF has no web bundle by design.
+            print("check_webui_blob: skipped (IDF library compile pass)")
+            return
         elf = str(target[0])
         assets = os.path.join(env["PROJECT_DIR"], "src", "display", "webassets")
         problems = check(elf, assets)

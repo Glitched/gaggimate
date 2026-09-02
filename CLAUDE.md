@@ -81,12 +81,36 @@ afterwards).** Read these before flashing it again:
   `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y`, `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`,
   `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768`; consider
   `CONFIG_LCD_RGB_RESTART_IN_VSYNC=n` too (see next point). Re-measure with `GET /api/ota`.
+  **Measured 2026-09-02 with exactly those four options:** 43 KB free / 32 KB largest block /
+  308 KB total internal on a fresh boot (old firmware 81 / 70 / 294; prebuilt config 14 / 7.6 /
+  276). Boot floor (`heapMinFree`) 29.7 KB. TLS no longer draws on internal RAM, so OTA is
+  unblocked; the remaining ~38 KB gap to the old firmware is unattributed (candidates: Wi-Fi
+  static RX buffers, NimBLE 2 pools that stay internal, AsyncTCP queues) -- a boot-phase heap
+  log would settle it.
+- **The hybrid build is in place** (`custom_sdkconfig` on `[env:display]`, 2026-09-02): the
+  first `pio run` downloads `framework-espidf`, cmake and ninja, links a dummy sketch to
+  compile the IDF libraries with the overrides (about 3 minutes on this Mac), copies them
+  into `framework-arduinoespressif32-libs`, then builds the real project. The rebuilt
+  `sdkconfig.h` under that package is the place to confirm an option took. The dummy pass
+  has no web bundle, so `scripts/check_webui_blob.py` skips itself when
+  `ARDUINO_LIB_COMPILE_FLAG` is `Build`; keep that guard. The pass leaves `.dummy/`,
+  `managed_components/`, `sdkconfig.defaults` and `sdkconfig.<env>` in the project root
+  (git-ignored; `sdkconfig.defaults` carries the hash pioarduino uses to decide whether the
+  cached libs match). Building an env *without* `custom_sdkconfig` reinstalls the stock
+  libs and the next display build recompiles them, so give every qio_opi env the same block
+  before building it in this worktree. CI inherits the download and the extra minutes.
 - **The panel.** IDF 5's RGB driver restarts the frame at the next VSYNC on a DMA underrun
   (`CONFIG_LCD_RGB_RESTART_IN_VSYNC=y` in the prebuilt config) where IDF 4.4 just tore, so
   PSRAM-bandwidth contention that used to be an occasional tear shows up as dropped frames.
   Bounce buffers (`bounce_buffer_size_px` in `esp_lcd_rgb_panel_config_t`, two internal-RAM
   buffers of N lines) remove the underrun, but need the heap back first. The UI loop itself
-  was fine: `standby exit: 8 frames in 188 ms` on this branch.
+  was fine: `standby exit: 8 frames in 188 ms` on this branch. **Update 2026-09-02:** with
+  the hybrid build the panel stayed at 23.5 Hz and the UI at 40 fps while Ryan drove the
+  screens, and he called the display fixed; the stutter was a symptom of the defaults boot,
+  not of the driver. Bounce buffers are therefore not needed for parity. `GET /api/ota` now
+  reports `uiFps`, `flushAvgUs`, `flushMaxUs`, `panelVsyncHz` and `heapMinFree` (10 s window,
+  also one `render:` line per 10 s over serial) so this question is answerable without a
+  cable next time. A full-screen flush costs ~27 ms, i.e. one 25 ms frame; that is normal.
 - **OTA slots vs USB.** `POST /api/ota/upload` writes the *inactive* app slot and flips
   `otadata`; `esptool write-flash 0x10000` only rewrites `app0`. After an OTA the device
   boots `app1`, so a USB flash of app0 changes nothing and you will debug a stale image

@@ -168,6 +168,8 @@ void WebUIPlugin::setup(Controller *_controller, PluginManager *_pluginManager) 
     setupServer();
 }
 
+static constexpr unsigned long PANEL_STATS_PERIOD = 10000; // render-pipeline snapshot cadence, ms
+
 void WebUIPlugin::loop() {
     if (restartPending != 0 && millis() >= restartPending) {
         ESP_LOGI("WebUIPlugin", "Rebooting (deferred restart)");
@@ -187,6 +189,18 @@ void WebUIPlugin::loop() {
         return;
     }
     const unsigned long now = millis();
+    if (now - lastPanelStats >= PANEL_STATS_PERIOD) {
+        // Render-pipeline health: UI frames vs flushes vs panel refreshes, plus the heap floor. One line per 10 s.
+        panelSnapshot = panelStats().snapshot(lastPanelStats == 0 ? 0 : now - lastPanelStats);
+        lastPanelStats = now;
+        ESP_LOGI("WebUIPlugin",
+                 "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz; heap free %u min %u largest %u",
+                 panelSnapshot.uiFps, panelSnapshot.flushHz, static_cast<unsigned long>(panelSnapshot.flushAvgUs),
+                 static_cast<unsigned long>(panelSnapshot.flushMaxUs), panelSnapshot.vsyncHz,
+                 static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)));
+    }
     // An upload that dies mid-stream -- client sleeps, Wi-Fi drops, browser tab
     // closes -- never reaches handleFirmwareUploadResult, so nothing clears
     // uploadInProgress and the Updater keeps the OTA slot open. Every later
@@ -1489,6 +1503,15 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
         // PSRAM is the other budget: JSON work, the LVGL buffers and response caches live there.
         doc["psramFree"] = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         doc["psramLargest"] = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        doc["heapMinFree"] = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL));
+    }
+    // Render pipeline over the last PANEL_STATS_PERIOD window (see PanelStats.h): UI frames rendered, LVGL flushes into
+    // the framebuffer, and RGB panel refreshes. Nominal on the T-RGB: ~40 fps while animating, ~23.5 Hz vsync.
+    {
+        doc["uiFps"] = panelSnapshot.uiFps;
+        doc["flushAvgUs"] = panelSnapshot.flushAvgUs;
+        doc["flushMaxUs"] = panelSnapshot.flushMaxUs;
+        doc["panelVsyncHz"] = panelSnapshot.vsyncHz;
     }
     doc["controllerTaskHealth"] = controller->isTaskHealthy();
 #ifndef GAGGIMATE_HEADLESS

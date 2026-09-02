@@ -8,6 +8,7 @@
  *
  */
 #include "LilyGo_RGBPanel.h"
+#include <display/core/PanelStats.h>
 #include <algorithm>
 #include "utilities.h"
 #include <display/drivers/common/RGBPanelInit.h>
@@ -299,6 +300,13 @@ uint16_t LilyGo_RGBPanel::getBattVoltage() {
     return static_cast<uint16_t>(sum / number_of_samples * 2); // 1:1 divider on the battery sense line
 }
 
+// Counts panel refreshes; ISR context, so it only touches an atomic. A rate below the ~23.5 Hz nominal means the
+// RGB DMA is starving on PSRAM and restarting frames (CONFIG_LCD_RGB_RESTART_IN_VSYNC).
+static bool IRAM_ATTR onPanelVsync(esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t *, void *) {
+    panelStats().vsyncs.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+
 void LilyGo_RGBPanel::initBUS() {
     assert(_init_cmd);
 
@@ -428,6 +436,8 @@ void LilyGo_RGBPanel::initBUS() {
     }
 
     ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&panel_config, &_panelDrv));
+    const esp_lcd_rgb_panel_event_callbacks_t panelCallbacks = {.on_vsync = onPanelVsync};
+    ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(_panelDrv, &panelCallbacks, nullptr));
     ESP_ERROR_CHECK(esp_lcd_panel_init(_panelDrv));
 }
 

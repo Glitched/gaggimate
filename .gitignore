@@ -25,3 +25,9 @@ sim_data/
 
 # written by the simulator's `s` hotkey (live-window screenshots)
 sim_shot_*.bmp
+
+# pioarduino hybrid build (custom_sdkconfig) residue: dummy lib-compile project, IDF managed components, generated sdkconfigs
+.dummy/
+managed_components/
+sdkconfig.defaults
+sdkconfig.*

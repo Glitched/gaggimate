@@ -4,6 +4,7 @@
 #define ELEGANTOTA_USE_ASYNC_WEBSERVER 1
 
 #include <display/util/PsramStlAllocator.h>
+#include <display/core/PanelStats.h>
 #include <memory>
 #include <string>
 #include <Update.h> // U_FLASH / U_SPIFFS
@@ -113,6 +114,8 @@ class WebUIPlugin : public Plugin {
 
     long lastUpdateCheck = 0;
     long lastStatus = 0;
+    unsigned long lastPanelStats = 0; // 10 s render-pipeline snapshot (serial line + /api/ota)
+    PanelStats::Snapshot panelSnapshot{};
     long lastCleanup = 0;
     long lastDns = 0;
     bool updating = false;
