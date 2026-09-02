@@ -205,7 +205,7 @@ bool ProfileManager::saveProfile(Profile &profile) {
         return false;
     bool isNew = false;
 
-    if (profile.id == nullptr || profile.id.isEmpty()) {
+    if (profile.id.isEmpty()) {
         profile.id = generateShortID();
         isNew = true;
     }
@@ -228,10 +228,13 @@ bool ProfileManager::saveProfile(Profile &profile) {
     bool ok = serializeJson(doc, file) > 0;
     file.close();
     if (profile.id == selectedProfile.id) {
+        // Refresh the in-memory copy; profiles:profile:save below covers the listeners
+        // (Controller re-applies the targets, the UI reloads and re-renders). It used to
+        // also call selectProfile(), which reloaded a second time and fired
+        // profiles:profile:select on every save.
         selectedProfile = Profile{};
         loadSelectedProfile(selectedProfile);
     }
-    selectProfile(_settings.getSelectedProfile());
     _plugin_manager->trigger("profiles:profile:save", "id", profile.id);
     if (isNew) {
         addFavoritedProfile(profile.id);

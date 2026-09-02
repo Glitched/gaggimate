@@ -66,6 +66,10 @@ using SettingsCallback = std::function<void(Settings *)>;
 class Settings {
   public:
     Settings();
+    // Owns the live NVS handle in `preferences`: a by-value copy closes it when the
+    // copy dies. Hand out references (Controller::getSettings()) instead.
+    Settings(const Settings &) = delete;
+    Settings &operator=(const Settings &) = delete;
 
     void batchUpdate(const SettingsCallback &callback);
     void save(bool noDelay = false);

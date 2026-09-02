@@ -295,7 +295,7 @@ void Controller::setupBluetooth() {
     comms.onButtonState([this](uint8_t index, bool pressed) {
         const int status = pressed ? 1 : 0;
         String behavior = settings.getButtonBehavior(index);
-        ESP_LOGV("Controller", "Button %d changed to %d, behavior: %s", index, status, behavior);
+        ESP_LOGV("Controller", "Button %d changed to %d, behavior: %s", index, status, behavior.c_str());
         if (behavior == "" || behavior == "none") {
             return;
         }
@@ -409,8 +409,8 @@ void Controller::onSystemInfo(const char *hardware, const char *version, uint32_
         setPressureScale();
         setPidSettings();
         setPumpModelCoeffs();
-        configResendUntil = millis() + CONFIG_RESEND_WINDOW_MS;
-        lastConfigResend = millis();
+        configResendStart = millis();
+        lastConfigResend = configResendStart;
     }
 
     if (!loaded) {
@@ -540,9 +540,6 @@ void Controller::setupWifi() {
         ESP_LOGI(LOG_TAG, "========================================");
     }
 
-    pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
-    pluginManager->on("ota:update:end", [this](Event const &) { this->updating = false; });
-
     // STA path: STA_GOT_IP handler already set wifiConnectedPending; loop()
     // dispatches controller:wifi:connect from there. AP path has no STA_GOT_IP,
     // so it needs the explicit trigger here.
@@ -577,7 +574,8 @@ void Controller::loop() {
 
     // A config burst right after a reconnect can be lost in the unstable BLE window,
     // and a spurious ACK then stops the reliable layer retrying. Re-send until it lands.
-    if (comms.isConnected() && now < configResendUntil && (now - lastConfigResend) >= CONFIG_RESEND_INTERVAL_MS) {
+    if (comms.isConnected() && configResendStart != 0 && (now - configResendStart) < CONFIG_RESEND_WINDOW_MS &&
+        (now - lastConfigResend) >= CONFIG_RESEND_INTERVAL_MS) {
         setPressureScale();
         setPidSettings();
         setPumpModelCoeffs();
@@ -606,7 +604,7 @@ void Controller::loopLogic() {
     // Check if steam is ready
     if (mode == MODE_STEAM && !steamReady && currentTemp + 5.f > getTargetTemp()) {
         activate();
-        steamReady = true;
+        steamReady = isActive(); // activate() is a no-op until the controller is ready; retry next tick
     }
 
     // Process lifecycle under the lock (GM-147); events and NVS writes deferred past unlock.
@@ -649,6 +647,11 @@ void Controller::loopLogic() {
             }
         }
     }
+    // Queue the pump/valve-off frame before the end handlers run: they publish MQTT,
+    // write the shot log and broadcast over the socket synchronously, and the frame
+    // used to wait behind all of that. updateControl() only sends deltas, so the
+    // second call at the end of this function is free when nothing changed.
+    loopControl();
     dispatchEvents(events);
     if (newBrewDelay >= 0) {
         settings.setBrewDelay(newBrewDelay);
@@ -659,9 +662,8 @@ void Controller::loopLogic() {
 
     unsigned long now = millis();
 
-    if (grindActiveUntil != 0 && now > grindActiveUntil)
-        deactivateGrind();
-    if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 && now > lastAction + settings.getStandbyTimeout())
+    if (mode != MODE_STANDBY && settings.getStandbyTimeout() > 0 &&
+        (now - lastAction) > static_cast<unsigned long>(settings.getStandbyTimeout()))
         activateStandby();
 
     loopControl();
@@ -719,16 +721,17 @@ void Controller::startProcess(Process *process) {
     dispatchEvents(events);
 }
 
-void Controller::startProcessLocked(Process *process, std::vector<const char *> &events) {
+bool Controller::startProcessLocked(Process *process, std::vector<const char *> &events) {
     if (isActiveLocked() || !isReady()) {
         delete process;
-        return;
+        return false;
     }
     processCompleted = false;
     this->currentProcess = process;
     applyConnectionPriority(); // shot started -> tight BLE interval
     events.push_back("controller:process:start");
     updateLastAction();
+    return true;
 }
 
 void Controller::dispatchEvents(const std::vector<const char *> &events) {
@@ -1058,6 +1061,12 @@ void Controller::deactivateLocked(std::vector<const char *> &events) {
     if (currentProcess == nullptr) {
         return;
     }
+    if (currentProcess->isActive()) {
+        // Aborted, not finished: the delay-adjust block in loopLogic() must not learn
+        // from a volumetric shot that never reached its target. A natural completion
+        // arrives here with the process already inactive and leaves this untouched.
+        processCompleted = true;
+    }
     delete lastProcess;
     lastProcess = currentProcess;
     currentProcess = nullptr;
@@ -1091,17 +1100,28 @@ void Controller::clearLocked(std::vector<const char *> &events) {
 }
 
 void Controller::activateGrind() {
-    pluginManager->trigger("controller:grind:start");
     if (isGrindActive())
         return;
     clear();
+    // Allocate outside the lock (GM-147).
+    GrindProcess *grind;
     if (settings.isVolumetricTarget() && isVolumetricAvailable()) {
         currentVolumetricSource = VolumetricMeasurementSource::BLUETOOTH;
-        startProcess(new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay()));
+        grind = new GrindProcess(ProcessTarget::VOLUMETRIC, 0, settings.getTargetGrindVolume(), settings.getGrindDelay());
     } else {
-        startProcess(
-            new GrindProcess(ProcessTarget::TIME, settings.getTargetGrindDuration(), settings.getTargetGrindVolume(), 0.0));
+        grind = new GrindProcess(ProcessTarget::TIME, settings.getTargetGrindDuration(), settings.getTargetGrindVolume(), 0.0);
     }
+    // controller:grind:start switches SmartGrindPlugin's relay on, and only grind:end
+    // switches it off again -- so it must fire only once the process is actually
+    // running, not when startProcessLocked refused it (busy or not ready).
+    std::vector<const char *> events;
+    {
+        std::lock_guard<std::recursive_mutex> guard(processMutex);
+        if (startProcessLocked(grind, events)) {
+            events.push_back("controller:grind:start");
+        }
+    }
+    dispatchEvents(events);
 }
 
 void Controller::deactivateGrind() {
@@ -1132,6 +1152,10 @@ bool Controller::isGrindActive() const {
 int Controller::getMode() const { return mode; }
 
 void Controller::setMode(int newMode) {
+    if (newMode < MODE_STANDBY || newMode > MODE_GRIND) {
+        ESP_LOGW(LOG_TAG, "Ignoring invalid mode %d", newMode);
+        return;
+    }
     Event modeEvent = pluginManager->trigger("controller:mode:change", "value", newMode);
     mode = modeEvent.getInt("value");
     steamReady = false;
@@ -1208,8 +1232,9 @@ void Controller::onFlush() {
             return;
         }
         clearLocked(events);
-        startProcessLocked(flush, events);
-        events.push_back("controller:brew:start");
+        if (startProcessLocked(flush, events)) {
+            events.push_back("controller:brew:start");
+        }
     }
     dispatchEvents(events);
 }
@@ -1305,8 +1330,7 @@ void Controller::handleProfileButton(int buttonStatus, String id) {
             clear();
             return;
         }
-        std::vector<String> profileIds = profileManager->listProfiles();
-        if (std::find(profileIds.begin(), profileIds.end(), id) != profileIds.end()) {
+        if (profileManager->profileExists(id)) {
             profileManager->selectProfile(id);
             activate();
         }

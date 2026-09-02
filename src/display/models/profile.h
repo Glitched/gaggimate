@@ -28,9 +28,9 @@ enum class PhaseExitReason : uint8_t {
 };
 
 struct Target {
-    TargetType type;
-    TargetOperator operator_;
-    float value;
+    TargetType type = TargetType::TARGET_TYPE_VOLUMETRIC;
+    TargetOperator operator_ = TargetOperator::LTE;
+    float value = 0.0f;
 
     bool isReached(float input) const {
         if (operator_ == TargetOperator::GTE) {
@@ -41,28 +41,28 @@ struct Target {
 };
 
 struct PumpAdvanced {
-    PumpTarget target; // "pressure" | "flow"
-    float pressure;
-    float flow;
+    PumpTarget target = PumpTarget::PUMP_TARGET_FLOW; // "pressure" | "flow"
+    float pressure = 0.0f;
+    float flow = 0.0f;
 };
 
 struct Transition {
-    TransitionType type;
-    TransitionTarget target;
-    float duration;
-    bool adaptive;
+    TransitionType type = TransitionType::INSTANT;
+    TransitionTarget target = TransitionTarget::TIME;
+    float duration = 0.0f;
+    bool adaptive = false;
 };
 
 struct Phase {
     String name;
-    PhaseType phase; // "preinfusion" | "brew"
-    int valve;       // 0 or 1
-    float duration;
-    bool pumpIsSimple;
-    int pumpSimple; // Used if pumpIsSimple == true
-    float temperature;
-    Transition transition;
-    PumpAdvanced pumpAdvanced;
+    PhaseType phase = PhaseType::PHASE_TYPE_PREINFUSION; // "preinfusion" | "brew"
+    int valve = 0;                                       // 0 or 1
+    float duration = 0.0f;
+    bool pumpIsSimple = false;
+    int pumpSimple = 0; // Used if pumpIsSimple == true
+    float temperature = 0.0f;
+    Transition transition{};
+    PumpAdvanced pumpAdvanced{};
     std::vector<Target> targets;
 
     bool hasVolumetricTarget() const {
@@ -113,7 +113,7 @@ struct Phase {
 
     // Returns the reason the phase finished, or PhaseExitReason::NONE if it is still running.
     PhaseExitReason isFinished(bool enableVolumetric, float volume, float time_in_phase, float current_flow,
-                               float current_pressure, float water_pumped, String type) const {
+                               float current_pressure, float water_pumped, const String &type) const {
         bool volumetricTested = false;
         for (const auto &target : targets) {
             switch (target.type) {
@@ -166,7 +166,7 @@ struct Profile {
     String type; // "standard" | "pro"
     String description;
     bool utility = false;
-    float temperature;
+    float temperature = 0.0f;
     bool favorite = false;
     bool selected = false;
     std::vector<Phase> phases;

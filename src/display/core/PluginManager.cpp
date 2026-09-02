@@ -4,9 +4,6 @@ void PluginManager::registerPlugin(Plugin *plugin) { plugins.push_back(plugin); 
 
 void PluginManager::setup(Controller *controller) {
     ESP_LOGV("PluginManager", "Setting up PluginManager");
-    on("system:dummy", [](const Event &) {
-        // Register a dummy event so the event map is initialized properly
-    });
     for (const auto &plugin : plugins) {
         plugin->setup(controller, this);
     }

@@ -104,10 +104,14 @@ class Controller {
     bool isBluetoothScaleHealthy() const;
     void onFlush();
     int getWaterLevel() const {
-        float reversedLevel = static_cast<float>(settings.getEmptyTankDistance()) -
-                              static_cast<float>(std::min(settings.getEmptyTankDistance(), tofDistance));
-        float range = static_cast<float>(settings.getEmptyTankDistance() - settings.getFullTankDistance());
-        return static_cast<int>(std::min(reversedLevel / range * 100.0f, 100.0f));
+        const int emptyDistance = settings.getEmptyTankDistance();
+        const float range = static_cast<float>(emptyDistance - settings.getFullTankDistance());
+        if (range <= 0.0f) {
+            return 100; // unusable calibration: never report an empty tank
+        }
+        const float reversedLevel = static_cast<float>(emptyDistance - std::min(emptyDistance, tofDistance));
+        const float ratio = std::min(std::max(reversedLevel / range, 0.0f), 1.0f);
+        return static_cast<int>(ratio * 100.0f);
     };
     int getTofDistance() const { return tofDistance; }
 
@@ -142,7 +146,8 @@ class Controller {
     // collect the event ids to fire; the public wrappers dispatch them after unlocking
     // so plugin handlers never run under the lock (avoids lock-order inversions).
     bool isActiveLocked() const { return currentProcess != nullptr && currentProcess->isActive(); }
-    void startProcessLocked(Process *process, std::vector<const char *> &events);
+    // Returns true if it took ownership of `process`; false means it was refused and deleted.
+    bool startProcessLocked(Process *process, std::vector<const char *> &events);
     void deactivateLocked(std::vector<const char *> &events);
     void clearLocked(std::vector<const char *> &events);
     void dispatchEvents(const std::vector<const char *> &events);
@@ -162,7 +167,6 @@ class Controller {
     Driver *driver = nullptr;
 #endif
     GaggiMateClient comms;
-    hw_timer_t *timer = nullptr;
     Settings settings;
     PluginManager *pluginManager{};
     ProfileManager *profileManager{};
@@ -201,9 +205,7 @@ class Controller {
     Process *currentProcess = nullptr;
     Process *lastProcess = nullptr;
 
-    unsigned long grindActiveUntil = 0;
     unsigned long lastPing = 0;
-    unsigned long lastProgress = 0;
     unsigned long lastAction = 0;
     bool loaded = false;
     bool updating = false;
@@ -218,8 +220,10 @@ class Controller {
     bool screenReady = false;
     bool waitingForController = false;
     unsigned long connectStartTime = 0;
-    // Re-send the config burst for a few seconds after a (re)connect (see loop()).
-    unsigned long configResendUntil = 0;
+    // Re-send the config burst for CONFIG_RESEND_WINDOW_MS after a (re)connect (see
+    // loop()). 0 = no burst scheduled; compared by unsigned subtraction so it survives
+    // the millis() wrap.
+    unsigned long configResendStart = 0;
     unsigned long lastConfigResend = 0;
     static const unsigned long CONFIG_RESEND_WINDOW_MS = 8000;
     static const unsigned long CONFIG_RESEND_INTERVAL_MS = 1000;
