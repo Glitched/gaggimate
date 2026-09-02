@@ -244,6 +244,25 @@ static void parseFloatCsv(const String &csv, float *out, size_t count, float def
 void Controller::setupBluetooth() {
     comms.init("GPBLC");
     comms.onConnectionChanged([this](bool connected) {
+        // Link health counters: how often the link drops and for how long. The
+        // status endpoint reports them so a flaky link shows up as numbers, not
+        // as a hunch about what happened mid-shot.
+        const unsigned long now = millis();
+        if (connected) {
+            if (linkDisconnectedAt != 0) {
+                const auto gap = static_cast<uint32_t>(now - linkDisconnectedAt);
+                linkLastGapMs = gap;
+                if (gap > linkMaxGapMs)
+                    linkMaxGapMs = gap;
+                ESP_LOGW(LOG_TAG, "Controller link back after %u ms (drop %u since boot)", static_cast<unsigned>(gap),
+                         static_cast<unsigned>(linkDisconnects.load()));
+            }
+            linkConnectedAt = now;
+        } else {
+            linkDisconnects++;
+            linkDisconnectedAt = now;
+            linkConnectedAt = 0;
+        }
         // Force a full control resend after any (re)connect -- the controller
         // starts with no state and updateControl() otherwise only sends deltas.
         controlStateSent = false;
@@ -1150,6 +1169,15 @@ bool Controller::isGrindActive() const {
 }
 
 int Controller::getMode() const { return mode; }
+
+Controller::LinkHealth Controller::getLinkHealth() const {
+    LinkHealth h;
+    h.disconnects = linkDisconnects;
+    h.lastGapMs = linkLastGapMs;
+    h.maxGapMs = linkMaxGapMs;
+    h.connectedAt = linkConnectedAt;
+    return h;
+}
 
 void Controller::setMode(int newMode) {
     if (newMode < MODE_STANDBY || newMode > MODE_GRIND) {

@@ -68,6 +68,13 @@ using AwsResponseFiller = std::function<size_t(uint8_t *, size_t, size_t)>;
 
 class AsyncWebServer;
 
+static inline std::string lowerKey(const char *name) {
+    std::string k(name);
+    for (auto &ch : k)
+        ch = tolower(ch);
+    return k;
+}
+
 class AsyncWebServerRequest {
   public:
     AsyncWebServerRequest(int fd, AsyncWebServer *server) : _fd(fd), _server(server) {}
@@ -78,6 +85,14 @@ class AsyncWebServerRequest {
     const String &url() const { return _url; }
     int method() const { return _method; }
     String contentType() const { return _contentType; }
+    // Request headers, keyed lowercase like the parser stores them (the real
+    // library matches header names case-insensitively too).
+    bool hasHeader(const char *name) const { return _headers.count(lowerKey(name)) > 0; }
+    String header(const char *name) const {
+        auto it = _headers.find(lowerKey(name));
+        return it == _headers.end() ? String() : String(it->second.c_str());
+    }
+    String host() const { return header("host"); }
     bool hasArg(const char *name) const { return _args.count(name) > 0; }
     bool hasArg(const String &name) const { return hasArg(name.c_str()); }
     String arg(const char *name) const {
@@ -100,6 +115,7 @@ class AsyncWebServerRequest {
     int _method = HTTP_GET;
     String _contentType;
     std::map<std::string, std::string> _args;
+    std::map<std::string, std::string> _headers;
     std::string _body;
     int _fd;
     AsyncWebServer *_server;
@@ -107,6 +123,10 @@ class AsyncWebServerRequest {
 };
 
 using ArRequestHandlerFunction = std::function<void(AsyncWebServerRequest *)>;
+// Middleware, as in the real library: runs after the body is parsed and before the
+// route handler; call next() to continue or send a response to stop.
+using ArMiddlewareNext = std::function<void(void)>;
+using ArMiddlewareCallback = std::function<void(AsyncWebServerRequest *request, ArMiddlewareNext next)>;
 using ArUploadHandlerFunction =
     std::function<void(AsyncWebServerRequest *, const String &, size_t, uint8_t *, size_t, bool)>;
 using ArBodyHandlerFunction = std::function<void(AsyncWebServerRequest *, uint8_t *, size_t, size_t, size_t)>;
@@ -172,6 +192,7 @@ class AsyncWebServer {
         _routes.push_back({(int)method, uri, std::move(handler), std::move(onBody)});
     }
     void onNotFound(ArRequestHandlerFunction handler) { _notFound = std::move(handler); }
+    void addMiddleware(ArMiddlewareCallback fn) { _middleware.push_back(std::move(fn)); }
     void addHandler(AsyncWebSocket *ws) { _ws = ws; }
     AsyncStaticWebHandler &serveStatic(const char *uri, FS &fs, const char *path);
 
@@ -199,6 +220,7 @@ class AsyncWebServer {
     std::vector<StaticRoute> _static;
     std::vector<AsyncStaticWebHandler> _staticHandlers;
     ArRequestHandlerFunction _notFound;
+    std::vector<ArMiddlewareCallback> _middleware;
     AsyncWebSocket *_ws = nullptr;
 
     struct Conn {
@@ -214,6 +236,7 @@ class AsyncWebServer {
     bool handleHttp(Conn &c); // returns true if a full request was handled
     void handleWsFrames(Conn &c);
     void dispatch(Conn &c, AsyncWebServerRequest &req);
+    void runChain(AsyncWebServerRequest *req, size_t i, const std::function<void()> &handler);
 };
 
 // Pump every running AsyncWebServer once (call from the simulator main loop).

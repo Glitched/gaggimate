@@ -28,6 +28,14 @@ restore() {
 }
 trap restore EXIT
 
+echo "--- 0. Cross-site writes: a browser Origin that is not this host is refused"
+check "cross-origin POST -> 403"      403 "$(code -X POST $J -H 'Origin: http://evil.example' -d '{"mode":0}' $B/mode)"
+check "cross-origin PUT -> 403"       403 "$(code -X PUT $J -H 'Origin: http://evil.example' -d '{"value":93}' $B/targets/temperature)"
+check "same-origin POST -> 200"       200 "$(code -X POST $J -H 'Origin: http://localhost:8080' -d '{"mode":0}' $B/mode)"
+check "no Origin (curl) -> 200"       200 "$(code -X POST $J -d '{"mode":0}' $B/mode)"
+check "cross-origin GET still open"   200 "$(code -H 'Origin: http://evil.example' $B/status)"
+check "text/plain JSON body ignored"  400 "$(code -X POST -H 'Content-Type: text/plain' -d '{"mode":0}' $B/mode)"
+
 echo "--- mode"
 check "mode by name -> 200"      200 "$(code -X POST $J -d '{"mode":"brew"}' $B/mode)"
 check "status reports brew (1)"  1   "$(body $B/status | jget "['mode']")"

@@ -46,6 +46,14 @@ static AsyncWebSocketSharedBuffer toWsBuffer(JsonDocument &doc) {
 static constexpr const char *PROFILE_VALIDATION_ERROR =
     "Invalid profile: 'label' (string), 'type' (string) and a non-empty 'phases' array are required";
 
+// "scheme://host[:port]" against the Host header "host[:port]", case-insensitive. The
+// scheme is irrelevant: the device only speaks plain HTTP.
+static bool originMatchesHost(const String &origin, const String &host) {
+    const int at = origin.indexOf("://");
+    const String bare = at >= 0 ? origin.substring(at + 3) : origin;
+    return !host.isEmpty() && bare.equalsIgnoreCase(host);
+}
+
 // Buffers a request body chunk by chunk into request->_tempObject. Ownership:
 // the consuming handler takes the pointer (and frees it); if none does, the
 // request destructor frees it. Oversized or inconsistent bodies are dropped,
@@ -53,6 +61,12 @@ static constexpr const char *PROFILE_VALIDATION_ERROR =
 static void bufferJsonBody(AsyncWebServerRequest *request, const uint8_t *data, size_t len, size_t index, size_t total,
                            size_t maxLen) {
     if (total == 0 || total > maxLen || index + len > total) {
+        return;
+    }
+    // JSON routes read JSON only. A text/plain body is what a cross-site form or a
+    // no-preflight fetch sends; leaving it unbuffered makes every JSON handler see
+    // "no body" (400) instead of acting on it.
+    if (index == 0 && !request->contentType().startsWith("application/json")) {
         return;
     }
     if (index == 0) {
@@ -374,6 +388,26 @@ void WebUIPlugin::serveWebAsset(AsyncWebServerRequest *request) {
 }
 
 void WebUIPlugin::setupServer() {
+    // Cross-site writes. A browser adds an Origin header to every cross-origin
+    // request and to same-origin POST/PUT/DELETE, so a write whose Origin is not
+    // this device's own host came from some other page and is rejected. GETs stay
+    // open (read-only), and requests with no Origin -- curl, scripts, the Vite dev
+    // proxy (which strips it) -- pass. One check, ahead of every route.
+    server.addMiddleware([](AsyncWebServerRequest *request, ArMiddlewareNext next) {
+        const int method = request->method();
+        if (method == HTTP_GET || method == HTTP_HEAD || method == HTTP_OPTIONS || !request->hasHeader("Origin")) {
+            next();
+            return;
+        }
+        const String origin = request->header("Origin");
+        if (originMatchesHost(origin, request->host())) {
+            next();
+            return;
+        }
+        ESP_LOGW("WebUIPlugin", "Rejected cross-origin write to %s from %s", request->url().c_str(), origin.c_str());
+        request->send(403, "application/json", "{\"error\":\"Cross-origin request rejected\"}");
+    });
+
     server.on("/connecttest.txt", [](AsyncWebServerRequest *request) {
         request->redirect("http://logout.net");
     }); // windows 11 captive portal workaround
@@ -1460,6 +1494,29 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
 #ifndef GAGGIMATE_HEADLESS
     doc["uiTaskHealth"] = controller->getUI()->isTaskHealthy();
 #endif
+    // Controller link health: counters since boot. Retransmits are normal under
+    // Wi-Fi load; give-ups are commands the controller never received.
+    {
+        const GaggiMateClient *client = controller->getClientController();
+        const auto s = client->getLinkStats(); // Endpoint::LinkStats; the sim mock mirrors the fields
+        const Controller::LinkHealth h = controller->getLinkHealth();
+        JsonObject link = doc["link"].to<JsonObject>();
+        link["connected"] = client->isConnected();
+        link["rttMs"] = client->hasLatency() ? static_cast<int>(client->getLatencyMs()) : -1;
+        link["rttMaxMs"] = s.rttMaxMs;
+        link["txFrames"] = s.txFrames;
+        link["rxFrames"] = s.rxFrames;
+        link["retransmits"] = s.retransmits;
+        link["giveUps"] = s.giveUps;
+        link["sendFailures"] = s.sendFailures;
+        link["encodeFailures"] = s.encodeFailures;
+        link["duplicates"] = s.duplicates;
+        link["rxBackpressure"] = s.rxBackpressure;
+        link["disconnects"] = h.disconnects;
+        link["lastGapMs"] = h.lastGapMs;
+        link["maxGapMs"] = h.maxGapMs;
+        link["linkUptimeMs"] = h.connectedAt != 0 ? static_cast<uint32_t>(millis() - h.connectedAt) : 0;
+    }
     if (controller->isSDCard()) {
         const uint64_t total = SD_MMC.cardSize();
         const uint64_t used = SD_MMC.usedBytes();

@@ -61,6 +61,20 @@ class GaggiMateClient {
     uint32_t getLatencyMs() const { return 18; }
     uint32_t getLastLatencyMs() const { return 18; }
     bool hasLatency() const { return _connected; }
+    // Mirrors Endpoint::LinkStats (lib/NanoPbComm); the sim has no radio, so the
+    // counters are static but non-zero enough to exercise the System tab card.
+    struct LinkStats {
+        uint32_t txFrames = 4210;
+        uint32_t rxFrames = 41800;
+        uint32_t retransmits = 3;
+        uint32_t giveUps = 0;
+        uint32_t sendFailures = 0;
+        uint32_t encodeFailures = 0;
+        uint32_t duplicates = 1;
+        uint32_t rxBackpressure = 0;
+        uint32_t rttMaxMs = 64;
+    };
+    LinkStats getLinkStats() const { return LinkStats{}; }
     void setLowLatency(bool) {}
     NimBLEClient *getClient() const { return const_cast<NimBLEClient *>(&_nativeClient); }
 

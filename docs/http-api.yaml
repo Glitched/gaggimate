@@ -17,6 +17,12 @@ info:
     - Errors are `{"error": "<message>"}` with a 4xx/5xx status.
     - There is no authentication; the API trusts the local network, like the
       web UI itself. `POST /api/ota/upload` is the exception (token header).
+    - Writes (anything but GET) that carry a browser `Origin` header must match
+      the request's `Host`, or the device answers 403. Browsers add Origin to
+      every cross-site request, so a page on another site cannot drive the
+      machine; curl and scripts send no Origin and are unaffected.
+    - JSON routes read the body only when `Content-Type: application/json`;
+      any other type is treated as no body (400).
 servers:
   - url: http://exhalation.local
     description: The display on your Wi-Fi network via mDNS. The host is the `mdnsName` setting (default `exhalation`).
@@ -391,6 +397,27 @@ paths:
                   heapTotal: { type: integer }
                   psramFree: { type: integer, description: Free PSRAM (bytes). }
                   psramLargest: { type: integer }
+                  link:
+                    type: object
+                    description: >-
+                      Controller (BLE) link health, counters since boot. Retransmits are normal
+                      under Wi-Fi load; giveUps are commands the controller never received.
+                    properties:
+                      connected: { type: boolean }
+                      rttMs: { type: integer, description: Smoothed send-to-ACK round trip in ms; -1 until measured }
+                      rttMaxMs: { type: integer }
+                      txFrames: { type: integer }
+                      rxFrames: { type: integer }
+                      retransmits: { type: integer, description: In-flight frame re-sent after a 150 ms ACK timeout }
+                      giveUps: { type: integer, description: Frame abandoned after 5 retries; a lost command }
+                      sendFailures: { type: integer, description: The radio refused a write }
+                      encodeFailures: { type: integer }
+                      duplicates: { type: integer, description: Controller retransmits already processed }
+                      rxBackpressure: { type: integer, description: Inbound frames left un-ACKed because the dispatch queue was full }
+                      disconnects: { type: integer }
+                      lastGapMs: { type: integer, description: Duration of the most recent drop; 0 if none }
+                      maxGapMs: { type: integer }
+                      linkUptimeMs: { type: integer, description: Time since the current connection came up }
     post:
       summary: Re-check for updates, optionally switching channel
       requestBody:

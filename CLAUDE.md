@@ -38,7 +38,7 @@ pio run -t buildfs -e display           # LittleFS image (seed profiles only)
 
 ```shell
 cd web && npm install
-npm run dev          # http://localhost:5173, proxies /api and /ws to localhost:8080
+npm run dev          # http://localhost:5173, proxies /api and /ws to localhost:8080 (strips Origin)
 npm run build
 npm run lint         # eslint --fix
 npm run format       # prettier -w .
@@ -214,11 +214,15 @@ JSON schemas for profiles, shot history, and notes are in `schema/`.
   on a shared network both are replaced with `PASSWORD_PLACEHOLDER`
   (`---unchanged---`). Every POST handler for a credential must skip that
   sentinel, or saving an unedited settings form stores the placeholder as the
-  password. Don't widen what this endpoint discloses. The same unauthenticated
-  POST also _accepts_ `otaUploadToken`, so on a shared network any LAN client can
-  set its own token and then use the upload route; closing that (require the
-  current token in `X-OTA-Token`, or AP mode) is an open audit finding, not a
-  feature to preserve.
+  password. Don't widen what this endpoint discloses.
+- Cross-site protection is one middleware in `WebUIPlugin::setup`: a write
+  (anything but GET) whose browser `Origin` does not match `Host` gets 403, and
+  `bufferJsonBody` only buffers `application/json`. curl sends no Origin and
+  passes; the Vite dev proxy strips the header (`web/vite.config.js`). The sim's
+  server shim implements the same `addMiddleware` hook so the e2e suite covers
+  it. There is still no authentication: a LAN client can set `otaUploadToken`
+  through this endpoint and then upload firmware. Ryan chose not to add auth for
+  now (2026-09-01); don't add it unasked, and don't remove the Origin check.
 - License: CC BY-NC-SA 4.0.
 
 ## Device performance

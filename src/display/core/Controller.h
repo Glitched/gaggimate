@@ -2,6 +2,7 @@
 #define CONTROLLER_H
 
 #include "GaggiMateClient.h"
+#include <atomic>
 #include "PluginManager.h"
 #include "Settings.h"
 #include "SystemInfo.h"
@@ -122,6 +123,15 @@ class Controller {
 
     GaggiMateClient *getClientController() { return &comms; }
 
+    // Controller link health for the status endpoint: drops since boot and how long they lasted.
+    struct LinkHealth {
+        uint32_t disconnects = 0;
+        uint32_t lastGapMs = 0;
+        uint32_t maxGapMs = 0;
+        unsigned long connectedAt = 0; // millis() when the current link came up; 0 while down
+    };
+    LinkHealth getLinkHealth() const;
+
   private:
     // Initialization methods
 #ifndef GAGGIMATE_HEADLESS
@@ -167,6 +177,12 @@ class Controller {
     Driver *driver = nullptr;
 #endif
     GaggiMateClient comms;
+    // Written from the BLE connection callback, read from the AsyncTCP task.
+    std::atomic<uint32_t> linkDisconnects{0};
+    std::atomic<uint32_t> linkLastGapMs{0};
+    std::atomic<uint32_t> linkMaxGapMs{0};
+    std::atomic<unsigned long> linkConnectedAt{0};
+    std::atomic<unsigned long> linkDisconnectedAt{0};
     Settings settings;
     PluginManager *pluginManager{};
     ProfileManager *profileManager{};

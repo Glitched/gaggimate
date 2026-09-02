@@ -43,6 +43,7 @@ class GaggiMateClient {
     uint32_t getLatencyMs() const { return _endpoint.latencyMs(); }
     uint32_t getLastLatencyMs() const { return _endpoint.lastLatencyMs(); }
     bool hasLatency() const { return _endpoint.hasLatency(); }
+    Endpoint::LinkStats getLinkStats() const { return _endpoint.stats(); }
 
     // Tight connection interval while active; relaxed when idle to give the shared radio back to Wi-Fi.
     void setLowLatency(bool active) { _transport.setLowLatency(active); }

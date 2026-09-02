@@ -27,6 +27,10 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        // The device rejects writes whose Origin is not its own host. This proxy is a
+        // trusted local hop, so drop the header instead of teaching the firmware
+        // about localhost:5173.
+        configure: proxy => proxy.on('proxyReq', proxyReq => proxyReq.removeHeader('origin')),
       },
       '/ws': {
         target: 'ws://localhost:8080',

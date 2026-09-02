@@ -146,6 +146,117 @@ function StorageAndMemorySection({ formData }) {
   );
 }
 
+// Reliable-link telemetry for the display<->controller BLE session, reported by
+// GET /api/ota next to the memory and storage figures. Firmware without it omits
+// the object, and the card renders nothing rather than an empty shell.
+const formatCount = n => (Number.isFinite(n) ? n.toLocaleString() : '—');
+
+// Gaps and round trips: milliseconds below a second, otherwise seconds to one decimal.
+const formatGap = ms => {
+  if (!Number.isFinite(ms)) return '—';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
+};
+
+// h:mm:ss — the tab has no other uptime figure to match.
+const formatLinkUptime = ms => {
+  const total = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+};
+
+function LinkCounterGroup({ title, rows }) {
+  return (
+    <div className='flex flex-col space-y-2'>
+      <span className='text-base-content/70 text-sm font-medium'>{title}</span>
+      <dl className='space-y-1 text-sm'>
+        {rows.map(({ label, value }) => (
+          <div key={label} className='flex items-center justify-between gap-4'>
+            <dt className='text-base-content/60'>{label}</dt>
+            <dd className='text-base-content font-semibold tabular-nums'>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function ControllerLinkSection({ link }) {
+  if (!link) return null;
+  // A give-up is a frame abandoned after every retry: that command never reached
+  // the controller. Retransmits and duplicates are the link doing its job.
+  const lost = link.giveUps > 0;
+  return (
+    <Section title='Controller Link' className='h-full'>
+      <div className='grid grid-cols-2 gap-6'>
+        <div className='flex flex-col space-y-1'>
+          <span className='text-base-content/70 text-sm font-medium'>Round Trip</span>
+          <span className='text-base-content text-lg font-semibold tabular-nums'>
+            {link.rttMs < 0 ? '—' : `${link.rttMs} ms`}
+          </span>
+          <span className='text-base-content/60 text-xs'>worst {formatGap(link.rttMaxMs)}</span>
+        </div>
+        <div className='flex flex-col space-y-1'>
+          <span className='text-base-content/70 text-sm font-medium'>Give-ups</span>
+          <span
+            className={`text-lg font-semibold tabular-nums ${lost ? 'text-error' : 'text-base-content'}`}
+          >
+            {formatCount(link.giveUps)}
+          </span>
+          <span className={`text-xs ${lost ? 'text-error' : 'text-base-content/60'}`}>
+            {lost ? 'commands lost' : 'no commands lost'}
+          </span>
+        </div>
+      </div>
+
+      <div className='border-base-content/5 mt-6 grid grid-cols-1 gap-6 border-t pt-6 sm:grid-cols-3'>
+        <LinkCounterGroup
+          title='Sends'
+          rows={[
+            { label: 'Frames', value: formatCount(link.txFrames) },
+            { label: 'Retransmits', value: formatCount(link.retransmits) },
+            { label: 'Send failures', value: formatCount(link.sendFailures) },
+            { label: 'Encode failures', value: formatCount(link.encodeFailures) },
+          ]}
+        />
+        <LinkCounterGroup
+          title='Receives'
+          rows={[
+            { label: 'Frames', value: formatCount(link.rxFrames) },
+            { label: 'Duplicates', value: formatCount(link.duplicates) },
+            { label: 'Backpressure', value: formatCount(link.rxBackpressure) },
+          ]}
+        />
+        <LinkCounterGroup
+          title='Link'
+          rows={[
+            {
+              label: 'State',
+              value: (
+                <span
+                  className={`badge badge-sm ${link.connected ? 'badge-success' : 'badge-error'}`}
+                >
+                  {link.connected ? 'Connected' : 'Disconnected'}
+                </span>
+              ),
+            },
+            { label: 'Disconnects', value: formatCount(link.disconnects) },
+            { label: 'Last gap', value: link.lastGapMs > 0 ? formatGap(link.lastGapMs) : '—' },
+            { label: 'Max gap', value: link.maxGapMs > 0 ? formatGap(link.maxGapMs) : '—' },
+            { label: 'Uptime', value: formatLinkUptime(link.linkUptimeMs) },
+          ]}
+        />
+      </div>
+
+      <p className='text-base-content/60 mt-4 text-xs'>
+        Counters since boot. Retransmits are normal under Wi-Fi load; give-ups mean a command was
+        lost.
+      </p>
+    </Section>
+  );
+}
+
 // Direct firmware upload. The device writes the image into its inactive OTA
 // slot, so an interrupted upload leaves it running the current firmware; it
 // only switches banks once the whole image has been received and verified.
@@ -398,6 +509,21 @@ export function SystemTab() {
     };
   }, [apiService]);
 
+  // The link counters and memory figures only move if something re-reads them:
+  // evt:ota-status arrives after an update check or a channel change, not on a
+  // timer. Poll while this tab is visible; the call costs the device about as
+  // much as one status broadcast.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.hidden || isLoading) return;
+      otaApi
+        .status()
+        .then(data => setFormData(data))
+        .catch(() => {});
+    }, 10000);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
   // Load the OTA/system status over HTTP; retried on each reconnect only while
   // the first load has not landed. Later refreshes arrive as evt:ota-status
   // broadcasts (the device re-sends after a check or a channel change).
@@ -587,6 +713,8 @@ export function SystemTab() {
       </Section>
 
       <StorageAndMemorySection formData={formData} />
+
+      <ControllerLinkSection link={formData.link} />
 
       <MaintenanceSection
         downloadSupportData={downloadSupportData}
