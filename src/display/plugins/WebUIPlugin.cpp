@@ -209,9 +209,13 @@ void WebUIPlugin::loop() {
     // uploadInProgress and the Updater keeps the OTA slot open. Every later
     // attempt is then rejected as "another update is already running" until the
     // display is power-cycled. Reclaim it once the stream has clearly stopped.
-    if (uploadInProgress && now - uploadLastChunk > UPLOAD_STALL_TIMEOUT) {
-        ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", now - uploadLastChunk);
-        uploadError = "no data for " + String(now - uploadLastChunk) + " ms after " + String(uploadTotal) + " bytes";
+    // uploadLastChunk is written by the receive callback on the AsyncTCP task; read millis() fresh and compare signed,
+    // or a chunk landing between the `now` capture above and this check wraps to ~4.29e9 ms and aborts a healthy
+    // upload ("no data for 4294967242 ms" seen on 2026-09-02).
+    if (uploadInProgress && static_cast<long>(millis() - uploadLastChunk) > static_cast<long>(UPLOAD_STALL_TIMEOUT)) {
+        const unsigned long stalledMs = millis() - uploadLastChunk;
+        ESP_LOGW("WebUIPlugin", "Firmware upload stalled for %lums, aborting", stalledMs);
+        uploadError = "no data for " + String(stalledMs) + " ms after " + String(uploadTotal) + " bytes";
         Update.abort();
         uploadInProgress = false;
         pluginManager->trigger("ota:update:end");
