@@ -55,6 +55,51 @@ The platform is **pioarduino** (`platform = https://github.com/pioarduino/platfo
   `ips` ctor arg) and esp-arduino-ble-scales v2.0.0. Don't reintroduce version guards for
   the old core; the branch requires the new versions.
 
+**Hardware findings from the first flash of this branch (2026-09-01, T-RGB, rolled back
+afterwards).** Read these before flashing it again:
+
+- **Settings loaded as defaults.** `Controller controller;` is a global, so
+  `Settings::Settings()` runs before `initArduino()` calls `nvs_flash_init()`. On core 2 that
+  happened to work; on core 3 the first `Preferences::begin` fails with `NOT_INITIALIZED`
+  (logged at 1 ms), every setting is its default, the SSID is empty and the device boots
+  into AP mode -- while the BLE transport, which opens NVS seconds later, works. The fix is
+  `nvs_flash_init()` in the constructor plus `Settings::reload()` at the top of
+  `Controller::setup()`. The only setter that runs unconditionally on such a boot is the AP
+  password generator, so a defaults boot regenerates the AP password and changes nothing
+  else. Core 3's Preferences also logs `nvs_get_str len fail: <key> NOT_FOUND` for every key
+  that was never persisted; that is noise, not corruption.
+- **Internal heap: 81 KB free -> 14 KB free (largest block 70 KB -> 7.6 KB), fresh boot,
+  same feature set.** pioarduino's prebuilt `qio_opi` sdkconfig has
+  `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y`, no `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP`,
+  `CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y` and `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=0`, i.e.
+  the NimBLE host, the Wi-Fi/LWIP buffers and TLS all live in internal RAM where the old
+  Arduino 2 build put them in PSRAM. That is not enough headroom for a TLS OTA session or
+  for LCD bounce buffers (~20 KB). **This is the blocker for merging the branch.** The fix
+  is pioarduino's hybrid build: set `custom_sdkconfig` in `platformio.ini` (it pulls
+  `framework-espidf`, cmake and ninja and rebuilds the Arduino libs; expect a long first
+  build) with at least `CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y`,
+  `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y`, `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y`,
+  `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768`; consider
+  `CONFIG_LCD_RGB_RESTART_IN_VSYNC=n` too (see next point). Re-measure with `GET /api/ota`.
+- **The panel.** IDF 5's RGB driver restarts the frame at the next VSYNC on a DMA underrun
+  (`CONFIG_LCD_RGB_RESTART_IN_VSYNC=y` in the prebuilt config) where IDF 4.4 just tore, so
+  PSRAM-bandwidth contention that used to be an occasional tear shows up as dropped frames.
+  Bounce buffers (`bounce_buffer_size_px` in `esp_lcd_rgb_panel_config_t`, two internal-RAM
+  buffers of N lines) remove the underrun, but need the heap back first. The UI loop itself
+  was fine: `standby exit: 8 frames in 188 ms` on this branch.
+- **OTA slots vs USB.** `POST /api/ota/upload` writes the *inactive* app slot and flips
+  `otadata`; `esptool write-flash 0x10000` only rewrites `app0`. After an OTA the device
+  boots `app1`, so a USB flash of app0 changes nothing and you will debug a stale image
+  (this cost an hour). Either erase `otadata` first (`esptool erase-region 0xe000 0x2000`,
+  the bootloader then falls back to app0) or flash the active slot (`app1` is at 0x650000).
+- **Serial on the T-RGB** is the S3's USB-Serial-JTAG (`ARDUINO_USB_MODE=1`): it only emits
+  when the host asserts DTR, and RTS pulses EN. To capture a boot log open the port with
+  DTR/RTS low, pulse RTS high for 150 ms, then set DTR high and read
+  (`scripts` has nothing for this yet; the recipe is a 15-line pyserial script). Steady
+  state is silent at `CORE_DEBUG_LEVEL=3`; a tap out of standby logs the frame timing.
+- NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
+  controller, then connects and exchanges system info normally. Not yet investigated.
+
 ```shell
 pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
 pio run -e display-headless             # display firmware with no panel/LVGL
