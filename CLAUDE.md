@@ -95,7 +95,10 @@ afterwards).** Read these before flashing it again:
   steady state to **55 KB free / 32 KB largest / 40 KB boot floor** on 2026-09-02. A shot
   takes another ~14 KB, so the in-shot floor is now ~40 KB (it was 18.9 KB before the trims),
   which is the number to protect before spending internal RAM on anything (bounce buffers
-  need ~19 KB). Both cores idle at 92-95 %.
+  need ~19 KB). Both cores idle at 92-95 %. Left on the table: the BLE mesh duplicate-scan
+  cache (~3 KB) cannot be disabled from the ini block (see the comment there); and the
+  steady-state figure moves a few KB with what the web UI is doing, so compare the checkpoint
+  table, not the `now` block, between builds.
 - **The hybrid build is in place** (one `custom_sdkconfig` block in the `[custom_sdk]` section of
   `platformio.ini`, referenced by every ESP env, 2026-09-02): the
   first `pio run` downloads `framework-espidf`, cmake and ninja, links a dummy sketch to
