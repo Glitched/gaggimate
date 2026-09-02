@@ -244,6 +244,51 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Ok" }
         "400": { $ref: "#/components/responses/Error" }
+  /api/debug/heap:
+    get:
+      summary: Internal-heap attribution (debug)
+      description: >
+        Current internal-heap figures, the heap checkpoints recorded at each boot stage and on
+        brew start/end (free, largest block and minimum-ever free at that moment), and every
+        FreeRTOS task with its stack headroom in bytes and cumulative CPU share since boot.
+        Intended for diagnosing where internal RAM goes; not part of the UI.
+      responses:
+        '200':
+          description: Heap snapshot, checkpoint table and task list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  now:
+                    type: object
+                    properties:
+                      free: { type: integer }
+                      largest: { type: integer }
+                      minFree: { type: integer }
+                      total: { type: integer }
+                      psramFree: { type: integer }
+                      uptimeMs: { type: integer }
+                  checkpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        label: { type: string }
+                        t: { type: integer, description: Milliseconds since boot. }
+                        free: { type: integer }
+                        largest: { type: integer }
+                        minFree: { type: integer }
+                  tasks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        prio: { type: integer }
+                        core: { type: integer }
+                        stackFree: { type: integer, description: Stack high-water mark, bytes never used. }
+                        cpuPct: { type: number, description: Share of all run time since boot. }
   /api/core-dump:
     get:
       summary: Download the last crash core dump, if any

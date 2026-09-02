@@ -7,6 +7,7 @@
 #include <cmath>
 #include <ctime>
 #include <display/config.h>
+#include <display/core/HeapCheckpoints.h>
 #include <display/core/constants.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/GrindProcess.h>
@@ -46,6 +47,7 @@ const String LOG_TAG = F("Controller");
 void Controller::setup() {
     // NVS is initialized by now; the global constructor's read can run before that on Arduino core 3.
     settings.reload();
+    heapCheckpoint("setup:start");
     mode = MODE_STANDBY;
 
     // Web assets are served from this partition. LittleFS (not SPIFFS): SPIFFS
@@ -81,7 +83,9 @@ void Controller::setup() {
     }
 
 #ifndef GAGGIMATE_HEADLESS
+    heapCheckpoint("fs");
     setupPanel();
+    heapCheckpoint("panel");
 #endif
 
     pluginManager = new PluginManager();
@@ -99,6 +103,7 @@ void Controller::setup() {
     }
     profileManager = new ProfileManager(fs, "/p", settings, pluginManager);
     profileManager->setup();
+    heapCheckpoint("ui+profiles");
 #ifndef GAGGIMATE_SIM // mDNS/HomeKit are device-only
     if (settings.isHomekit())
         pluginManager->registerPlugin(new HomekitPlugin(settings.getWifiSsid(), settings.getWifiPassword()));
@@ -129,6 +134,7 @@ void Controller::setup() {
     pluginManager->registerPlugin(new LedControlPlugin());
     pluginManager->registerPlugin(new AutoWakeupPlugin());
     pluginManager->setup(this);
+    heapCheckpoint("plugins");
 
     pluginManager->on("profiles:profile:save", [this](Event const &event) {
         String id = event.getString("id");
@@ -138,13 +144,17 @@ void Controller::setup() {
     });
 
     pluginManager->on("profiles:profile:select", [this](Event const &event) { this->handleProfileUpdate(); });
+    pluginManager->on("controller:brew:start", [](Event const &) { heapCheckpoint("brew:start"); });
+    pluginManager->on("controller:brew:end", [](Event const &) { heapCheckpoint("brew:end"); });
 
 #ifndef GAGGIMATE_HEADLESS
     ui->init();
+    heapCheckpoint("ui:init");
 #endif
     this->onScreenReady();
 
     updateLastAction();
+    heapCheckpoint("setup:end");
     xTaskCreatePinnedToCore(loopLogicTask, "Controller::loopLogic", configMINIMAL_STACK_SIZE * 6, this, 3, &logicTaskHandle, 0);
 }
 
@@ -160,7 +170,9 @@ void Controller::connect() {
     pluginManager->trigger("controller:startup");
 
     setupWifi();
+    heapCheckpoint("wifi");
     setupBluetooth();
+    heapCheckpoint("ble");
     pluginManager->on("ota:update:start", [this](Event const &) { this->updating = true; });
     pluginManager->on("ota:update:end", [this](Event const &) { this->updating = false; });
 
@@ -579,6 +591,7 @@ void Controller::loop() {
     if (wifiConnectedPending) {
         wifiConnectedPending = false;
         pluginManager->trigger("controller:wifi:connect", "AP", isApConnection ? 1 : 0);
+        heapCheckpoint("wifi:connect"); // web server, mDNS, HomeKit/MQTT start inside the handlers above
     }
 
     pluginManager->loop();
