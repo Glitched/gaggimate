@@ -459,7 +459,7 @@ void Controller::onSystemInfo(const char *hardware, const char *version, uint32_
 void Controller::onIncompatibleController(const String &infoJson) {
     waitingForController = false;
 
-    JsonDocument doc;
+    JsonDocument doc(&psramAllocator);
     DeserializationError err = deserializeJson(doc, infoJson);
     if (err) {
         ESP_LOGW(LOG_TAG, "Incompatible controller, no readable info (%s)", err.c_str());
