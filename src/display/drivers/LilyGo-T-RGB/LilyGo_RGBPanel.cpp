@@ -8,14 +8,15 @@
  *
  */
 #include "LilyGo_RGBPanel.h"
+#include <algorithm>
 #include "utilities.h"
 #include <display/drivers/common/RGBPanelInit.h>
-#include <esp_adc_cal.h>
 
-static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level);
-static int TouchDrvDigitalRead(uint32_t gpio);
-static void TouchDrvPinMode(uint32_t gpio, uint8_t mode);
-static ExtensionIOXL9555 extension;
+static void TouchDrvDigitalWrite(uint8_t gpio, uint8_t level);
+static uint8_t TouchDrvDigitalRead(uint8_t gpio);
+static void TouchDrvPinMode(uint8_t gpio, uint8_t mode);
+static IoExpanderXL9555 extension;
+static IoExpanderSPI extensionSpi; // bit-banged panel SPI over the expander pins
 static const lcd_init_cmd_t *_init_cmd = nullptr;
 
 LilyGo_RGBPanel::LilyGo_RGBPanel(/* args */)
@@ -61,7 +62,7 @@ void LilyGo_RGBPanel::initExtension() {
         return;
     }
     // Initialize the XL9555 expansion chip
-    if (!extension.init(Wire, BOARD_I2C_SDA, BOARD_I2C_SCL)) {
+    if (!extension.begin(Wire, XL9555_SLAVE_ADDRESS0, BOARD_I2C_SDA, BOARD_I2C_SCL)) {
         Serial.println(F("External GPIO expansion chip does not exist."));
         assert(false);
     }
@@ -232,7 +233,7 @@ void LilyGo_RGBPanel::sleep() {
     }
 
     if (_panelDrv) {
-        esp_lcd_panel_disp_off(_panelDrv, true);
+        esp_lcd_panel_disp_on_off(_panelDrv, false);
         esp_lcd_panel_del(_panelDrv);
     }
 
@@ -269,7 +270,12 @@ uint8_t LilyGo_RGBPanel::getPoint(int16_t *x_array, int16_t *y_array, uint8_t ge
                 return 0;
             }
         }
-        uint8_t touched = _touchDrv->getPoint(x_array, y_array, get_point);
+        const TouchPoints points = _touchDrv->getTouchPoints();
+        const uint8_t touched = std::min<uint8_t>(points.getPointCount(), get_point);
+        for (uint8_t i = 0; i < touched; i++) {
+            x_array[i] = points.getPoint(i).x;
+            y_array[i] = points.getPoint(i).y;
+        }
         return touched;
     }
     return 0;
@@ -283,22 +289,14 @@ bool LilyGo_RGBPanel::isPressed() {
 }
 
 uint16_t LilyGo_RGBPanel::getBattVoltage() {
-    esp_adc_cal_characteristics_t adc_chars;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adc_chars);
-
+    // analogReadMilliVolts() applies the eFuse calibration the legacy esp_adc_cal path used to do by hand.
     const int number_of_samples = 20;
     uint32_t sum = 0;
-    uint16_t raw_buffer[number_of_samples] = {0};
     for (int i = 0; i < number_of_samples; i++) {
-        raw_buffer[i] = analogRead(BOARD_ADC_DET);
+        sum += analogReadMilliVolts(BOARD_ADC_DET);
         delay(2);
     }
-    for (int i = 0; i < number_of_samples; i++) {
-        sum += raw_buffer[i];
-    }
-    sum = sum / number_of_samples;
-
-    return esp_adc_cal_raw_to_voltage(sum, &adc_chars) * 2;
+    return static_cast<uint16_t>(sum / number_of_samples * 2); // 1:1 divider on the battery sense line
 }
 
 void LilyGo_RGBPanel::initBUS() {
@@ -317,7 +315,7 @@ void LilyGo_RGBPanel::initBUS() {
     Wire.setClock(1000000UL);
     // uint32_t start = millis();
 
-    extension.beginSPI(mosi, -1, sclk, cs);
+    extensionSpi.beginSPI(extension, mosi, -1, sclk, cs);
 
     int i = 0;
     while (_init_cmd[i].databytes != 0xff) {
@@ -383,11 +381,12 @@ void LilyGo_RGBPanel::initBUS() {
                     },
             },
         .data_width = 16, // RGB565 in parallel mode, thus 16bit in width
-        .psram_trans_align = 64,
+        .dma_burst_size = 64,
         .hsync_gpio_num = BOARD_TFT_HSYNC,
         .vsync_gpio_num = BOARD_TFT_VSYNC,
         .de_gpio_num = BOARD_TFT_DE,
         .pclk_gpio_num = BOARD_TFT_PCLK,
+        .disp_gpio_num = GPIO_NUM_NC,
         .data_gpio_nums =
             {
                 // BOARD_TFT_DATA0,
@@ -411,9 +410,6 @@ void LilyGo_RGBPanel::initBUS() {
                 BOARD_TFT_DATA4,
                 BOARD_TFT_DATA5,
             },
-        .disp_gpio_num = GPIO_NUM_NC,
-        .on_frame_trans_done = NULL,
-        .user_ctx = NULL,
         .flags =
             {
                 .fb_in_psram = 1, // allocate frame buffer in PSRAM
@@ -463,7 +459,7 @@ bool LilyGo_RGBPanel::initTouch() {
     result = _touchDrv->begin(Wire, GT911_SLAVE_ADDRESS_L, BOARD_I2C_SDA, BOARD_I2C_SCL);
     if (result) {
         TouchDrvGT911 *tmp = static_cast<TouchDrvGT911 *>(_touchDrv);
-        tmp->setInterruptMode(FALLING);
+        tmp->setInterruptMode(TouchDrvGT911::FALLING_EDGE);
 
         _init_cmd = st7701_2_8_inches;
         log_i("Successfully initialized GT911, using GT911 Driver!");
@@ -503,7 +499,7 @@ bool LilyGo_RGBPanel::initTouch() {
 
 void LilyGo_RGBPanel::writeCommand(const uint8_t cmd) {
     uint16_t data = cmd;
-    extension.transfer9(data);
+    extensionSpi.transfer9(data);
 }
 
 void LilyGo_RGBPanel::writeData(const uint8_t *data, int len) {
@@ -512,7 +508,7 @@ void LilyGo_RGBPanel::writeData(const uint8_t *data, int len) {
         do {
             // The ninth bit of data, 1, represents data, 0 represents command
             uint16_t pdat = (*(data + i)) | 1 << 8;
-            extension.transfer9(pdat);
+            extensionSpi.transfer9(pdat);
             i++;
         } while (len--);
     }
@@ -523,7 +519,7 @@ void LilyGo_RGBPanel::pushColors(uint16_t x, uint16_t y, uint16_t width, uint16_
     esp_lcd_panel_draw_bitmap(_panelDrv, x, y, width, hight, data);
 }
 
-static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level) {
+static void TouchDrvDigitalWrite(uint8_t gpio, uint8_t level) {
     if (gpio & 0x80) {
         extension.digitalWrite(gpio & 0x7F, level);
     } else {
@@ -531,7 +527,7 @@ static void TouchDrvDigitalWrite(uint32_t gpio, uint8_t level) {
     }
 }
 
-static int TouchDrvDigitalRead(uint32_t gpio) {
+static uint8_t TouchDrvDigitalRead(uint8_t gpio) {
     if (gpio & 0x80) {
         return extension.digitalRead(gpio & 0x7F);
     } else {
@@ -539,7 +535,7 @@ static int TouchDrvDigitalRead(uint32_t gpio) {
     }
 }
 
-static void TouchDrvPinMode(uint32_t gpio, uint8_t mode) {
+static void TouchDrvPinMode(uint8_t gpio, uint8_t mode) {
     if (gpio & 0x80) {
         extension.pinMode(gpio & 0x7F, mode);
     } else {

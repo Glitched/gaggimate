@@ -23,7 +23,37 @@ install` creates a venv without pip. Without it the first build dies with
 hit that, `rm -rf ~/.platformio/packages/tool-esptoolpy` before retrying — the
 package is left half-installed.
 
-The first `pio run` downloads the espressif32 toolchain (a large one-time fetch).
+The first `pio run` downloads the toolchain (a large one-time fetch).
+
+The platform is **pioarduino** (`platform = https://github.com/pioarduino/platform-espressif32/...`,
+55.03.311 = Arduino core 3.3.11 on ESP-IDF 5.5.5, GCC 14), migrated from
+`espressif32@6.12.0` (Arduino 2.0.17 / IDF 4.4.7) on 2026-09-01. Two consequences:
+
+- pioarduino replaces `~/.platformio/penv` with a uv-created venv that has **no pip**.
+  nanopb's PlatformIO integration installs its generator deps with `python -m pip`,
+  which then fails silently and the build dies with `No module named 'google'`.
+  Fix once per machine (and it is what CI does after `pio pkg install`):
+  `uv pip install --python ~/.platformio/penv/bin/python protobuf grpcio-tools`.
+- `espressif32@6.12.0` and pioarduino both install `framework-arduinoespressif32` and
+  `tool-esptoolpy` into the **same** `~/.platformio/packages/<name>` directory, with no
+  version suffix, so each platform's first build re-downloads its own copy over the other's.
+  Building a checkout on the old platform and this one alternately therefore re-installs
+  packages every time and, if the two builds overlap, one of them fails half-way
+  (`FRAMEWORK_DIR` None, `esptool.py` not found). One platform per machine, or serialize.
+- Upstream (jniebuhr/gaggimate) is still on `espressif32@6.12.0`, so merges that touch
+  Arduino-2-only APIs need porting: `WiFiClient(Secure)` -> `NetworkClient(Secure)`
+  (`setCACertBundle` now takes a size), `ledcSetup/ledcAttachPin` -> `ledcAttach(pin, ...)`,
+  `esp_adc_cal_*` -> `analogReadMilliVolts`, `sntp_*` -> `esp_sntp_*`,
+  `esp_lcd_rgb_panel_config_t` lost `on_frame_trans_done`/`user_ctx` and renamed
+  `psram_trans_align` -> `dma_burst_size` (field order matters: `disp_gpio_num` before
+  `data_gpio_nums`), and core 3 no longer leaks `using namespace std` (write `std::vector`).
+  GCC 14 also rejects `[[noreturn]]` on a definition whose declaration lacks it.
+  Library floors that came with it: NimBLE-Arduino 2.5 (`NimBLEConnInfo&` callbacks,
+  `NimBLEScanCallbacks`, `getVal()` instead of `getNative()`, times in ms), HomeSpan 2.1,
+  SensorLib 0.4 (`IoExpanderXL9555` with integer pins, `IoExpanderSPI` for the bit-banged
+  panel SPI, `getTouchPoints()`), Arduino_GFX 1.6 (`RGB565_BLACK`, `CO5300_TFTWIDTH`, no
+  `ips` ctor arg) and esp-arduino-ble-scales v2.0.0. Don't reintroduce version guards for
+  the old core; the branch requires the new versions.
 
 ```shell
 pio run -e display                      # display unit (LilyGo T-RGB touchscreen)
@@ -69,6 +99,10 @@ pio run -e display-sim -t run                                  # build + launch
 ```
 
 WebUI is served at <http://localhost:8080/> while it runs — which is exactly what `npm run dev` proxies to, so you can run the Vite dev server against the simulator. State persists under `sim_data/`. See `sim/README.md` for what's compiled out (MQTT, HomeKit, mDNS, BLE scales, OTA upload, watchdogs).
+
+Any edit to `platformio.ini` changes PlatformIO's project checksum and the next `pio run`
+of **any** env wipes all of `.pio/build/`, including the sim binary. If the e2e suites
+report "simulator not reachable" right after a dependency bump, rebuild the sim first.
 
 Flags: `--scale` pretends a Bluetooth scale is connected (the weight row and volumetric UI only render with one); `--tap X,Y@MS`, `--drag X0,Y0>X1,Y1@T0~T1` and `--arc CX,CY,R,A0,A1@T0~T1` inject touches, so screens behind an interaction can be captured headlessly; pressing `s` in the window writes `sim_shot_N.bmp` of the live frame. The sim runs the UI loop at the device's 25 ms cadence, so frame counts match hardware; a `--screenshot` run additionally uses a hidden window and ignores the real mouse. Arc angles are screen-convention: 0 = right, clockwise positive, **270 = top**.
 
@@ -161,6 +195,12 @@ Consequences to respect when editing:
 - `currentProcess`/`lastProcess` are guarded by `Controller::processMutex` (recursive). Holding the pointer returned by `getProcess()` without the lock is a use-after-free. The `*Locked` helpers collect event ids and the public wrappers dispatch them **after** unlocking, so plugin handlers never run under the lock.
 - Wi-Fi connect/disconnect is only _flagged_ from the Arduino Wi-Fi event task (`wifiConnectedPending`/`wifiDisconnectedPending`) and acted on in `loop()` — doing server/mDNS work in that small-stack callback corrupted the heap.
 - `updateControl()` only transmits boiler/pump/relay components that changed since `lastBoiler`/`lastPump`/`lastRelay`; these reset on reconnect to force a full resend.
+
+**HomeKit.** HomeSpan 2.x declares a global `class Controller` (its paired-controller
+record) that collides with ours, so `HomeSpan.h` is included from exactly one translation
+unit, `plugins/HomekitBridge.cpp`, which never sees `Controller.h`; `HomekitPlugin`
+talks to it through the plain-types `HomekitBridge` interface. Keep it that way (and keep
+`HomekitBridge.cpp` in the sim's `build_src_filter` exclusions).
 
 **Plugins and events.** `PluginManager` holds `Plugin`s (`setup()` + `loop()`) and a string-keyed event bus (`on(id, cb)` / `trigger(...)`, `Event` carries a small typed key/value list). Registration order is the sequence of `registerPlugin` calls in `Controller::setup()` (`src/display/core/Controller.cpp`). Existing plugins: `WebUIPlugin`, `ShotHistoryPlugin`, `BLEScalePlugin`, `MQTTPlugin` (Home Assistant), `HomekitPlugin`, `mDNSPlugin`, `BoilerFillPlugin`, `SmartGrindPlugin`, `LedControlPlugin`, `AutoWakeupPlugin`, `ImprovPlugin`, and two network watchdogs. New cross-cutting features belong here, not in `Controller`.
 

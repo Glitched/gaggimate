@@ -277,7 +277,7 @@ void Controller::setupBluetooth() {
         }
     });
     comms.onSystemInfo([this](const char *hardware, const char *version, uint32_t protocolVersion, bool dimming, bool pressure,
-                              bool ledControl, bool tof, vector<uint32_t> addons) {
+                              bool ledControl, bool tof, std::vector<uint32_t> addons) {
         onSystemInfo(hardware, version, protocolVersion, dimming, pressure, ledControl, tof, addons);
     });
     comms.onIncompatibleController([this](const String &info) { onIncompatibleController(info); });
@@ -404,7 +404,7 @@ void Controller::setupBluetooth() {
 }
 
 void Controller::onSystemInfo(const char *hardware, const char *version, uint32_t protocolVersion, bool dimming, bool pressure,
-                              bool ledControl, bool tof, vector<uint32_t> addons) {
+                              bool ledControl, bool tof, std::vector<uint32_t> addons) {
     const bool mismatch = protocolVersion != gm_proto::PROTOCOL_VERSION;
     systemInfo = SystemInfo{.hardware = String(hardware),
                             .version = String(version),
@@ -528,9 +528,9 @@ void Controller::setupWifi() {
             configTzTime(resolve_timezone(settings.getTimezone()), NTP_SERVER);
             setenv("TZ", resolve_timezone(settings.getTimezone()), 1);
             tzset();
-            sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
-            sntp_setservername(0, NTP_SERVER);
-            sntp_init();
+            esp_sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+            esp_sntp_setservername(0, NTP_SERVER);
+            esp_sntp_init();
         } else {
             WiFi.disconnect(true, true);
             ESP_LOGI(LOG_TAG, "Timed out while connecting to WiFi");

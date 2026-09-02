@@ -5,7 +5,7 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Update.h>
-#include <WiFiClientSecure.h>
+#include <NetworkClientSecure.h>
 
 // Release tags are "vX.Y.Z", but BUILD_GIT_VERSION is whatever `git describe` prints and a controller may report
 // either form; only drop a prefix that is actually there, or "1.2.3" turns into "2.3" and parses as 0.0.0.
@@ -33,7 +33,7 @@ GitHubOTA::GitHubOTA(const String &display_version, const String &controller_ver
     _progress_callback = progress_callback;
 
     Updater.rebootOnUpdate(false);
-    _wifi_client.setCACertBundle(x509_crt_imported_bundle_bin_start);
+    _wifi_client.setCACertBundle(x509_crt_bundle_start, x509_crt_bundle_end - x509_crt_bundle_start);
 
     Updater.onStart(update_started);
     Updater.onEnd(update_finished);
