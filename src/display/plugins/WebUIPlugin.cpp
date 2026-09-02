@@ -5,6 +5,7 @@
 #include <SD_MMC.h>
 #include <algorithm>
 #include <display/core/Controller.h>
+#include <display/core/HeapCheckpoints.h>
 #include <display/core/ProfileManager.h>
 #include <display/core/process/BrewProcess.h>
 #include <display/core/process/GrindProcess.h>
@@ -516,6 +517,7 @@ void WebUIPlugin::setupServer() {
     // for /h/index.bin.gz and an error-level log line.
     server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
+    server.on("/api/debug/heap", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHeapDebug(request); });
 #ifndef GAGGIMATE_SIM
     // Direct firmware upload. The body handler streams straight into the
     // inactive OTA partition; the request handler runs once the body is done.
@@ -1741,6 +1743,56 @@ void WebUIPlugin::sendAutotuneFailed() {
     JsonDocument doc(&psramAllocator);
     doc["tp"] = "evt:autotune-failed";
     broadcastJson(doc);
+}
+
+// GET /api/debug/heap: internal-heap attribution. `checkpoints` are the boot stages and brew events recorded by
+// heapCheckpoint(); `tasks` lists every FreeRTOS task with its stack headroom (bytes) and cumulative CPU share since
+// boot (needs CONFIG_FREERTOS_USE_TRACE_FACILITY + GENERATE_RUN_TIME_STATS, both on in the prebuilt config).
+void WebUIPlugin::handleHeapDebug(AsyncWebServerRequest *request) {
+    JsonDocument doc(&psramAllocator);
+    const uint32_t caps = MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL;
+    JsonObject now = doc["now"].to<JsonObject>();
+    now["free"] = static_cast<uint32_t>(heap_caps_get_free_size(caps));
+    now["largest"] = static_cast<uint32_t>(heap_caps_get_largest_free_block(caps));
+    now["minFree"] = static_cast<uint32_t>(heap_caps_get_minimum_free_size(caps));
+    now["total"] = static_cast<uint32_t>(heap_caps_get_total_size(caps));
+    now["psramFree"] = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    now["uptimeMs"] = static_cast<uint32_t>(millis());
+    JsonArray cps = doc["checkpoints"].to<JsonArray>();
+    size_t count = 0;
+    const HeapCheckpoint *table = heapCheckpoints(count);
+    for (size_t i = 0; i < count; i++) {
+        JsonObject o = cps.add<JsonObject>();
+        o["label"] = table[i].label;
+        o["t"] = table[i].atMs;
+        o["free"] = table[i].free;
+        o["largest"] = table[i].largest;
+        o["minFree"] = table[i].minFree;
+    }
+#ifndef GAGGIMATE_SIM
+    JsonArray tasks = doc["tasks"].to<JsonArray>();
+    const UBaseType_t n = uxTaskGetNumberOfTasks();
+    auto *status = static_cast<TaskStatus_t *>(heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (status != nullptr) {
+        uint32_t totalRunTime = 0;
+        const UBaseType_t got = uxTaskGetSystemState(status, n, &totalRunTime);
+        for (UBaseType_t i = 0; i < got; i++) {
+            JsonObject o = tasks.add<JsonObject>();
+            o["name"] = status[i].pcTaskName;
+            o["prio"] = status[i].uxCurrentPriority;
+            o["stackFree"] = status[i].usStackHighWaterMark;
+#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+            o["core"] = status[i].xCoreID;
+#endif
+            if (totalRunTime > 0)
+                o["cpuPct"] = static_cast<float>(status[i].ulRunTimeCounter) * 100.0f / static_cast<float>(totalRunTime);
+        }
+        heap_caps_free(status);
+    }
+#endif
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    serializeJson(doc, *response);
+    request->send(response);
 }
 
 void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {

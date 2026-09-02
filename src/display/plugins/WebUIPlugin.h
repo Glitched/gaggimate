@@ -77,6 +77,7 @@ class WebUIPlugin : public Plugin {
 
     // Core dump download
     void handleCoreDumpDownload(AsyncWebServerRequest *request);
+    void handleHeapDebug(AsyncWebServerRequest *request);
 
     // Direct firmware upload (POST /api/ota/upload). Writes the streamed image
     // into the inactive OTA slot; the running app is never touched, so an
