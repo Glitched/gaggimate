@@ -17,14 +17,33 @@ export class ApiError extends Error {
   }
 }
 
-async function call(method, path, body) {
+// A stalled request is aborted after this long so callers never hang on a dead
+// connection (matches prefetchSettings in ApiService). Pass `signal` in the
+// options to use your own — the caller's signal replaces the timeout.
+const DEFAULT_TIMEOUT_MS = 15000;
+
+async function call(method, path, body, { signal, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const init = { method, headers: {} };
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  const res = await fetch(path, init);
-  const text = await res.text();
+  init.signal =
+    signal ??
+    (typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined);
+  let res;
+  let text;
+  try {
+    res = await fetch(path, init);
+    text = await res.text();
+  } catch (e) {
+    // Surface a readable reason instead of a bare AbortError/TimeoutError name.
+    if (e?.name === 'TimeoutError' || (e?.name === 'AbortError' && !signal)) {
+      throw new ApiError('Request timed out', 0, null);
+    }
+    if (e?.name === 'AbortError') throw new ApiError('Request cancelled', 0, null);
+    throw e;
+  }
   let data = null;
   if (text) {
     try {
@@ -43,10 +62,10 @@ async function call(method, path, body) {
 const enc = encodeURIComponent;
 
 export const http = {
-  get: path => call('GET', path),
-  post: (path, body) => call('POST', path, body),
-  put: (path, body) => call('PUT', path, body),
-  del: path => call('DELETE', path),
+  get: (path, options) => call('GET', path, undefined, options),
+  post: (path, body, options) => call('POST', path, body, options),
+  put: (path, body, options) => call('PUT', path, body, options),
+  del: (path, options) => call('DELETE', path, undefined, options),
 };
 
 export const profilesApi = {

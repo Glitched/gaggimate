@@ -176,7 +176,7 @@ export function ProfileCard({
         setProfileData(profile);
         setProfileLoading(false);
       })
-      .catch(e => {
+      .catch(() => {
         if (cancelled) return;
         setProfileData(null);
         setProfileLoading(false);

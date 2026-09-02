@@ -88,7 +88,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     }
     exportData.volume = round2(exportData.volume);
     // duration left as integer ms
-    downloadJson(exportData, 'shot-' + loaded.id + '.json');
+    downloadJson(exportData, `shot-${loaded.id}.json`);
   }, [ensureLoaded, shotNotes]);
 
   // Compact text export (YAML frontmatter + CSV) sized for pasting into an LLM.
@@ -152,7 +152,7 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
     } catch (error) {
       // Last resort: hand it over as a file rather than losing the export.
       console.error('Clipboard write failed, falling back to download:', error);
-      downloadText(result.text, 'shot-' + result.id + '.md');
+      downloadText(result.text, `shot-${result.id}.md`);
     }
   }, [buildLlmText]);
 
@@ -172,18 +172,15 @@ export default function HistoryCard({ shot, onDelete, onLoad, onNotesChanged }) 
   let formattedDate = 'No timestamp available';
   if (date.getFullYear() > 1970) {
     const sameYear = date.getFullYear() === new Date().getFullYear();
-    formattedDate =
-      date.toLocaleDateString([], {
-        month: 'short',
-        day: 'numeric',
-        ...(sameYear ? {} : { year: 'numeric' }),
-      }) +
-      ', ' +
-      date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    formattedDate = `${date.toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+      ...(sameYear ? {} : { year: 'numeric' }),
+    })}, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
 
   const handleUpload = useCallback(
-    async (username, password, rememberCredentials) => {
+    async (username, password) => {
       setIsUploading(true);
       try {
         // Validate shot data

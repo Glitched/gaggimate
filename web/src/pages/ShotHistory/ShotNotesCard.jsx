@@ -1,14 +1,12 @@
-import { useState, useEffect, useContext, useCallback } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { ApiServiceContext } from '../../services/ApiService.js';
 import { Spinner } from '../../components/Spinner.jsx';
 import { faEdit } from '@fortawesome/free-solid-svg-icons/faEdit';
 import { faSave } from '@fortawesome/free-solid-svg-icons/faSave';
 import { historyApi } from '../../services/api.js';
+import { calculateRatio } from '../../utils/shotNotes.js';
 
 export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
-  const apiService = useContext(ApiServiceContext);
-
   const [notes, setNotes] = useState({
     id: shot.id,
     rating: 0,
@@ -24,14 +22,6 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
-
-  // Calculate ratio function
-  const calculateRatio = useCallback((doseIn, doseOut) => {
-    if (doseIn && doseOut && parseFloat(doseIn) > 0 && parseFloat(doseOut) > 0) {
-      return (parseFloat(doseOut) / parseFloat(doseIn)).toFixed(2);
-    }
-    return '';
-  }, []);
 
   // Load notes whenever the shot changes; ignore results that land after
   // unmount or after the shot switched again.
@@ -161,7 +151,7 @@ export default function ShotNotesCard({ shot, onNotesUpdate, onNotesLoaded }) {
     return (
       <div className='mt-6 border-t pt-6'>
         <div className='flex items-center justify-center py-8'>
-          <span className='loading loading-spinner loading-md'></span>
+          <span className='loading loading-spinner loading-md' />
         </div>
       </div>
     );

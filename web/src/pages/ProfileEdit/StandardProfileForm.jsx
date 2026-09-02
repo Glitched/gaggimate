@@ -16,6 +16,12 @@ import { getProfilePhases, movePhase, removePhaseAt, updatePhaseAt } from './pro
 export function StandardProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
+  // The device rejects a nameless or empty profile (422), so don't offer Save for one.
+  const saveBlockedReason = !data.label?.trim()
+    ? 'Give the profile a name before saving'
+    : phases.length === 0
+      ? 'Add at least one phase before saving'
+      : null;
 
   const onFieldChange = (field, value) => {
     onChange({
@@ -66,6 +72,7 @@ export function StandardProfileForm(props) {
     <form
       onSubmit={e => {
         e.preventDefault();
+        if (saveBlockedReason) return;
         onSave(data);
       }}
     >
@@ -95,6 +102,7 @@ export function StandardProfileForm(props) {
                   index={index}
                   onChange={phase => onPhaseChange(index, phase)}
                   onRemove={() => onPhaseRemove(index)}
+                  canRemove={phases.length > 1}
                   onMoveUp={() => onPhaseMove(index, -1)}
                   onMoveDown={() => onPhaseMove(index, 1)}
                   isFirst={index === 0}
@@ -129,7 +137,8 @@ export function StandardProfileForm(props) {
           <button
             type='submit'
             className='btn btn-primary gap-2'
-            disabled={saving}
+            disabled={saving || !!saveBlockedReason}
+            title={saveBlockedReason ?? undefined}
             aria-label={saving ? 'Saving profile...' : 'Save profile'}
           >
             <span>Save</span>
@@ -146,6 +155,7 @@ function Phase({
   index,
   onChange,
   onRemove,
+  canRemove,
   onMoveUp,
   onMoveDown,
   isFirst,
@@ -267,6 +277,7 @@ function Phase({
               <button
                 type='button'
                 onClick={onRemove}
+                disabled={!canRemove}
                 className='btn btn-sm btn-ghost text-error'
                 aria-label={`Delete phase ${index + 1}`}
               >

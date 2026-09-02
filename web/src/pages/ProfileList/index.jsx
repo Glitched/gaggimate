@@ -16,7 +16,6 @@ import {
   PointElement,
   TimeScale,
 } from 'chart.js';
-import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 import { ExtendedProfileChart } from '../../components/ExtendedProfileChart.jsx';
 import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 import { ApiServiceContext, machine } from '../../services/ApiService.js';

@@ -8,7 +8,6 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import 'chartjs-adapter-dayjs-4/dist/chartjs-adapter-dayjs-4.esm';
 import { OverviewChart } from '../../components/OverviewChart.jsx';
 import Card from '../../components/Card.jsx';
 import { DashboardSidebar } from './DashboardSidebar.jsx';

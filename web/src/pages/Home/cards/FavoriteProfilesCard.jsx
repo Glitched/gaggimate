@@ -1,6 +1,6 @@
-import { useContext, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { computed, useSignalEffect } from '@preact/signals';
-import { ApiServiceContext, machine } from '../../../services/ApiService.js';
+import { machine } from '../../../services/ApiService.js';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTemperatureFull } from '@fortawesome/free-solid-svg-icons/faTemperatureFull';
 import { faClock } from '@fortawesome/free-solid-svg-icons/faClock';
@@ -59,7 +59,6 @@ ProfileMiniCard.propTypes = {
 };
 
 export function FavoriteProfilesCard({ selectedProfileId, inCard = false, compact = false }) {
-  const apiService = useContext(ApiServiceContext);
   const [favorites, setFavorites] = useState(null);
   const [loading, setLoading] = useState(false);
 

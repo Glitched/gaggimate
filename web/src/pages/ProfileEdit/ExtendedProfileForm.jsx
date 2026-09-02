@@ -17,6 +17,12 @@ import { useConfirmAction } from '../../hooks/useConfirmAction.js';
 export function ExtendedProfileForm(props) {
   const { data, onChange, onSave, saving = true, pressureAvailable = false } = props;
   const phases = getProfilePhases(data);
+  // The device rejects a nameless or empty profile (422), so don't offer Save for one.
+  const saveBlockedReason = !data.label?.trim()
+    ? 'Give the profile a name before saving'
+    : phases.length === 0
+      ? 'Add at least one phase before saving'
+      : null;
 
   // Shared by the header's icon buttons so they cannot drift apart again.
   const iconButton =
@@ -93,6 +99,7 @@ export function ExtendedProfileForm(props) {
     <form
       onSubmit={e => {
         e.preventDefault();
+        if (saveBlockedReason) return;
         onSave(data);
       }}
     >
@@ -188,7 +195,7 @@ export function ExtendedProfileForm(props) {
                 }`}
                 aria-label={removeArmed ? 'Click again to remove phase' : 'Remove phase'}
                 title={removeArmed ? 'Click again to confirm' : 'Remove phase'}
-                disabled={phases.length === 0}
+                disabled={phases.length <= 1}
                 onClick={() => confirmOrRemove(() => onPhaseRemove(currentPhaseIndex))}
               >
                 <FontAwesomeIcon icon={faTrashCan} />
@@ -201,7 +208,6 @@ export function ExtendedProfileForm(props) {
                 phase={currentPhase}
                 index={currentPhaseIndex}
                 onChange={phase => onPhaseChange(currentPhaseIndex, phase)}
-                onRemove={() => onPhaseRemove(currentPhaseIndex)}
                 pressureAvailable={pressureAvailable}
               />
             ) : (
@@ -226,7 +232,8 @@ export function ExtendedProfileForm(props) {
           <button
             type='submit'
             className='btn btn-primary gap-2'
-            disabled={saving}
+            disabled={saving || !!saveBlockedReason}
+            title={saveBlockedReason ?? undefined}
             aria-label={saving ? 'Saving profile...' : 'Save profile'}
           >
             <span>Save</span>

@@ -1,6 +1,6 @@
 import { ExtendedPhaseTarget, TargetTypes } from './ExtendedPhaseTarget.jsx';
 import { isNumber } from 'chart.js/helpers';
-import { useCallback } from 'preact/hooks';
+import { Fragment } from 'preact';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons/faPlus';
 import { Tooltip } from '../../components/Tooltip.jsx';
@@ -8,7 +8,7 @@ import { SegmentedControl } from '../../components/SegmentedControl.jsx';
 import { NumberField } from '../../components/NumberField.jsx';
 import { NumberInput } from '../../components/NumberInput.jsx';
 
-export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvailable }) {
+export function ExtendedPhase({ phase, index, onChange, pressureAvailable }) {
   const onFieldChange = (field, value) => {
     onChange({
       ...phase,
@@ -146,11 +146,13 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
           onCommit={value => onFieldChange('temperature', value)}
           ariaLabel='Target temperature, 0 for the profile default'
         />
+        {/* schema/profile.json: valve is an integer 0|1. Older files may carry a
+            boolean, which the truthiness read above still renders correctly. */}
         <SegmentedControl
           label='Valve'
           ariaLabel='Valve state selection'
           value={phase.valve ? 'open' : 'closed'}
-          onChange={next => onFieldChange('valve', next === 'open')}
+          onChange={next => onFieldChange('valve', next === 'open' ? 1 : 0)}
           options={[
             { value: 'closed', label: 'Closed' },
             { value: 'open', label: 'Open' },
@@ -352,7 +354,7 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
               <li key={`${t.type}-${t.operator}`}>
                 <span
                   role='button'
-                  onClick={e =>
+                  onClick={() =>
                     onTargetAdd({
                       type: t.type,
                       operator: t.operator,
@@ -373,20 +375,15 @@ export function ExtendedPhase({ phase, index, onChange, onRemove, pressureAvaila
         </div>
       </div>
       {targets.map((target, idx) => (
-        <>
-          {idx !== 0 && (
-            <div key={`sep-${idx}`} className='divider'>
-              OR
-            </div>
-          )}
+        <Fragment key={`target-${idx}`}>
+          {idx !== 0 && <div className='divider'>OR</div>}
           <ExtendedPhaseTarget
             onChange={value => onTargetChange(idx, value)}
             onRemove={() => onTargetRemove(idx)}
-            key={`target-${idx}`}
             target={target}
             index={idx}
           />
-        </>
+        </Fragment>
       ))}
     </div>
   );

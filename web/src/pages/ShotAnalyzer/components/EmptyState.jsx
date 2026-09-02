@@ -64,7 +64,7 @@ export function EmptyState({ loading }) {
           </div>
 
           {/* Divider - Subtle */}
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
           {/* VIEW Section */}
           <div className='flex items-start gap-4'>
@@ -84,7 +84,7 @@ export function EmptyState({ loading }) {
           </div>
 
           {/* Divider - Subtle */}
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
           {/* WEB Section */}
           <div className='flex items-start gap-4'>
@@ -120,7 +120,7 @@ export function EmptyState({ loading }) {
             <span className='mt-1 block'>Bulk upload and download are supported.</span>
           </div>
 
-          <div className='bg-base-content/5 h-px w-full'></div>
+          <div className='bg-base-content/5 h-px w-full' />
 
           <div className='text-base-content/70 grid gap-2 text-sm leading-relaxed sm:grid-cols-3'>
             <div className='text-base-content'>

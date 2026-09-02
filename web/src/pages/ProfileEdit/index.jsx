@@ -19,7 +19,7 @@ import { Spinner } from '../../components/Spinner.jsx';
 import { ExtendedProfileForm } from './ExtendedProfileForm.jsx';
 import { showToast } from '../../services/toast.js';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard.js';
-import { profilesApi } from '../../services/api.js';
+import { ApiError, profilesApi } from '../../services/api.js';
 
 Chart.register(
   LineController,
@@ -129,9 +129,15 @@ export function ProfileEdit() {
       } catch (error) {
         // Leave the form intact so the user's edits survive a failed save.
         console.error('Failed to save profile:', error);
-        showToast('Saving the profile failed — check the machine connection and try again.', {
-          type: 'error',
-        });
+        // A 4xx carries the device's reason (422 on validation); anything else
+        // is a connectivity problem the reason wouldn't help with.
+        const reason = error instanceof ApiError && error.status < 500 ? error.message : null;
+        showToast(
+          reason
+            ? `Saving the profile failed: ${reason}`
+            : 'Saving the profile failed — check the machine connection and try again.',
+          { type: 'error' },
+        );
       } finally {
         setSaving(false);
       }

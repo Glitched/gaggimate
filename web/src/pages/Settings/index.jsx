@@ -317,17 +317,6 @@ export function Settings() {
   const onChange = key => {
     return e => {
       const inputValue = e.currentTarget.value;
-      const toggleKeys = [
-        'homekit',
-        'boilerFillActive',
-        'smartGrindActive',
-        'smartGrindToggle',
-        'homeAssistant',
-        'momentaryButtons',
-        'delayAdjust',
-        'clock24hFormat',
-        'autowakeupEnabled',
-      ];
       if (key === 'standbyDisplayEnabled') {
         setFormData(prev => {
           const value = !prev.standbyDisplayEnabled;
@@ -349,7 +338,7 @@ export function Settings() {
       // toggle plus a dependent field) must not clobber each other.
       setFormData(prev => ({
         ...prev,
-        [key]: toggleKeys.includes(key) ? !prev[key] : inputValue,
+        [key]: SETTINGS_BOOLEAN_KEYS.includes(key) ? !prev[key] : inputValue,
       }));
     };
   };
