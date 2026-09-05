@@ -218,6 +218,19 @@ afterwards).** Read these before flashing it again:
   `txFramesWindow`/`retransmitsWindow`, and the `render:` serial line carries the same. Next
   time it degrades, run `watch_shot.sh`-style polling for hours and read those. Ryan power
   cycles the display himself; do not restart it remotely.
+- **The Wi-Fi trouble of 2026-09-04 was the air, measured.** A USB A/B the same evening
+  (old Arduino 2 image, new stack, old again; three bundle downloads, ten pings, a 512 KB
+  upload, a 30 s socket per round) put the old image at 4-25 KB/s and 105-236 ms pings and the
+  new one at 7-83 KB/s and 99-329 ms: same air, same numbers, and the old image took over
+  three minutes to join once. Three OTA uploads stalled at the 30 s abort that evening; the
+  cable (`usb_flash.sh`-style: erase `otadata`, write app0) is the path when the air is like
+  that. BLE retransmits at the Endpoint layer ran ~35 % on the new stack with the Wi-Fi radio
+  awake and asleep alike (75 frames each way), ~25-30 % on the old image from smaller samples;
+  keep an eye on `link.retransmitsWindow`, and treat give-ups, not retransmits, as the alarm.
+  `WiFi.setSleep(false)` stays (mains power; ping floor 8-12 ms instead of 30-60 ms, no BLE
+  cost measured). The Mac and the display sit on different UniFi VLANs, so `gaggimate.local`
+  needs the mDNS reflector (3-35 s lookups here) and every request crosses the gateway; use
+  the IP when measuring, and test from the display's own SSID before blaming the device.
 - **`panelLateVsyncs` cannot see tearing; `panelUnderruns` can.** The LCD peripheral generates
   the panel timing on its own, so VSYNC keeps arriving at 23.5 Hz while the DMA starves; a
   late VSYNC only means the interrupt was held off. With `CONFIG_LCD_RGB_RESTART_IN_VSYNC`

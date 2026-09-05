@@ -486,6 +486,11 @@ void Controller::setupWifi() {
         WiFi.setHostname(settings.getMdnsName().c_str());
         WiFi.mode(WIFI_STA);
         WiFi.setAutoReconnect(true);
+        // The display is mains powered. With modem sleep (the core's default) the radio wakes only for beacons, which
+        // put a 50-600 ms floor under every round trip, made every retry slower, and on 2026-09-04 let a single
+        // browser saturate the link (status frames skipped, page loads of many seconds). Keeping the radio awake
+        // trades ~50 mA for LAN-normal latency.
+        WiFi.setSleep(false);
         WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
 
         WiFi.onEvent(
