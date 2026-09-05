@@ -534,6 +534,14 @@ Core dumps: download from the device web UI (System & Updates → Download Core 
 
 Serial monitor has `esp32_exception_decoder` enabled by default at 115200.
 
+### Bench scripts
+
+`scripts/bench/` holds the measurement tools from the 2026-09 heap and panel work (Wi-Fi
+probes, shot and health pollers, the flash-write panel test, socket and link watchers, OTA and
+USB flashing, an interleaved A/B). Its README states the discipline: same probes before and
+after, interleaved when the air varies, judged by the counters. Use them before trusting a
+feeling about the device.
+
 ### Internal RAM
 
 Three views, cheapest first:
