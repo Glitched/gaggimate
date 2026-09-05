@@ -19,6 +19,7 @@
 constexpr size_t UPDATE_CHECK_INTERVAL = 30 * 60 * 1000;
 constexpr size_t CLEANUP_PERIOD = 1000;
 constexpr size_t STATUS_PERIOD = 500;
+constexpr size_t WS_DROP_QUEUE_LEN = 2; // a droppable frame is skipped for a client with this many still queued
 constexpr size_t DNS_PERIOD = 50;
 // How long a firmware upload may go without a chunk before the Updater is
 // reclaimed. Comfortably longer than any real network hiccup, short enough that
@@ -73,7 +74,9 @@ class WebUIPlugin : public Plugin {
     void sendAutotuneResult();
     void sendAutotuneFailed();
 
-    void broadcastJson(JsonDocument &doc);
+    // `droppable`: the frame supersedes the previous one (status), so a client that has not drained its queue
+    // is skipped rather than queued deeper.
+    void broadcastJson(JsonDocument &doc, bool droppable = false);
 
     // Core dump download
     void handleCoreDumpDownload(AsyncWebServerRequest *request);
@@ -115,8 +118,31 @@ class WebUIPlugin : public Plugin {
 
     long lastUpdateCheck = 0;
     long lastStatus = 0;
-    unsigned long lastPanelStats = 0; // 10 s render-pipeline snapshot (serial line + /api/ota)
+    unsigned long lastPanelStats = 0; // 10 s telemetry window: render pipeline, tasks, sockets, link (serial + /api/ota)
     PanelStats::Snapshot panelSnapshot{};
+    // Window counters: *Window is the last completed 10 s window, the bare name accumulates the current one.
+    uint32_t wsSkippedFrames = 0, wsSkippedWindow = 0;   // droppable frames not queued for a client that is behind
+    uint32_t wsDisconnects = 0, wsDisconnectsWindow = 0; // socket closes, whatever the reason
+    uint32_t linkTxLast = 0, linkRetxLast = 0, linkTxWindow = 0, linkRetxWindow = 0; // controller link per window
+#ifndef GAGGIMATE_SIM
+    // Task CPU shares over the window. FreeRTOS's run-time counter is 32-bit microseconds and wraps every 71 min,
+    // so shares since boot are meaningless on a device that has been up for days; deltas between two samples are
+    // wrap-safe. Two samples, newest first, in PSRAM.
+    struct TaskSample {
+        void *handle;
+        uint32_t runTime;
+        uint32_t stackFree;
+        uint8_t prio;
+        int8_t core;
+        char name[16];
+    };
+    static constexpr size_t TASK_SAMPLE_CAPACITY = 40;
+    TaskSample *taskSamples[2] = {nullptr, nullptr};
+    size_t taskSampleCount[2] = {0, 0};
+    uint32_t taskSampleTotal[2] = {0, 0};
+    uint32_t taskSampleMs[2] = {0, 0};
+    void sampleTasks();
+#endif
     long lastCleanup = 0;
     long lastDns = 0;
     bool updating = false;

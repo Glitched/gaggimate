@@ -199,6 +199,25 @@ afterwards).** Read these before flashing it again:
   Improv advertising next to a scan and two connections. The Wi-Fi "cache TX" queue is not an
   internal-RAM lever either: it holds pointers to PSRAM packets waiting for one of the 8
   internal staging buffers, and 8 is already Arduino's floor.
+- **After two days up, the web UI showed "Machine disconnected — reconnecting…" and nothing
+  loaded (2026-09-04, 51 h uptime, PR #10 build).** The device was still running: HTTP answered
+  in 0.5-1.6 s instead of ~90 ms, and the WebSocket library closed any client whose outbound
+  queue reached 8 frames (`setCloseClientOnQueueFull(true)`, kept on purpose so a stalled
+  client cannot pin internal RAM), which a fast client hit every 7-10 s because the display
+  could not push two status frames a second. The browser reconnects on close, a fourth client
+  evicts the oldest, and the tabs chase each other. With every tab closed a single client
+  stayed up for 40 s and HTTP fell to 0.2 s, so the loop was the amplifier, not the cause.
+  Underneath: 47 -> 39 KB free, largest block 32 -> 16 KB, heap floor 3.8 KB during shots
+  (20 KB two days earlier), BLE link 15 % retransmits. The cause of the slow transmit path
+  is unknown; the CPU table in `GET /api/debug/heap` could not say because FreeRTOS's run-time
+  counter is 32-bit microseconds and wraps after 71 min, so shares since boot are noise on a
+  device that is days old. Fixed the same day: status frames are skipped for a client that
+  still has 2 queued (`WS_DROP_QUEUE_LEN`) instead of queued until the library closes it;
+  `cpuPct` is now the share over the last 10 s window (two samples, wrap-safe); `GET /api/ota`
+  carries `wsClients`, `wsSkippedFrames`, `wsDisconnects`, `wifiRssi` and per-window link
+  `txFramesWindow`/`retransmitsWindow`, and the `render:` serial line carries the same. Next
+  time it degrades, run `watch_shot.sh`-style polling for hours and read those. Ryan power
+  cycles the display himself; do not restart it remotely.
 - **`panelLateVsyncs` cannot see tearing; `panelUnderruns` can.** The LCD peripheral generates
   the panel timing on its own, so VSYNC keeps arriving at 23.5 Hz while the DMA starves; a
   late VSYNC only means the interrupt was held off. With `CONFIG_LCD_RGB_RESTART_IN_VSYNC`

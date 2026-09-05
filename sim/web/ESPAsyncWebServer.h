@@ -134,11 +134,15 @@ using ArBodyHandlerFunction = std::function<void(AsyncWebServerRequest *, uint8_
 // Matches the real library's queued-message payload type.
 using AsyncWebSocketSharedBuffer = std::shared_ptr<std::vector<uint8_t>>;
 
+enum AwsClientStatus { WS_DISCONNECTED, WS_CONNECTED, WS_DISCONNECTING };
+
 class AsyncWebSocketClient {
   public:
     AsyncWebSocketClient(uint32_t id, int fd) : _id(id), _fd(fd) {}
     uint32_t id() const { return _id; }
     int fd() const { return _fd; }
+    AwsClientStatus status() const { return WS_CONNECTED; }
+    size_t queueLen() const { return 0; } // the shim writes synchronously, nothing ever queues
     void setCloseClientOnQueueFull(bool) {}
     void text(AsyncWebSocketSharedBuffer buffer);
     void text(const String &message);
@@ -161,6 +165,7 @@ class AsyncWebSocket {
     void textAll(AsyncWebSocketSharedBuffer buffer);
     void cleanupClients() {}
     void closeAll();
+    size_t count() const { return _clients.size(); }
     const std::vector<AsyncWebSocketClient *> &getClients() const { return _clients; }
 
     // Used by the server implementation.

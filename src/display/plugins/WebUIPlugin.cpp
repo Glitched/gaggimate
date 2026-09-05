@@ -195,15 +195,32 @@ void WebUIPlugin::loop() {
         // Render-pipeline health: UI frames vs flushes vs panel refreshes, plus the heap floor. One line per 10 s.
         panelSnapshot = panelStats().snapshot(lastPanelStats == 0 ? 0 : now - lastPanelStats);
         lastPanelStats = now;
+        wsSkippedWindow = wsSkippedFrames;
+        wsSkippedFrames = 0;
+        wsDisconnectsWindow = wsDisconnects;
+        wsDisconnects = 0;
+        if (const GaggiMateClient *client = controller->getClientController()) {
+            const auto s = client->getLinkStats();
+            linkTxWindow = s.txFrames - linkTxLast;
+            linkRetxWindow = s.retransmits - linkRetxLast;
+            linkTxLast = s.txFrames;
+            linkRetxLast = s.retransmits;
+        }
+#ifndef GAGGIMATE_SIM
+        sampleTasks();
+#endif
         ESP_LOGI("WebUIPlugin",
                  "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz (%lu late, %lu underruns); "
-                 "heap free %u min %u largest %u",
+                 "heap free %u min %u largest %u; ws %u clients %lu skipped %lu closed; link tx %lu retx %lu; rssi %d",
                  panelSnapshot.uiFps, panelSnapshot.flushHz, static_cast<unsigned long>(panelSnapshot.flushAvgUs),
                  static_cast<unsigned long>(panelSnapshot.flushMaxUs), panelSnapshot.vsyncHz,
                  static_cast<unsigned long>(panelSnapshot.vsyncsLate), static_cast<unsigned long>(panelSnapshot.underruns),
                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
                  static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
-                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)));
+                 static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL)),
+                 static_cast<unsigned>(ws.count()), static_cast<unsigned long>(wsSkippedWindow),
+                 static_cast<unsigned long>(wsDisconnectsWindow), static_cast<unsigned long>(linkTxWindow),
+                 static_cast<unsigned long>(linkRetxWindow), apMode ? 0 : static_cast<int>(WiFi.RSSI()));
     }
     // An upload that dies mid-stream -- client sleeps, Wi-Fi drops, browser tab
     // closes -- never reaches handleFirmwareUploadResult, so nothing clears
@@ -337,7 +354,7 @@ void WebUIPlugin::loop() {
         }
         processGuard.unlock();
 
-        broadcastJson(statusDoc);
+        broadcastJson(statusDoc, true);
     }
     if (now > lastCleanup + CLEANUP_PERIOD) {
         lastCleanup = now;
@@ -581,6 +598,7 @@ void WebUIPlugin::setupServer() {
                 ESP_LOGI("WebUIPlugin", "WebSocket client connected (%u open connections)",
                          static_cast<unsigned>(server->getClients().size()));
             } else if (type == WS_EVT_DISCONNECT) {
+                wsDisconnects++;
                 ESP_LOGI("WebUIPlugin", "WebSocket client disconnected (%u open connections)",
                          static_cast<unsigned>(server->getClients().size()));
             }
@@ -1526,6 +1544,10 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
         doc["panelVsyncHz"] = panelSnapshot.vsyncHz;
         doc["panelLateVsyncs"] = panelSnapshot.vsyncsLate;
         doc["panelUnderruns"] = panelSnapshot.underruns;
+        doc["wsClients"] = static_cast<uint32_t>(ws.count());
+        doc["wsSkippedFrames"] = wsSkippedWindow;
+        doc["wsDisconnects"] = wsDisconnectsWindow;
+        doc["wifiRssi"] = apMode ? 0 : static_cast<int>(WiFi.RSSI());
     }
     doc["controllerTaskHealth"] = controller->isTaskHealthy();
 #ifndef GAGGIMATE_HEADLESS
@@ -1541,6 +1563,8 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
         link["connected"] = client->isConnected();
         link["rttMs"] = client->hasLatency() ? static_cast<int>(client->getLatencyMs()) : -1;
         link["rttMaxMs"] = s.rttMaxMs;
+        link["txFramesWindow"] = linkTxWindow;
+        link["retransmitsWindow"] = linkRetxWindow;
         link["txFrames"] = s.txFrames;
         link["rxFrames"] = s.rxFrames;
         link["retransmits"] = s.retransmits;
@@ -1732,11 +1756,33 @@ void WebUIPlugin::updateOTAProgress(uint8_t phase, int progress) {
     broadcastJson(doc);
 }
 
-void WebUIPlugin::broadcastJson(JsonDocument &doc) {
+// The library keeps clients by value (std::list<AsyncWebSocketClient>); the simulator's shim keeps pointers.
+static AsyncWebSocketClient &wsClientRef(AsyncWebSocketClient &client) { return client; }
+static AsyncWebSocketClient &wsClientRef(AsyncWebSocketClient *client) { return *client; }
+
+void WebUIPlugin::broadcastJson(JsonDocument &doc, bool droppable) {
     if (ws.getClients().empty()) {
         return;
     }
-    ws.textAll(toWsBuffer(doc));
+    if (!droppable) {
+        ws.textAll(toWsBuffer(doc));
+        return;
+    }
+    // A client with frames still queued is seconds behind. Queueing more spends internal RAM on frames it will
+    // never show, and at WS_MAX_QUEUED_MESSAGES the library closes it; the browser reconnects, evicts another tab,
+    // and the display spends its Wi-Fi budget on churn (2026-09-04, after 51 h up). Status frames supersede each
+    // other, so the client simply gets the next one it can take.
+    const AsyncWebSocketSharedBuffer buffer = toWsBuffer(doc);
+    for (auto &entry : ws.getClients()) {
+        AsyncWebSocketClient &client = wsClientRef(entry);
+        if (client.status() != WS_CONNECTED)
+            continue;
+        if (client.queueLen() >= WS_DROP_QUEUE_LEN) {
+            wsSkippedFrames++;
+            continue;
+        }
+        client.text(buffer);
+    }
 }
 
 void WebUIPlugin::sendAutotuneResult() {
@@ -1779,30 +1825,77 @@ void WebUIPlugin::handleHeapDebug(AsyncWebServerRequest *request) {
         o["minFree"] = table[i].minFree;
     }
 #ifndef GAGGIMATE_SIM
+    // Tasks from the last 10 s telemetry sample; cpuPct is the share of one core's time between the last two samples
+    // (both cores' tasks are listed, so the two idle tasks can read up to 100 % each), absent until two samples exist.
+    if (taskSamples[0] == nullptr || taskSampleCount[0] == 0)
+        sampleTasks();
     JsonArray tasks = doc["tasks"].to<JsonArray>();
-    const UBaseType_t n = uxTaskGetNumberOfTasks();
-    auto *status = static_cast<TaskStatus_t *>(heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (status != nullptr) {
-        uint32_t totalRunTime = 0;
-        const UBaseType_t got = uxTaskGetSystemState(status, n, &totalRunTime);
-        for (UBaseType_t i = 0; i < got; i++) {
-            JsonObject o = tasks.add<JsonObject>();
-            o["name"] = status[i].pcTaskName;
-            o["prio"] = status[i].uxCurrentPriority;
-            o["stackFree"] = status[i].usStackHighWaterMark;
-#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
-            o["core"] = status[i].xCoreID;
-#endif
-            if (totalRunTime > 0)
-                o["cpuPct"] = static_cast<float>(status[i].ulRunTimeCounter) * 100.0f / static_cast<float>(totalRunTime);
+    const uint32_t totalDelta = taskSampleTotal[0] - taskSampleTotal[1];
+    const bool haveWindow = taskSampleCount[1] > 0 && totalDelta > 0;
+    doc["cpuWindowMs"] = haveWindow ? taskSampleMs[0] - taskSampleMs[1] : 0;
+    for (size_t i = 0; i < taskSampleCount[0]; i++) {
+        const TaskSample &t = taskSamples[0][i];
+        JsonObject o = tasks.add<JsonObject>();
+        o["name"] = t.name;
+        o["prio"] = t.prio;
+        o["stackFree"] = t.stackFree;
+        o["core"] = t.core;
+        if (!haveWindow)
+            continue;
+        for (size_t j = 0; j < taskSampleCount[1]; j++) {
+            if (taskSamples[1][j].handle == t.handle) {
+                o["cpuPct"] = static_cast<float>(t.runTime - taskSamples[1][j].runTime) * 100.0f / static_cast<float>(totalDelta);
+                break;
+            }
         }
-        heap_caps_free(status);
     }
 #endif
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     serializeJson(doc, *response);
     request->send(response);
 }
+
+#ifndef GAGGIMATE_SIM
+void WebUIPlugin::sampleTasks() {
+    if (taskSamples[0] == nullptr) {
+        for (auto &sample : taskSamples)
+            sample = static_cast<TaskSample *>(
+                heap_caps_calloc(TASK_SAMPLE_CAPACITY, sizeof(TaskSample), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (taskSamples[0] == nullptr || taskSamples[1] == nullptr)
+            return;
+    }
+    std::swap(taskSamples[0], taskSamples[1]);
+    std::swap(taskSampleCount[0], taskSampleCount[1]);
+    std::swap(taskSampleTotal[0], taskSampleTotal[1]);
+    std::swap(taskSampleMs[0], taskSampleMs[1]);
+    const UBaseType_t n = uxTaskGetNumberOfTasks();
+    auto *status = static_cast<TaskStatus_t *>(heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (status == nullptr) {
+        taskSampleCount[0] = 0;
+        return;
+    }
+    uint32_t total = 0;
+    const UBaseType_t got = uxTaskGetSystemState(status, n, &total);
+    size_t k = 0;
+    for (UBaseType_t i = 0; i < got && k < TASK_SAMPLE_CAPACITY; i++, k++) {
+        TaskSample &t = taskSamples[0][k];
+        t.handle = status[i].xHandle;
+        t.runTime = status[i].ulRunTimeCounter;
+        t.stackFree = status[i].usStackHighWaterMark;
+        t.prio = static_cast<uint8_t>(status[i].uxCurrentPriority);
+#if CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID
+        t.core = (status[i].xCoreID == 0 || status[i].xCoreID == 1) ? static_cast<int8_t>(status[i].xCoreID) : -1;
+#else
+        t.core = -1;
+#endif
+        strlcpy(t.name, status[i].pcTaskName, sizeof t.name);
+    }
+    taskSampleCount[0] = k;
+    taskSampleTotal[0] = total;
+    taskSampleMs[0] = millis();
+    heap_caps_free(status);
+}
+#endif
 
 void WebUIPlugin::handleCoreDumpDownload(AsyncWebServerRequest *request) {
     // Check if core dump is available
