@@ -14,6 +14,7 @@
 #include <display/plugins/BLEScalePlugin.h>
 #include <display/plugins/ShotHistoryPlugin.h>
 #include <display/util/PsramStlAllocator.h>
+#include <display/util/StorageStats.h>
 #include <display/util/PsramWsBuffer.h>
 #include <display/util/mathutils.h>
 #include <display/webassets/web_ui_manifest.h>
@@ -207,7 +208,8 @@ void WebUIPlugin::loop() {
             linkRetxLast = s.retransmits;
         }
 #ifndef GAGGIMATE_SIM
-        sampleTasks();
+        if (static_cast<long>(taskSampleArmedUntil - now) > 0)
+            sampleTasks();
 #endif
         ESP_LOGI("WebUIPlugin",
                  "render: ui %.1f fps, flush %.1f/s avg %lu us max %lu us, vsync %.1f Hz (%lu late, %lu underruns); "
@@ -1510,10 +1512,11 @@ void WebUIPlugin::buildOTAStatus(JsonDocument &doc) const {
     doc["latestVersion"] = ota->getCurrentVersion();
     doc["channel"] = settings.getOTAChannel();
     doc["updating"] = updating;
-    // LittleFS usage metrics
+    // LittleFS usage metrics, cached: this route is polled, and a filesystem walk per call tears the panel once.
     {
-        size_t total = LittleFS.totalBytes();
-        size_t used = LittleFS.usedBytes();
+        const StorageStats::Figures fs = StorageStats::littlefs();
+        size_t total = fs.total;
+        size_t used = fs.used;
         size_t freeBytes = total > used ? (total - used) : 0;
         doc["spiffsTotal"] = static_cast<uint32_t>(total);
         doc["spiffsUsed"] = static_cast<uint32_t>(used);
@@ -1827,8 +1830,11 @@ void WebUIPlugin::handleHeapDebug(AsyncWebServerRequest *request) {
 #ifndef GAGGIMATE_SIM
     // Tasks from the last 10 s telemetry sample; cpuPct is the share of one core's time between the last two samples
     // (both cores' tasks are listed, so the two idle tasks can read up to 100 % each), absent until two samples exist.
-    if (taskSamples[0] == nullptr || taskSampleCount[0] == 0)
-        sampleTasks();
+    if (request->hasParam("cpu")) {
+        taskSampleArmedUntil = millis() + 60000;
+        if (taskSamples[0] == nullptr || taskSampleCount[0] == 0)
+            sampleTasks();
+    }
     JsonArray tasks = doc["tasks"].to<JsonArray>();
     const uint32_t totalDelta = taskSampleTotal[0] - taskSampleTotal[1];
     const bool haveWindow = taskSampleCount[1] > 0 && totalDelta > 0;

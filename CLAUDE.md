@@ -245,8 +245,16 @@ afterwards).** Read these before flashing it again:
   on the dark standby screen); hammering `/api/profiles` + `/api/status` for 15 s took a
   window to 10. Judge a config or driver experiment against those numbers, not against the
   panel by eye; the FreeRTOS-in-flash build that visibly jittered was never measured with it.
-  `GET /api/ota` itself walks LittleFS (`usedBytes()`) with the cache off on every call, so
-  poll it sparingly while measuring.
+  `GET /api/ota` used to walk LittleFS (`usedBytes()`) on every call; with code in PSRAM that
+  no longer switches the cache off, but the burst of flash reads still holds the SPI bus past
+  the bounce slack, and the poller measured exactly one underrun per poll through a whole shot
+  (2026-09-04). The figures are cached for 60 s now (`display/util/StorageStats`), also for the
+  end-of-shot free-space check; nothing that is polled may walk the filesystem. The other
+  once-per-window tear was the task sampler behind `cpuPct`: `uxTaskGetSystemState()` holds
+  the kernel lock with interrupts off for longer than the 0.34 ms bounce slack, one shifted
+  frame per sample, measured in silent windows with nothing polling. It now runs only for
+  60 s after `GET /api/debug/heap?cpu=1`; anything that blocks interrupts on the LCD's core
+  for more than the slack will show up the same way.
 - NimBLE 2 logs `W NimBLEClient: unknown handle: 14` a few times while connecting to the
   controller, then connects and exchanges system info normally. Not yet investigated.
 - **The controller image from this branch has not run on hardware.** It builds against the

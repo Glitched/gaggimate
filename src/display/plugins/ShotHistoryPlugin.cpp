@@ -1,4 +1,5 @@
 #include "ShotHistoryPlugin.h"
+#include <display/util/StorageStats.h>
 
 #include <LittleFS.h>
 #include <SD_MMC.h>
@@ -514,12 +515,14 @@ size_t ShotHistoryPlugin::getFreeSpace() {
         // Cap to size_t max for consistency
         return free > SIZE_MAX ? SIZE_MAX : static_cast<size_t>(free);
     }
-    size_t total = LittleFS.totalBytes();
-    size_t used = LittleFS.usedBytes();
-    return total > used ? (total - used) : 0;
+    // Cached (see StorageStats.h): stale by at most a minute, which the MIN_FREE_SPACE_BYTES margin absorbs, and
+    // the walk it replaces ran at the end of every shot, right where the panel was tearing.
+    const StorageStats::Figures fs = StorageStats::littlefs();
+    return fs.total > fs.used ? (fs.total - fs.used) : 0;
 }
 
 void ShotHistoryPlugin::deleteShot(const String &id) {
+    StorageStats::invalidate();
     const String paddedId = padId(id);
     fs->remove("/h/" + paddedId + ".slog");
     fs->remove("/h/" + paddedId + ".json");

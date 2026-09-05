@@ -289,7 +289,7 @@ paths:
                         prio: { type: integer }
                         core: { type: integer }
                         stackFree: { type: integer, description: Stack high-water mark, bytes never used. }
-                        cpuPct: { type: number, description: Share of one core's run time over the last 10 s telemetry window (both cores' tasks are listed, so the two idle tasks can each read up to 100). Absent until two samples exist, i.e. for the first 20 s after boot. }
+                        cpuPct: { type: number, description: Share of one core's run time between the last two task samples (both cores' tasks are listed, so the two idle tasks can each read up to 100). Sampling is armed for 60 s by the `cpu=1` query parameter and costs one shifted panel frame per 10 s while armed (the kernel lock it takes outlasts the bounce slack), so the field is absent on an unarmed request and on the first armed one. }
   /api/debug/heap/trace:
     get:
       summary: Live-allocation dump for scripts/heap_trace_report.py (display-heaptrace env only)
@@ -473,9 +473,9 @@ paths:
                   displayUpdateAvailable: { type: boolean }
                   controllerUpdateAvailable: { type: boolean }
                   updating: { type: boolean }
-                  spiffsTotal: { type: integer, description: LittleFS size (bytes). }
-                  spiffsUsed: { type: integer }
-                  spiffsFree: { type: integer, description: Free LittleFS bytes. }
+                  spiffsTotal: { type: integer, description: LittleFS size (bytes). Cached for up to 60 s; a filesystem walk per request stalled the panel's bounce refill once per poll. }
+                  spiffsUsed: { type: integer, description: Cached for up to 60 s; a filesystem walk per request stalled the panel's bounce refill once per poll. }
+                  spiffsFree: { type: integer, description: Free LittleFS bytes. Cached for up to 60 s; a filesystem walk per request stalled the panel's bounce refill once per poll. }
                   spiffsUsedPct: { type: integer }
                   heapFree: { type: integer, description: Free internal RAM (bytes). }
                   heapLargest: { type: integer, description: Largest free internal block (bytes). }
