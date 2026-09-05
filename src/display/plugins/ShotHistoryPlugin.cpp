@@ -111,8 +111,7 @@ void ShotHistoryPlugin::record() {
             if (!fs->exists("/h")) {
                 fs->mkdir("/h");
             }
-            currentFile = fs->open("/h/" + currentId + ".slog", FILE_WRITE);
-            if (currentFile) {
+            if (currentFile.open(("/h/" + currentId + ".slog").c_str(), O_WRONLY | O_CREAT | O_TRUNC)) {
                 isFileOpen = true;
                 // Prepare header
                 memset(&header, 0, sizeof(header));
@@ -133,7 +132,7 @@ void ShotHistoryPlugin::record() {
                 double delayMs = currentBrewDelay > 0.0 ? currentBrewDelay + 0.5 : 0.0;
                 header.brewDelayMs = delayMs > 65535.0 ? 65535 : static_cast<uint16_t>(delayMs);
                 // Write header placeholder
-                currentFile.write(reinterpret_cast<const uint8_t *>(&header), sizeof(header));
+                currentFile.write(&header, sizeof(header));
             }
         }
         // Bluetooth weight flow (vf): derive from the same non-negative weight we
@@ -248,8 +247,9 @@ void ShotHistoryPlugin::record() {
         header.finalExitReason = finalExitReason; // why the shot ended (last phase exit or manual abort)
         float finalWeight = currentBluetoothWeight;
         header.finalWeight = finalWeight > 0.0f ? encodeUnsigned(finalWeight, WEIGHT_SCALE, WEIGHT_MAX_VALUE) : 0;
-        currentFile.seek(0, SeekSet);
-        currentFile.write(reinterpret_cast<const uint8_t *>(&header), sizeof(header));
+        if (!currentFile.seek(0, SEEK_SET) || !currentFile.write(&header, sizeof(header))) {
+            ESP_LOGE("ShotHistoryPlugin", "Failed to write the final header of shot %s", currentId.c_str());
+        }
         currentFile.close();
         isFileOpen = false;
         unsigned long duration = header.durationMs;
@@ -587,7 +587,10 @@ void ShotHistoryPlugin::loopTask(void *arg) {
 
 void ShotHistoryPlugin::flushBuffer() {
     if (isFileOpen && ioBufferPos > 0) {
-        currentFile.write(ioBuffer, ioBufferPos);
+        if (!currentFile.write(ioBuffer, ioBufferPos)) {
+            ESP_LOGE("ShotHistoryPlugin", "Failed to write %u sample bytes of shot %s", static_cast<unsigned>(ioBufferPos),
+                     currentId.c_str());
+        }
         ioBufferPos = 0;
     }
 }
@@ -596,11 +599,10 @@ void ShotHistoryPlugin::flushBuffer() {
 bool ShotHistoryPlugin::ensureIndexExists() {
     if (fs->exists("/h/index.bin")) {
         // Validate existing index header
-        File indexFile = fs->open("/h/index.bin", "r");
-        if (indexFile) {
+        RawFile indexFile;
+        if (indexFile.open("/h/index.bin", O_RDONLY)) {
             ShotIndexHeader hdr{};
-            bool valid =
-                (indexFile.read(reinterpret_cast<uint8_t *>(&hdr), sizeof(hdr)) == sizeof(hdr) && hdr.magic == SHOT_INDEX_MAGIC);
+            bool valid = indexFile.read(&hdr, sizeof(hdr)) && hdr.magic == SHOT_INDEX_MAGIC;
             indexFile.close();
             if (valid) {
                 return true;
@@ -611,8 +613,8 @@ bool ShotHistoryPlugin::ensureIndexExists() {
     }
 
     // Create new empty index
-    File indexFile = fs->open("/h/index.bin", FILE_WRITE);
-    if (!indexFile) {
+    RawFile indexFile;
+    if (!indexFile.open("/h/index.bin", O_WRONLY | O_CREAT | O_TRUNC)) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to create index file");
         return false;
     }
@@ -624,7 +626,7 @@ bool ShotHistoryPlugin::ensureIndexExists() {
     header.entryCount = 0;
     header.nextId = controller->getSettings().getHistoryIndex();
 
-    indexFile.write(reinterpret_cast<const uint8_t *>(&header), sizeof(header));
+    indexFile.write(&header, sizeof(header));
     indexFile.close();
 
     ESP_LOGI("ShotHistoryPlugin", "Created new index file");
@@ -636,8 +638,8 @@ bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
         return false;
     }
 
-    File indexFile = fs->open("/h/index.bin", "r+");
-    if (!indexFile) {
+    RawFile indexFile;
+    if (!indexFile.open("/h/index.bin", O_RDWR)) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to open index file for append");
         return false;
     }
@@ -662,9 +664,8 @@ bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
     }
 
     // Append entry
-    indexFile.seek(0, SeekEnd);
-    size_t written = indexFile.write(reinterpret_cast<const uint8_t *>(&entry), sizeof(entry));
-    if (written != sizeof(entry)) {
+    indexFile.seek(0, SEEK_END);
+    if (!indexFile.write(&entry, sizeof(entry))) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to write index entry for shot %u", entry.id);
         indexFile.close();
         return false;
@@ -673,8 +674,8 @@ bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
     // Update header
     header.entryCount++;
     header.nextId = entry.id + 1;
-    indexFile.seek(0, SeekSet);
-    indexFile.write(reinterpret_cast<const uint8_t *>(&header), sizeof(header));
+    indexFile.seek(0, SEEK_SET);
+    indexFile.write(&header, sizeof(header));
 
     indexFile.close();
     ESP_LOGD("ShotHistoryPlugin", "Appended shot %u to index", entry.id);
@@ -682,8 +683,8 @@ bool ShotHistoryPlugin::appendToIndex(const ShotIndexEntry &entry) {
 }
 
 void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uint16_t volume) {
-    File indexFile = fs->open("/h/index.bin", "r+");
-    if (!indexFile) {
+    RawFile indexFile;
+    if (!indexFile.open("/h/index.bin", O_RDWR)) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to open index file for metadata update");
         return;
     }
@@ -719,8 +720,8 @@ void ShotHistoryPlugin::updateIndexMetadata(uint32_t shotId, uint8_t rating, uin
 }
 
 void ShotHistoryPlugin::markIndexDeleted(uint32_t shotId) {
-    File indexFile = fs->open("/h/index.bin", "r+");
-    if (!indexFile) {
+    RawFile indexFile;
+    if (!indexFile.open("/h/index.bin", O_RDWR)) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to open index file for deletion marking");
         return;
     }
@@ -761,8 +762,8 @@ void ShotHistoryPlugin::markIndexDeleted(uint32_t shotId) {
 }
 
 size_t ShotHistoryPlugin::readRecentEntries(ShotIndexEntry *outEntries, size_t maxCount) {
-    File indexFile = fs->open("/h/index.bin", "r");
-    if (!indexFile) {
+    RawFile indexFile;
+    if (!indexFile.open("/h/index.bin", O_RDONLY)) {
         return 0;
     }
 
@@ -1036,8 +1037,8 @@ void ShotHistoryPlugin::rebuildIndex() {
 }
 
 // Index helper functions
-bool ShotHistoryPlugin::readIndexHeader(File &indexFile, ShotIndexHeader &header) {
-    if (indexFile.read(reinterpret_cast<uint8_t *>(&header), sizeof(header)) != sizeof(header)) {
+bool ShotHistoryPlugin::readIndexHeader(RawFile &indexFile, ShotIndexHeader &header) {
+    if (!indexFile.read(&header, sizeof(header))) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to read index header");
         return false;
     }
@@ -1048,10 +1049,9 @@ bool ShotHistoryPlugin::readIndexHeader(File &indexFile, ShotIndexHeader &header
     return true;
 }
 
-int ShotHistoryPlugin::findEntryPosition(File &indexFile, const ShotIndexHeader &header, uint32_t shotId) {
+int ShotHistoryPlugin::findEntryPosition(RawFile &indexFile, const ShotIndexHeader &header, uint32_t shotId) {
     for (uint32_t i = 0; i < header.entryCount; i++) {
         size_t entryPos = sizeof(ShotIndexHeader) + i * sizeof(ShotIndexEntry);
-        indexFile.seek(entryPos, SeekSet);
 
         ShotIndexEntry entry{};
         if (!readEntryAtPosition(indexFile, entryPos, entry)) {
@@ -1066,18 +1066,18 @@ int ShotHistoryPlugin::findEntryPosition(File &indexFile, const ShotIndexHeader 
     return -1;
 }
 
-bool ShotHistoryPlugin::readEntryAtPosition(File &indexFile, size_t position, ShotIndexEntry &entry) {
-    indexFile.seek(position, SeekSet);
-    if (indexFile.read(reinterpret_cast<uint8_t *>(&entry), sizeof(entry)) != sizeof(entry)) {
+bool ShotHistoryPlugin::readEntryAtPosition(RawFile &indexFile, size_t position, ShotIndexEntry &entry) {
+    indexFile.seek(position, SEEK_SET);
+    if (!indexFile.read(&entry, sizeof(entry))) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to read entry at position %zu", position);
         return false;
     }
     return true;
 }
 
-bool ShotHistoryPlugin::writeEntryAtPosition(File &indexFile, size_t position, const ShotIndexEntry &entry) {
-    indexFile.seek(position, SeekSet);
-    if (indexFile.write(reinterpret_cast<const uint8_t *>(&entry), sizeof(entry)) != sizeof(entry)) {
+bool ShotHistoryPlugin::writeEntryAtPosition(RawFile &indexFile, size_t position, const ShotIndexEntry &entry) {
+    indexFile.seek(position, SEEK_SET);
+    if (!indexFile.write(&entry, sizeof(entry))) {
         ESP_LOGE("ShotHistoryPlugin", "Failed to write entry at position %zu", position);
         return false;
     }
