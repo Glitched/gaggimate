@@ -81,6 +81,7 @@ class WiFiClass {
         return true;
     }
     void setAutoReconnect(bool) {}
+    void setSleep(bool) {}
     bool config(IPAddress, IPAddress, IPAddress, IPAddress = IPAddress()) { return true; }
     void onEvent(WiFiEventFuncCb cb, WiFiEvent_t id = ARDUINO_EVENT_MAX) { _cbs.emplace_back(id, std::move(cb)); }
 
