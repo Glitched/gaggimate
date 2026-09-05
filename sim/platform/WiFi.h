@@ -95,6 +95,7 @@ class WiFiClass {
     bool begin(const String &ssid, const String &pass) { return begin(ssid.c_str(), pass.c_str()); }
     void setTxPower(wifi_power_t) {}
     wl_status_t status() { return _status; }
+    int8_t RSSI() { return -50; }
     IPAddress localIP() { return _ip; }
     bool disconnect(bool = false, bool = false) {
         _status = WL_DISCONNECTED;
