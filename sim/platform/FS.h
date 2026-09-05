@@ -120,9 +120,11 @@ class FS {
     size_t totalBytes() { return 16u * 1024u * 1024u; }
     size_t usedBytes() { return 1u * 1024u * 1024u; }
 
+    // The host path behind a logical one; RawFile opens it with POSIX calls, as it opens the mount path on the device.
+    std::string hostPath(const char *logical) const;
+
   protected:
     std::string _root; // host directory backing this filesystem
-    std::string hostPath(const char *logical) const;
 };
 
 } // namespace fs

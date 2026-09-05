@@ -6,6 +6,7 @@
 #include <display/core/Plugin.h>
 #include <display/core/utils.h>
 #include <display/models/shot_log_format.h>
+#include <display/util/RawFile.h>
 
 constexpr size_t SHOT_HISTORY_INTERVAL = 100;
 constexpr size_t MIN_FREE_SPACE_BYTES = 500 * 1024;         // 500 KB reserved free space
@@ -40,10 +41,10 @@ class ShotHistoryPlugin : public Plugin {
 
   private:
     // Index helper functions
-    bool readIndexHeader(File &indexFile, ShotIndexHeader &header);
-    int findEntryPosition(File &indexFile, const ShotIndexHeader &header, uint32_t shotId);
-    bool readEntryAtPosition(File &indexFile, size_t position, ShotIndexEntry &entry);
-    bool writeEntryAtPosition(File &indexFile, size_t position, const ShotIndexEntry &entry);
+    bool readIndexHeader(RawFile &indexFile, ShotIndexHeader &header);
+    int findEntryPosition(RawFile &indexFile, const ShotIndexHeader &header, uint32_t shotId);
+    bool readEntryAtPosition(RawFile &indexFile, size_t position, ShotIndexEntry &entry);
+    bool writeEntryAtPosition(RawFile &indexFile, size_t position, const ShotIndexEntry &entry);
     void saveNotes(const String &id, const JsonDocument &notes);
     void startRecording();
 
@@ -64,7 +65,7 @@ class ShotHistoryPlugin : public Plugin {
     FS *fs = &LittleFS;
     String currentId = "";
     bool isFileOpen = false;
-    File currentFile;
+    RawFile currentFile; // POSIX descriptor, not File: see RawFile.h
     ShotLogHeader header{};
     uint32_t sampleCount = 0;
     uint8_t ioBuffer[4096];
