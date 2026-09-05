@@ -422,7 +422,10 @@ Event id conventions: `controller:*` for machine state, `evt:*` for things pushe
 
 **Processes.** `core/process/` — `BrewProcess`, `SteamProcess`, `PumpProcess`, `GrindProcess` implement `Process` (`getPumpValue()`, `isRelayActive()`, `progress()`, `isComplete()`, ...). Exactly one runs at a time via `Controller::startProcess`.
 
-**Profiles.** `models/profile.h` defines the shape: a profile is a list of `Phase`s (preinfusion/brew), each with a pump target (pressure or flow), a `Transition` (instant/linear/ease*, over time/volumetric/pumped), and exit `Target`s. `ProfileManager` persists JSON under `/p` on LittleFS and handles schema migration. Favourites are the comma-separated id list in the `fp` setting, not the `favorite` field inside each profile file; the profile screen steps through `selected + favourites` in that order. `PhaseExitReason` values are persisted in shot logs — **never renumber them**.
+**Profiles.** `models/profile.h` defines the shape: a profile is a list of `Phase`s (preinfusion/brew), each with a pump target (pressure or flow), a `Transition` (instant/linear/ease*, over time/volumetric/pumped), and exit `Target`s. `ProfileManager` persists JSON under `/p` on LittleFS and handles schema migration. Favourites are the comma-separated id list in the `fp` setting, not the `favorite` field inside each profile file; the profile screen steps through `selected + favourites` in that order. `PhaseExitReason` values are persisted in shot logs — **never renumber them**. The phase and target
+lists are `PhaseList`/`TargetList` (PSRAM-allocated `std::vector`s, `profile.h`); a plain
+`std::vector<Phase>` anywhere puts a profile back in internal RAM, which is what the heap trace
+of 2026-09-05 found the selected profile and the favourites doing (5 KB).
 
 **Storage.** Settings live in NVS via `Preferences` (`Settings.h`, key `controller`). LittleFS holds only `/p` (profiles) and `/h` (shot history `.slog` binary + `.json` notes), so OTA never touches user data. The web bundle is memory-mapped from firmware flash, not the filesystem.
 The shot writer and every index operation go through `display/util/RawFile` (a POSIX

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <display/util/PsramStlAllocator.h>
 
 enum class TargetType { TARGET_TYPE_VOLUMETRIC, TARGET_TYPE_PRESSURE, TARGET_TYPE_FLOW, TARGET_TYPE_PUMPED };
 enum class TargetOperator { LTE, GTE };
@@ -26,6 +27,15 @@ enum class PhaseExitReason : uint8_t {
     SAFETY = 6,            // brew safety timeout (set by BrewProcess, not Phase::isFinished)
     ABORTED = 7,           // shot manually stopped before the process finished
 };
+
+struct Target;
+struct Phase;
+// Phase and target lists live in PSRAM. A profile is read a few fields at a time from the brew loop and the UI,
+// never from an ISR, and the heap trace of 2026-09-05 found the selected profile, the favourites and the running
+// shot's copy holding ~5 KB of internal RAM between them in these vectors, on a heap whose in-shot floor was
+// under 20 KB. Copies of Phase and Profile keep the allocator, so every profile in memory gets this for free.
+using TargetList = std::vector<Target, PsramStlAllocator<Target>>;
+using PhaseList = std::vector<Phase, PsramStlAllocator<Phase>>;
 
 struct Target {
     TargetType type = TargetType::TARGET_TYPE_VOLUMETRIC;
@@ -63,7 +73,7 @@ struct Phase {
     float temperature = 0.0f;
     Transition transition{};
     PumpAdvanced pumpAdvanced{};
-    std::vector<Target> targets;
+    TargetList targets;
 
     bool hasVolumetricTarget() const {
         for (const auto &target : targets) {
@@ -150,7 +160,7 @@ struct Phase {
     }
 
     void removeVolumetricTarget() {
-        std::vector<Target> newTargets;
+        TargetList newTargets;
         for (const auto &target : targets) {
             if (target.type != TargetType::TARGET_TYPE_VOLUMETRIC) {
                 newTargets.push_back(target);
@@ -169,7 +179,7 @@ struct Profile {
     float temperature = 0.0f;
     bool favorite = false;
     bool selected = false;
-    std::vector<Phase> phases;
+    PhaseList phases;
 
     bool isVolumetric() const {
         for (const auto &phase : phases) {
