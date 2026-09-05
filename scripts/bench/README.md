@@ -19,7 +19,7 @@ from another VLAN, where mDNS goes through a reflector).
 |---|---|
 | `probe.sh [host]` | Wi-Fi path in one go: three bundle downloads, ten pings, a 512 KB upload, three status requests, a 30 s socket, link/RSSI. |
 | `watch_shot.sh [host] [seconds] [interval]` | Heap, mode, panel counters and brew checkpoints through a shot (every 3 s, panel figures every 12 s). |
-| `watch_health.sh [host] [minutes]` | One line a minute for hours: heap, largest block, clients, skipped frames, drops, RSSI, link retransmits, HTTP latency, top task. |
+| `watch_health.sh [host] [minutes]` | One line a minute for hours: heap, largest block, clients, skipped frames, drops, RSSI, link retransmits, HTTP latency, top task. Arms CPU sampling (`?cpu=1`), which costs one shifted panel frame per 10 s while it runs; leave it off during panel measurements. |
 | `flash_write_test.sh [host] [rounds]` | Creates and deletes a throwaway profile N times (LittleFS writes and erases) and reads the panel window: the shot stand-in for tearing during flash writes. |
 | `ws_probe.py [host] [seconds]` | Opens a WebSocket and counts pushed frames; a server-side close shows as a close code. `uv run --with websockets`. |
 | `link_watch.sh [host] [seconds]` | Per-window controller-link retransmits, RTT, RSSI, socket figures every 20 s. |

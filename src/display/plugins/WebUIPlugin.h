@@ -137,6 +137,9 @@ class WebUIPlugin : public Plugin {
         char name[16];
     };
     static constexpr size_t TASK_SAMPLE_CAPACITY = 40;
+    // uxTaskGetSystemState() holds the kernel lock with interrupts off for longer than the panel's bounce slack, so
+    // every sample is one shifted frame. Sampling therefore runs only for 60 s after GET /api/debug/heap?cpu=1.
+    uint32_t taskSampleArmedUntil = 0;
     TaskSample *taskSamples[2] = {nullptr, nullptr};
     size_t taskSampleCount[2] = {0, 0};
     uint32_t taskSampleTotal[2] = {0, 0};
