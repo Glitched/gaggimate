@@ -14,23 +14,37 @@ namespace {
 constexpr size_t RECORD_CAPACITY = 8192;
 heap_trace_record_t *records = nullptr;
 
-// Runs before every other translation unit's constructors (user init priorities start at 101, lowest first), so
-// the Settings constructor's NVS work and everything initArduino() allocates are already on record when
-// Controller::setup() begins. IDF's example keeps this buffer in internal RAM; ours is in PSRAM on purpose: 8192
-// records of ~124 B would eat the whole internal heap this env exists to measure, and the tracer only touches the
-// buffer from inside malloc/free, which never run while the flash cache (and with it PSRAM) is disabled.
+const char *startFailure = nullptr; // why records is null, for the 503 body
+
+// A global constructor, so everything initArduino() allocates is on record when Controller::setup() begins (on
+// the T-RGB it runs at ~110 ms, after the Settings constructor's NVS reads, which only use internal RAM anyway).
+// IDF's example keeps this buffer in internal RAM; ours is in PSRAM on purpose: 8192 records of ~124 B would eat
+// the whole internal heap this env exists to measure, and the tracer only touches the buffer from inside
+// malloc/free, which never run while the flash cache (and with it PSRAM) is disabled.
 __attribute__((constructor(101))) void heapTraceStartEarly() {
+    // Arduino core 3 builds without CONFIG_SPIRAM_BOOT_INIT: PSRAM is initialised at CORE stage 99 (psramInit)
+    // but only joins the heap from initArduino(), after every global constructor, so a plain PSRAM calloc here
+    // fails (seen 2026-09-05: "no PSRAM for 8192 trace records"). Add it the way Arduino does, region plus the
+    // ALWAYSINTERNAL threshold; Arduino's own call then logs "PSRAM could not be added to the heap!" once at boot
+    // because the region is already registered. That line is expected in this env.
+    if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) == 0 && !psramAddToHeap()) {
+        startFailure = "psramAddToHeap failed";
+        log_e("%s; heap tracing disabled", startFailure);
+        return;
+    }
     records = static_cast<heap_trace_record_t *>(
         heap_caps_calloc(RECORD_CAPACITY, sizeof(heap_trace_record_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (records == nullptr) {
-        log_e("no PSRAM for %u trace records; heap tracing disabled", static_cast<unsigned>(RECORD_CAPACITY));
+        startFailure = "no PSRAM for the trace records";
+        log_e("%s (%u); heap tracing disabled", startFailure, static_cast<unsigned>(RECORD_CAPACITY));
         return;
     }
     esp_err_t err = heap_trace_init_standalone(records, RECORD_CAPACITY);
     if (err == ESP_OK)
         err = heap_trace_start(HEAP_TRACE_LEAKS);
     if (err != ESP_OK) {
-        log_e("heap tracing failed to start: %s", esp_err_to_name(err));
+        startFailure = esp_err_to_name(err);
+        log_e("heap tracing failed to start: %s", startFailure);
         heap_trace_init_standalone(nullptr, 0);
         heap_caps_free(records);
         records = nullptr;
@@ -92,9 +106,16 @@ size_t fillDump(DumpCursor *cur, uint8_t *buf, size_t maxLen) {
     return written; // 0 once every record has been written, which ends the chunked response
 }
 
+void sendNotRunning(AsyncWebServerRequest *request) {
+    char body[160];
+    snprintf(body, sizeof body, R"({"error":"heap tracing is not running","reason":"%s"})",
+             startFailure ? startFailure : "not started");
+    request->send(503, "application/json", body);
+}
+
 void handleTraceDump(AsyncWebServerRequest *request) {
     if (records == nullptr) {
-        request->send(503, "application/json", R"({"error":"heap tracing is not running"})");
+        sendNotRunning(request);
         return;
     }
     // Stop rather than read a moving list: the tracer mutates records under its own spinlock and a torn record
@@ -113,7 +134,7 @@ void handleTraceDump(AsyncWebServerRequest *request) {
 
 void handleTraceReset(AsyncWebServerRequest *request) {
     if (records == nullptr) {
-        request->send(503, "application/json", R"({"error":"heap tracing is not running"})");
+        sendNotRunning(request);
         return;
     }
     heap_trace_stop();

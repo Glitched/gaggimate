@@ -121,7 +121,7 @@ afterwards).** Read these before flashing it again:
   controller, display and display-headless (all qio_opi) share one set and were verified to
   build back to back without a recompile; display-headless-8m (qio_qspi) gets its own and
   re-triggers the ~3 min compile step whenever it is alternated with the others. An env
-  *without* the block reinstalls the stock libs, so never add an ESP env without
+  _without_ the block reinstalls the stock libs, so never add an ESP env without
   `custom_sdkconfig = ${custom_sdk.custom_sdkconfig}`. CI inherits the download and the
   compile step on every run (the hash marker `sdkconfig.defaults` is not cached).
 - **The panel needs bounce buffers on IDF 5.** The RGB driver resets the DMA at every VSYNC
@@ -157,10 +157,10 @@ afterwards).** Read these before flashing it again:
   rolls back), and even with a custom driver list it left 5 underruns per write window because
   every cache miss to flash parks the bus for a suspend handshake. The UI loop
   itself is fine: `standby exit: 8 frames in
-  188 ms`, 40 fps, a full-screen flush ~27 ms. `GET /api/ota` reports `uiFps`, `flushAvgUs`,
+188 ms`, 40 fps, a full-screen flush ~27 ms. `GET /api/ota` reports `uiFps`, `flushAvgUs`,
   `flushMaxUs`, `panelVsyncHz`, `panelLateVsyncs`, `panelUnderruns` and `heapMinFree` (10 s
   window, also one `render:` line per 10 s over serial), so none of this needs a cable.
-- **OTA slots vs USB.** `POST /api/ota/upload` writes the *inactive* app slot and flips
+- **OTA slots vs USB.** `POST /api/ota/upload` writes the _inactive_ app slot and flips
   `otadata`; `esptool write-flash 0x10000` only rewrites `app0`. After an OTA the device
   boots `app1`, so a USB flash of app0 changes nothing and you will debug a stale image
   (this cost an hour). Either erase `otadata` first (`esptool erase-region 0xe000 0x2000`,
@@ -168,7 +168,8 @@ afterwards).** Read these before flashing it again:
 - **Serial on the T-RGB** is the S3's USB-Serial-JTAG (`ARDUINO_USB_MODE=1`): it only emits
   when the host asserts DTR, and RTS pulses EN. To capture a boot log open the port with
   DTR/RTS low, pulse RTS high for 150 ms, then set DTR high and read
-  (`scripts` has nothing for this yet; the recipe is a 15-line pyserial script). Steady
+  (`scripts/bench/boot_capture.py`, which restarts the display; `serial_capture.py` reads
+  without resetting). Steady
   state is silent at `CORE_DEBUG_LEVEL=3`; a tap out of standby logs the frame timing.
 - **`GET /api/debug/heap`** returns the checkpoint table (`heapCheckpoint("label")` calls in
   `Controller::setup()`, the wifi:connect dispatch and brew start/end), the current internal
@@ -568,4 +569,36 @@ Three views, cheapest first:
   trace a single shot from a clean baseline). The env's sdkconfig block differs from the
   shared one, so alternating it with `display` re-triggers the ~3 min library compile each
   way, and every malloc pays a 12-frame backtrace while it runs, so never leave it on a
-  device you judge UX with. It carries the same Origin check as every other write route.
+  device you judge UX with: the tracer's critical section plus its PSRAM writes starve the
+  panel DMA (93 underruns per 10 s window at rest, 2026-09-05), which is expected and goes
+  away with the stock image. It carries the same Origin check as every other write route.
+  Three things it needs that took four flashes to find (2026-09-05): its routes are
+  registered _before_ `/api/debug/heap`, because the server matches a registered uri
+  against every `<uri>/<subpath>` too and the first handler wins; the constructor adds
+  PSRAM to the heap itself (`psramAddToHeap()`), because Arduino core 3 does that from
+  `initArduino()`, after every global constructor, so Arduino's own call then logs
+  "PSRAM could not be added to the heap!" once at boot; and the env's `build_flags` carry
+  `-Wl,--wrap=heap_caps_malloc_base` and its three siblings, because the tracer only sees
+  allocations through those wraps and IDF's CMake applies them to its own dummy link, not
+  to PlatformIO's. Without the wraps tracing starts and every dump says `allocs=0`.
+  A dump mid-shot streams ~250 KB through the TCP stack and costs ~10 KB of internal RAM
+  itself; read `heapMinFree` from a shot without a dump.
+  **First session (2026-09-05, two puck-less shots, web UI open):** steady state attributes
+  218 KB in 676 blocks: BLE controller + coex 42 KB, task stacks ~70 KB, the 32 KB DMA reserve
+  pool, 62 FreeRTOS queues 9 KB, bounce buffers 9.6 KB; ours: profile phase vectors 5.1 KB,
+  the web route table 3.7 KB (32 handlers), plugin listeners 3.1 KB (79). A shot sits ~13 KB
+  below awake-idle while running (17 KB floor at the end); live at any instant: a 4 KB newlib
+  stdio buffer for the open shot file (the Arduino `File` wrapper uses `fopen`, and the shot
+  writer already batches into its own 4 KB buffer, so it is double-buffered; the index file
+  at the end adds a second one), the 0.7 KB LittleFS file cache, 1.4 KB of process and
+  profile copies; the rest is churn. **The standing finding is the scale scan:** awake with
+  no scale connected, `BLEScalePlugin` runs a continuous active scan (interval 500, window
+  100, duplicate filter off), and every advertisement in range costs an LRU entry in the
+  scales library (100 addresses, `std::list` + `unordered_map` of `std::string`), a transient
+  `NimBLEAdvertisedDevice` and a scan-response timer, all internal, 20-60 B each, allocated
+  and freed all day. After one shot the largest free block had gone 31.7 -> 19.4 KB and stayed
+  there; consistent with the 51 h incident (32 -> 16 KB). Ryan rejected duty-cycling the scan
+  (a scale switched on mid-session must connect at once); the leverage left is in the
+  library (an allocation-free seen-address ring, the controller-side duplicate filter).
+  Raw dumps and reports from the session are in the session scratchpad
+  (`trace-baseline.txt`, `trace-postshot.txt`, `trace-midshot.txt`, `trace-endshot.txt`).

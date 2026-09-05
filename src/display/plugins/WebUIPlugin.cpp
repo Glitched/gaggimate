@@ -541,10 +541,13 @@ void WebUIPlugin::setupServer() {
     // for /h/index.bin.gz and an error-level log line.
     server.serveStatic("/api/history/", *fs, "/h/").setCacheControl("no-store");
     server.on("/api/core-dump", HTTP_GET, [this](AsyncWebServerRequest *request) { handleCoreDumpDownload(request); });
-    server.on("/api/debug/heap", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHeapDebug(request); });
 #ifdef GM_HEAP_TRACE
+    // Before /api/debug/heap: a registered uri also matches every "<uri>/<subpath>", first handler wins,
+    // so registered after it the trace routes were answered by the checkpoint table (found on hardware
+    // 2026-09-05; the sim never defines GM_HEAP_TRACE, so nothing there could have caught it).
     heapTraceRegisterRoutes(server); // display-heaptrace env only: live-allocation dump for scripts/heap_trace_report.py
 #endif
+    server.on("/api/debug/heap", HTTP_GET, [this](AsyncWebServerRequest *request) { handleHeapDebug(request); });
 #ifndef GAGGIMATE_SIM
     // Direct firmware upload. The body handler streams straight into the
     // inactive OTA partition; the request handler runs once the body is done.
